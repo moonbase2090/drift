@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "path": "hypr/shipped.lua",
+      "status": "unchanged",
+      "base": "same",
+      "ours": "same",
+      "theirs": "same"
+    },
+    {
+      "path": "hypr/custom.lua",
+      "status": "user-only",
+      "base": "absent",
+      "ours": "changed",
+      "theirs": "absent"
+    }
+  ]
+}

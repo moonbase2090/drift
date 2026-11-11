@@ -1,0 +1,12 @@
+{
+  "files": [
+    {
+      "path": "hypr/looknfeel.lua",
+      "status": "local override",
+      "badge": "base unknown",
+      "base": "absent",
+      "ours": "changed",
+      "theirs": "changed"
+    }
+  ]
+}

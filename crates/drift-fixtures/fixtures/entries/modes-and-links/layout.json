@@ -1,0 +1,10 @@
+{
+  "modes": {
+    "base/hypr/secret.lua": "0600",
+    "ours/hypr/secret.lua": "0600",
+    "theirs/hypr/secret.lua": "0600"
+  },
+  "absent": [
+    "ours/hypr/removed.lua"
+  ]
+}

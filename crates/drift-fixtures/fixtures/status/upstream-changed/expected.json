@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "hypr/looknfeel.lua",
+      "status": "upstream changed",
+      "base": "same",
+      "ours": "same",
+      "theirs": "changed"
+    }
+  ]
+}
