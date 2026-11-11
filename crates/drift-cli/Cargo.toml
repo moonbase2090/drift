@@ -1,0 +1,18 @@
+[package]
+name = "drift-cli"
+description = "The drift command line"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+drift-core.workspace = true
+drift-source.workspace = true
+drift-apply.workspace = true
+drift-tui.workspace = true
+
+[[bin]]
+name = "drift"
+path = "src/main.rs"
