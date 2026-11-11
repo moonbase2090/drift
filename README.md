@@ -27,6 +27,8 @@ Rust 1.99.1, pinned by `rust-toolchain.toml`. From this repository:
 cargo test
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
+cargo xtask check
+cargo deny check
 ```
 
 See the [review policy](REVIEW_POLICY.md) for PR classification, proof, and merge requirements. Pull requests that add or change a visible widget or TUI view must include a README GIF or WebP captured from real program output.
