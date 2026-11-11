@@ -88,11 +88,7 @@ fn manifests(root: &Path) -> Vec<PathBuf> {
     manifests.into_iter().filter(|m| m.is_file()).collect()
 }
 
-fn manifest_check(
-    root: &Path,
-    name: &str,
-    inspect: impl Fn(&str) -> Vec<(usize, String)>,
-) -> usize {
+fn manifest_check(root: &Path, name: &str, inspect: impl Fn(&str) -> Vec<String>) -> usize {
     let mut failures = 0;
     let all = manifests(root);
     for manifest in &all {
@@ -101,8 +97,8 @@ fn manifest_check(
             failures += 1;
             continue;
         };
-        for (line, message) in inspect(&text) {
-            eprintln!("{}:{line}: {message}", relative(root, manifest));
+        for message in inspect(&text) {
+            eprintln!("{}: {message}", relative(root, manifest));
             failures += 1;
         }
     }
@@ -114,31 +110,15 @@ fn manifest_check(
 }
 
 fn fixtures_dependency(root: &Path) -> usize {
-    manifest_check(root, "fixtures-dependency", |text| {
-        checks::fixtures_dependency_violations(text)
-            .into_iter()
-            .map(|line| {
-                (
-                    line,
-                    format!("`{}` may only be a dev-dependency", checks::TEST_ONLY_CRATE),
-                )
-            })
-            .collect()
-    })
+    manifest_check(
+        root,
+        "fixtures-dependency",
+        checks::fixtures_dependency_violations,
+    )
 }
 
 fn feature_policy(root: &Path) -> usize {
-    manifest_check(root, "feature-policy", |text| {
-        checks::feature_violations(text)
-            .into_iter()
-            .map(|(line, name)| {
-                (
-                    line,
-                    format!("feature `{name}` is off by default; features ship on by default"),
-                )
-            })
-            .collect()
-    })
+    manifest_check(root, "feature-policy", checks::feature_violations)
 }
 
 fn no_comment(root: &Path) -> usize {

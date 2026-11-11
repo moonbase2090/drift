@@ -44,90 +44,86 @@ pub fn write_violations(source: &str) -> Vec<Violation> {
     found
 }
 
-pub fn fixtures_dependency_violations(manifest: &str) -> Vec<usize> {
-    let mut found = Vec::new();
-    let mut in_runtime_deps = false;
-    for (index, raw) in manifest.lines().enumerate() {
-        let line = raw.trim();
-        if let Some(header) = line.strip_prefix('[') {
-            let header = header.trim_end_matches(']').trim_matches('[');
-            let kind = header
-                .split('.')
-                .find(|part| part.ends_with("dependencies"))
-                .unwrap_or("");
-            in_runtime_deps = matches!(kind, "dependencies" | "build-dependencies")
-                && !header.starts_with("workspace");
-            if in_runtime_deps && header.ends_with(TEST_ONLY_CRATE) {
-                found.push(index + 1);
+fn parse_manifest(manifest: &str) -> Result<toml::Table, String> {
+    manifest
+        .parse::<toml::Table>()
+        .map_err(|e| format!("invalid TOML: {}", e.message()))
+}
+
+fn runtime_dependency_sections(table: &toml::Table) -> Vec<(String, &toml::Table)> {
+    let mut sections = Vec::new();
+    for kind in ["dependencies", "build-dependencies"] {
+        if let Some(t) = table.get(kind).and_then(toml::Value::as_table) {
+            sections.push((kind.to_string(), t));
+        }
+    }
+    if let Some(targets) = table.get("target").and_then(toml::Value::as_table) {
+        for (target, config) in targets {
+            for kind in ["dependencies", "build-dependencies"] {
+                if let Some(t) = config.get(kind).and_then(toml::Value::as_table) {
+                    sections.push((format!("target.{target}.{kind}"), t));
+                }
             }
-        } else if in_runtime_deps && line.contains(TEST_ONLY_CRATE) {
-            found.push(index + 1);
+        }
+    }
+    sections
+}
+
+pub fn fixtures_dependency_violations(manifest: &str) -> Vec<String> {
+    let table = match parse_manifest(manifest) {
+        Ok(t) => t,
+        Err(message) => return vec![message],
+    };
+    let mut found = Vec::new();
+    for (section, deps) in runtime_dependency_sections(&table) {
+        for (name, value) in deps {
+            let renamed = value
+                .get("package")
+                .and_then(toml::Value::as_str)
+                .is_some_and(|p| p == TEST_ONLY_CRATE);
+            if name == TEST_ONLY_CRATE || renamed {
+                found.push(format!(
+                    "`{TEST_ONLY_CRATE}` in [{section}] may only be a dev-dependency"
+                ));
+            }
         }
     }
     found
 }
 
-pub fn feature_violations(manifest: &str) -> Vec<(usize, String)> {
-    let mut features: Vec<(usize, String, Vec<String>)> = Vec::new();
-    let mut in_features = false;
-    let mut pending: Option<(usize, String, String)> = None;
-    for (index, raw) in manifest.lines().enumerate() {
-        let line = raw.split('#').next().unwrap_or("").trim();
-        if let Some((start, name, mut value)) = pending.take() {
-            value.push_str(line);
-            if value.matches('[').count() <= value.matches(']').count() {
-                features.push((start, name, quoted(&value)));
-            } else {
-                pending = Some((start, name, value));
-            }
-            continue;
-        }
-        if line.starts_with('[') {
-            in_features = line.trim_matches(|c| c == '[' || c == ']').trim() == "features";
-        } else if in_features {
-            let Some((name, value)) = line.split_once('=') else {
-                continue;
-            };
-            let (name, value) = (name.trim().trim_matches('"').to_string(), value.to_string());
-            if value.matches('[').count() <= value.matches(']').count() {
-                features.push((index + 1, name, quoted(&value)));
-            } else {
-                pending = Some((index + 1, name, value));
-            }
-        }
-    }
-    off_by_default(&features)
-}
-
-fn quoted(value: &str) -> Vec<String> {
-    value
-        .split('"')
-        .skip(1)
-        .step_by(2)
-        .map(str::to_string)
-        .collect()
-}
-
-fn off_by_default(features: &[(usize, String, Vec<String>)]) -> Vec<(usize, String)> {
+pub fn feature_violations(manifest: &str) -> Vec<String> {
+    let table = match parse_manifest(manifest) {
+        Ok(t) => t,
+        Err(message) => return vec![message],
+    };
+    let Some(features) = table.get("features").and_then(toml::Value::as_table) else {
+        return Vec::new();
+    };
+    let items = |name: &str| -> Vec<String> {
+        features
+            .get(name)
+            .and_then(toml::Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(toml::Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
     let mut enabled: Vec<String> = Vec::new();
-    let mut queue: Vec<String> = features
-        .iter()
-        .filter(|(_, name, _)| name == "default")
-        .flat_map(|(_, _, items)| items.clone())
-        .collect();
+    let mut queue = items("default");
     while let Some(name) = queue.pop() {
         if enabled.contains(&name) {
             continue;
         }
-        if let Some((_, _, items)) = features.iter().find(|(_, n, _)| *n == name) {
-            queue.extend(items.iter().cloned());
-        }
+        queue.extend(items(&name));
         enabled.push(name);
     }
     features
-        .iter()
-        .filter(|(_, name, _)| name != "default" && !enabled.contains(name))
-        .map(|(line, name, _)| (*line, name.clone()))
+        .keys()
+        .filter(|name| *name != "default" && !enabled.contains(name))
+        .map(|name| format!("feature `{name}` is off by default; features ship on by default"))
         .collect()
 }
 
@@ -214,36 +210,6 @@ mod tests {
     }
 
     #[test]
-    fn dev_dependency_on_fixtures_passes() {
-        let m = "[dependencies]\ndrift-core.workspace = true\n\n[dev-dependencies]\ndrift-fixtures.workspace = true\n";
-        assert!(fixtures_dependency_violations(m).is_empty());
-    }
-
-    #[test]
-    fn runtime_dependency_on_fixtures_fails() {
-        let m = "[package]\nname = \"x\"\n\n[dependencies]\ndrift-fixtures.workspace = true\n";
-        assert_eq!(fixtures_dependency_violations(m), vec![5]);
-    }
-
-    #[test]
-    fn build_and_target_dependencies_on_fixtures_fail() {
-        let m = "[build-dependencies]\ndrift-fixtures = { path = \"../drift-fixtures\" }\n[target.'cfg(unix)'.dependencies]\ndrift-fixtures.workspace = true\n";
-        assert_eq!(fixtures_dependency_violations(m), vec![2, 4]);
-    }
-
-    #[test]
-    fn table_form_and_renamed_dependencies_fail() {
-        let m = "[dependencies.drift-fixtures]\nworkspace = true\n[dependencies]\nfx = { package = \"drift-fixtures\", path = \"p\" }\n";
-        assert_eq!(fixtures_dependency_violations(m), vec![1, 4]);
-    }
-
-    #[test]
-    fn workspace_declaration_is_allowed() {
-        let m = "[workspace.dependencies]\ndrift-fixtures = { path = \"crates/drift-fixtures\" }\n";
-        assert!(fixtures_dependency_violations(m).is_empty());
-    }
-
-    #[test]
     fn flags_aliased_fs_module() {
         let src = "fn a(p: &Path) { use std::fs as disk; disk::write(p, b\"x\").unwrap(); }";
         assert_eq!(whats(src), vec!["fs::write"]);
@@ -302,9 +268,50 @@ mod tests {
     }
 
     #[test]
+    fn dev_dependency_on_fixtures_passes() {
+        let m = "[dependencies]\ndrift-core.workspace = true\n\n[dev-dependencies]\ndrift-fixtures.workspace = true\n";
+        assert!(fixtures_dependency_violations(m).is_empty());
+    }
+
+    #[test]
+    fn runtime_dependency_on_fixtures_fails() {
+        let m = "[package]\nname = \"x\"\n\n[dependencies]\ndrift-fixtures.workspace = true\n";
+        assert_eq!(fixtures_dependency_violations(m).len(), 1);
+    }
+
+    #[test]
+    fn build_and_target_dependencies_on_fixtures_fail() {
+        let m = "[build-dependencies]\ndrift-fixtures = { path = \"../drift-fixtures\" }\n[target.'cfg(unix)'.dependencies]\ndrift-fixtures.workspace = true\n";
+        assert_eq!(fixtures_dependency_violations(m).len(), 2);
+    }
+
+    #[test]
+    fn table_inline_dotted_and_renamed_dependencies_fail() {
+        let table_form = "[dependencies.drift-fixtures]\nworkspace = true\n";
+        let inline = "dependencies = { drift-fixtures = { workspace = true } }\n";
+        let dotted = "dependencies.drift-fixtures.workspace = true\n";
+        let renamed = "[dependencies]\nfx = { package = 'drift-fixtures', path = 'p' }\n";
+        for m in [table_form, inline, dotted, renamed] {
+            assert_eq!(fixtures_dependency_violations(m).len(), 1, "{m}");
+        }
+    }
+
+    #[test]
+    fn workspace_declaration_is_allowed() {
+        let m = "[workspace.dependencies]\ndrift-fixtures = { path = \"crates/drift-fixtures\" }\n";
+        assert!(fixtures_dependency_violations(m).is_empty());
+    }
+
+    #[test]
+    fn invalid_manifest_is_reported() {
+        assert_eq!(fixtures_dependency_violations("[dependencies\n").len(), 1);
+        assert_eq!(feature_violations("[features\n").len(), 1);
+    }
+
+    #[test]
     fn default_off_feature_fails() {
         let m = "[features]\ndefault = []\nextra = []\n";
-        assert_eq!(feature_violations(m), vec![(3, "extra".to_string())]);
+        assert_eq!(feature_violations(m).len(), 1);
     }
 
     #[test]
@@ -319,16 +326,49 @@ mod tests {
     }
 
     #[test]
-    fn multiline_default_and_no_features_table() {
+    fn single_quoted_literal_strings_are_understood() {
+        let m = "[features]\ndefault = ['extra']\nextra = []\n";
+        assert!(feature_violations(m).is_empty());
+        let m = "[features]\ndefault = ['a']\na = ['b']\nb = []\nc = []\n";
+        assert_eq!(feature_violations(m).len(), 1);
+    }
+
+    #[test]
+    fn dotted_and_inline_feature_tables_are_understood() {
+        let dotted = "features.default = ['a']\nfeatures.a = []\nfeatures.b = []\n";
+        assert_eq!(feature_violations(dotted).len(), 1);
+        let inline = "features = { default = ['a'], a = [] }\n";
+        assert!(feature_violations(inline).is_empty());
+        let off = "features = { default = [], a = [] }\n";
+        assert_eq!(feature_violations(off).len(), 1);
+    }
+
+    #[test]
+    fn multiline_arrays_comments_and_no_features_table() {
         let m = "[features]\ndefault = [\n    \"a\", # on\n]\na = []\n";
         assert!(feature_violations(m).is_empty());
         assert!(feature_violations("[dependencies]\nx = \"1\"\n").is_empty());
     }
 
     #[test]
-    fn feature_reachable_only_through_dependency_chain_passes() {
-        let m = "[features]\ndefault = [\"a\"]\na = [\"b\"]\nb = []\n";
-        assert!(feature_violations(m).is_empty());
+    fn alias_overwritten_in_another_module_is_still_caught() {
+        let src = "mod w { use std::fs as disk; pub fn f(p: &Path) { disk::write(p, b\"x\").unwrap(); } }\nmod r { use std::io as disk; }\n";
+        assert_eq!(whats(src), vec!["fs::write"]);
+        let reversed = "mod r { use std::io as disk; }\nmod w { use std::fs as disk; pub fn f(p: &Path) { disk::write(p, b\"x\"); } }\n";
+        assert_eq!(whats(reversed), vec!["fs::write"]);
+    }
+
+    #[test]
+    fn re_exported_fs_is_caught_across_modules() {
+        let src =
+            "mod a { pub use std::fs as disk; }\nfn f(p: &Path) { a::disk::write(p, b\"x\"); }\n";
+        let got = whats(src);
+        assert!(got.contains(&"fs::write".to_string()));
+        assert!(got.contains(&"pub use fs".to_string()));
+        assert_eq!(
+            whats("pub(crate) use std::fs as disk;\n"),
+            vec!["pub use fs"]
+        );
     }
 
     #[test]

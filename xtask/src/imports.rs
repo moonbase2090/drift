@@ -16,6 +16,7 @@ struct Import {
     path: Vec<String>,
     alias: Option<String>,
     glob: bool,
+    public: bool,
     line: usize,
 }
 
@@ -124,6 +125,7 @@ impl UseParser<'_> {
                         path,
                         alias: None,
                         glob: true,
+                        public: false,
                         line,
                     });
                     return;
@@ -146,6 +148,7 @@ impl UseParser<'_> {
             path,
             alias,
             glob: false,
+            public: false,
             line,
         });
     }
@@ -168,24 +171,31 @@ fn banned_path(path: &[String]) -> Option<String> {
     None
 }
 
-fn expand(path: &[String], aliases: &HashMap<String, Vec<String>>) -> Vec<String> {
-    let mut current = path.to_vec();
+fn expand(path: &[String], aliases: &HashMap<String, Vec<Vec<String>>>) -> Vec<Vec<String>> {
+    let mut all = vec![path.to_vec()];
     for _ in 0..4 {
-        let Some(first) = current.first() else { break };
-        let Some(target) = aliases.get(first) else {
-            break;
-        };
-        if target.first() == Some(first) && target.len() == 1 {
+        let mut grew = false;
+        for candidate in all.clone() {
+            for (index, segment) in candidate.iter().enumerate() {
+                for binding in aliases.get(segment).into_iter().flatten() {
+                    let mut next = binding.clone();
+                    next.extend_from_slice(&candidate[index + 1..]);
+                    if all.len() < 256 && !all.contains(&next) {
+                        all.push(next);
+                        grew = true;
+                    }
+                }
+            }
+        }
+        if !grew {
             break;
         }
-        let mut next = target.clone();
-        next.extend_from_slice(&current[1..]);
-        if next == current {
-            break;
-        }
-        current = next;
     }
-    current
+    all
+}
+
+fn first_banned(candidates: &[Vec<String>]) -> Option<String> {
+    candidates.iter().find_map(|c| banned_path(c))
 }
 
 pub fn banned_paths(code: &str) -> Vec<(usize, String)> {
@@ -206,6 +216,14 @@ pub fn banned_paths(code: &str) -> Vec<(usize, String)> {
                 out: Vec::new(),
             };
             parser.tree(&[]);
+            let public = i > 0 && matches!(&toks[i - 1].tok, Tok::Ident(k) if k == "pub")
+                || matches!(
+                    i.checked_sub(1).map(|p| &toks[p].tok),
+                    Some(Tok::Punct(')'))
+                );
+            for import in &mut parser.out {
+                import.public = public;
+            }
             let mut end = parser.pos;
             while end < toks.len() && toks[end].tok != Tok::Punct(';') {
                 end += 1;
@@ -218,23 +236,26 @@ pub fn banned_paths(code: &str) -> Vec<(usize, String)> {
         }
     }
 
-    let mut aliases: HashMap<String, Vec<String>> = HashMap::new();
+    let mut aliases: HashMap<String, Vec<Vec<String>>> = HashMap::new();
     for import in imports.iter().filter(|im| !im.glob) {
         let name = import.alias.clone().or_else(|| import.path.last().cloned());
         if let Some(name) = name.filter(|n| n != "_") {
-            aliases.insert(name, import.path.clone());
+            aliases.entry(name).or_default().push(import.path.clone());
         }
     }
 
     let mut found = Vec::new();
     for import in &imports {
         let resolved = expand(&import.path, &aliases);
+        let names_fs = resolved.iter().any(|c| c.last().is_some_and(|s| s == "fs"));
         if import.glob {
-            if resolved.last().is_some_and(|s| s == "fs") {
+            if names_fs {
                 found.push((import.line, "fs::*".to_string()));
             }
-        } else if let Some(what) = banned_path(&resolved) {
+        } else if let Some(what) = first_banned(&resolved) {
             found.push((import.line, what));
+        } else if import.public && names_fs {
+            found.push((import.line, "pub use fs".to_string()));
         }
     }
 
@@ -260,7 +281,7 @@ pub fn banned_paths(code: &str) -> Vec<(usize, String)> {
             i += 2;
         }
         if !after_dot {
-            if let Some(what) = banned_path(&expand(&path, &aliases)) {
+            if let Some(what) = first_banned(&expand(&path, &aliases)) {
                 found.push((line, what));
             }
         }
