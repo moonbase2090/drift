@@ -55,3 +55,16 @@ The owner has waived the clean-VM requirement for this project. Every behavior-c
 
 - Reviewers must not give SHIP without that proof.
 - Docs-only and CI-only PRs are exempt.
+
+## Scorecard pre-PR check
+
+Before opening a PR, and again before asking for review after new commits, the author runs [Scorecard](https://github.com/moonbase2090/Scorecard) at the head commit:
+
+```
+sc analyze . --diff main --format pretty
+```
+
+- Every enforced gate (types, tests, secrets, lint) must pass. A failing gate is fixed before the PR goes up, not explained away.
+- Paste the gate summary and the commit it ran at into the Proof section.
+- Reviewers re-run it at the tip they review and treat a missing or stale Scorecard result as CHANGES.
+- Mutation testing stays off. Docs-only and CI-only PRs are exempt.
