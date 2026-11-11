@@ -1,6 +1,7 @@
 use crate::lex::scan;
 
-pub const WRITER_CRATE: &str = "drift-apply";
+pub const WRITER_CRATES: &[&str] = &["drift-apply", "drift-fixtures"];
+pub const TEST_ONLY_CRATE: &str = "drift-fixtures";
 
 const BANNED_PATHS: &[&str] = &[
     "fs::write",
@@ -103,6 +104,29 @@ pub fn write_violations(source: &str) -> Vec<Violation> {
     found
 }
 
+pub fn fixtures_dependency_violations(manifest: &str) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut in_runtime_deps = false;
+    for (index, raw) in manifest.lines().enumerate() {
+        let line = raw.trim();
+        if let Some(header) = line.strip_prefix('[') {
+            let header = header.trim_end_matches(']').trim_matches('[');
+            let kind = header
+                .split('.')
+                .find(|part| part.ends_with("dependencies"))
+                .unwrap_or("");
+            in_runtime_deps = matches!(kind, "dependencies" | "build-dependencies")
+                && !header.starts_with("workspace");
+            if in_runtime_deps && header.ends_with(TEST_ONLY_CRATE) {
+                found.push(index + 1);
+            }
+        } else if in_runtime_deps && line.contains(TEST_ONLY_CRATE) {
+            found.push(index + 1);
+        }
+    }
+    found
+}
+
 pub fn comment_violations(source: &str) -> Vec<usize> {
     scan(source).comment_lines
 }
@@ -183,6 +207,36 @@ mod tests {
     fn reports_line_numbers() {
         let v = write_violations("fn a() {}\nfn b() { fs::write(p, d); }\n");
         assert_eq!(v[0].line, 2);
+    }
+
+    #[test]
+    fn dev_dependency_on_fixtures_passes() {
+        let m = "[dependencies]\ndrift-core.workspace = true\n\n[dev-dependencies]\ndrift-fixtures.workspace = true\n";
+        assert!(fixtures_dependency_violations(m).is_empty());
+    }
+
+    #[test]
+    fn runtime_dependency_on_fixtures_fails() {
+        let m = "[package]\nname = \"x\"\n\n[dependencies]\ndrift-fixtures.workspace = true\n";
+        assert_eq!(fixtures_dependency_violations(m), vec![5]);
+    }
+
+    #[test]
+    fn build_and_target_dependencies_on_fixtures_fail() {
+        let m = "[build-dependencies]\ndrift-fixtures = { path = \"../drift-fixtures\" }\n[target.'cfg(unix)'.dependencies]\ndrift-fixtures.workspace = true\n";
+        assert_eq!(fixtures_dependency_violations(m), vec![2, 4]);
+    }
+
+    #[test]
+    fn table_form_and_renamed_dependencies_fail() {
+        let m = "[dependencies.drift-fixtures]\nworkspace = true\n[dependencies]\nfx = { package = \"drift-fixtures\", path = \"p\" }\n";
+        assert_eq!(fixtures_dependency_violations(m), vec![1, 4]);
+    }
+
+    #[test]
+    fn workspace_declaration_is_allowed() {
+        let m = "[workspace.dependencies]\ndrift-fixtures = { path = \"crates/drift-fixtures\" }\n";
+        assert!(fixtures_dependency_violations(m).is_empty());
     }
 
     #[test]
