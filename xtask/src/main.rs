@@ -1,4 +1,5 @@
 mod checks;
+mod imports;
 mod lex;
 
 use std::fs;
@@ -77,31 +78,67 @@ fn write_check(root: &Path) -> usize {
     failures
 }
 
-fn fixtures_dependency(root: &Path) -> usize {
+fn manifests(root: &Path) -> Vec<PathBuf> {
     let mut manifests = vec![root.join("xtask").join("Cargo.toml")];
     if let Ok(entries) = fs::read_dir(root.join("crates")) {
         let mut dirs: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         dirs.sort();
         manifests.extend(dirs.into_iter().map(|d| d.join("Cargo.toml")));
     }
+    manifests.into_iter().filter(|m| m.is_file()).collect()
+}
+
+fn manifest_check(
+    root: &Path,
+    name: &str,
+    inspect: impl Fn(&str) -> Vec<(usize, String)>,
+) -> usize {
     let mut failures = 0;
-    let mut checked = 0;
-    for manifest in manifests {
-        let Ok(text) = fs::read_to_string(&manifest) else {
+    let all = manifests(root);
+    for manifest in &all {
+        let Ok(text) = fs::read_to_string(manifest) else {
+            eprintln!("{name}: cannot read {}", relative(root, manifest));
+            failures += 1;
             continue;
         };
-        checked += 1;
-        for line in checks::fixtures_dependency_violations(&text) {
-            eprintln!(
-                "{}:{line}: `{}` may only be a dev-dependency",
-                relative(root, &manifest),
-                checks::TEST_ONLY_CRATE
-            );
+        for (line, message) in inspect(&text) {
+            eprintln!("{}:{line}: {message}", relative(root, manifest));
             failures += 1;
         }
     }
-    println!("fixtures-dependency: {checked} manifests checked, {failures} violations");
+    println!(
+        "{name}: {} manifests checked, {failures} violations",
+        all.len()
+    );
     failures
+}
+
+fn fixtures_dependency(root: &Path) -> usize {
+    manifest_check(root, "fixtures-dependency", |text| {
+        checks::fixtures_dependency_violations(text)
+            .into_iter()
+            .map(|line| {
+                (
+                    line,
+                    format!("`{}` may only be a dev-dependency", checks::TEST_ONLY_CRATE),
+                )
+            })
+            .collect()
+    })
+}
+
+fn feature_policy(root: &Path) -> usize {
+    manifest_check(root, "feature-policy", |text| {
+        checks::feature_violations(text)
+            .into_iter()
+            .map(|(line, name)| {
+                (
+                    line,
+                    format!("feature `{name}` is off by default; features ship on by default"),
+                )
+            })
+            .collect()
+    })
 }
 
 fn no_comment(root: &Path) -> usize {
@@ -132,9 +169,15 @@ fn main() -> ExitCode {
         Some("write-check") => write_check(&root),
         Some("no-comment") => no_comment(&root),
         Some("fixtures-dependency") => fixtures_dependency(&root),
-        Some("check") => write_check(&root) + no_comment(&root) + fixtures_dependency(&root),
+        Some("feature-policy") => feature_policy(&root),
+        Some("check") => {
+            write_check(&root)
+                + no_comment(&root)
+                + fixtures_dependency(&root)
+                + feature_policy(&root)
+        }
         _ => {
-            eprintln!("Usage: cargo xtask <write-check|no-comment|fixtures-dependency|check>");
+            eprintln!("Usage: cargo xtask <write-check|no-comment|fixtures-dependency|feature-policy|check>");
             return ExitCode::from(2);
         }
     };

@@ -1,15 +1,8 @@
+use crate::imports;
 use crate::lex::scan;
 
 pub const WRITER_CRATES: &[&str] = &["drift-apply", "drift-fixtures"];
 pub const TEST_ONLY_CRATE: &str = "drift-fixtures";
-
-const BANNED_PATHS: &[&str] = &[
-    "fs::write",
-    "fs::rename",
-    "fs::copy",
-    "fs::File::create",
-    "File::create",
-];
 
 const BANNED_WORDS: &[&str] = &[
     "remove_file",
@@ -30,76 +23,23 @@ const BANNED_WORDS: &[&str] = &[
     "tempfile",
 ];
 
-const GROUPED_BANNED: &[&str] = &["write", "rename", "copy", "File", "create"];
-
 pub struct Violation {
     pub line: usize,
     pub what: String,
 }
 
-fn is_word(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-fn find_word(haystack: &str, word: &str) -> Vec<usize> {
-    let mut hits = Vec::new();
-    let mut from = 0;
-    while let Some(pos) = haystack[from..].find(word) {
-        let start = from + pos;
-        let end = start + word.len();
-        let before_ok = haystack[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|c| !is_word(c));
-        let after_ok = haystack[end..].chars().next().is_none_or(|c| !is_word(c));
-        if before_ok && after_ok {
-            hits.push(start);
-        }
-        from = end;
-    }
-    hits
-}
-
-fn line_of(code: &str, offset: usize) -> usize {
-    code[..offset].matches('\n').count() + 1
-}
-
 pub fn write_violations(source: &str) -> Vec<Violation> {
     let code = scan(source).code;
-    let mut found = Vec::new();
-
-    for path in BANNED_PATHS {
-        for pos in find_word(&code, path) {
-            found.push(Violation {
-                line: line_of(&code, pos),
-                what: (*path).to_string(),
-            });
+    let mut found: Vec<Violation> = imports::banned_paths(&code)
+        .into_iter()
+        .map(|(line, what)| Violation { line, what })
+        .collect();
+    for (line, name) in imports::identifiers(&code) {
+        if BANNED_WORDS.contains(&name.as_str()) {
+            found.push(Violation { line, what: name });
         }
     }
-    for word in BANNED_WORDS {
-        for pos in find_word(&code, word) {
-            found.push(Violation {
-                line: line_of(&code, pos),
-                what: (*word).to_string(),
-            });
-        }
-    }
-    for pos in find_word(&code, "fs") {
-        let rest = &code[pos + 2..];
-        if let Some(group) = rest.strip_prefix("::{") {
-            let close = group.find('}').unwrap_or(group.len());
-            for name in GROUPED_BANNED {
-                if !find_word(&group[..close], name).is_empty() {
-                    found.push(Violation {
-                        line: line_of(&code, pos),
-                        what: format!("fs::{{{name}}}"),
-                    });
-                }
-            }
-        }
-    }
-
-    found.sort_by_key(|v| v.line);
+    found.sort_by(|a, b| (a.line, &a.what).cmp(&(b.line, &b.what)));
     found.dedup_by(|a, b| a.line == b.line && a.what == b.what);
     found
 }
@@ -125,6 +65,70 @@ pub fn fixtures_dependency_violations(manifest: &str) -> Vec<usize> {
         }
     }
     found
+}
+
+pub fn feature_violations(manifest: &str) -> Vec<(usize, String)> {
+    let mut features: Vec<(usize, String, Vec<String>)> = Vec::new();
+    let mut in_features = false;
+    let mut pending: Option<(usize, String, String)> = None;
+    for (index, raw) in manifest.lines().enumerate() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if let Some((start, name, mut value)) = pending.take() {
+            value.push_str(line);
+            if value.matches('[').count() <= value.matches(']').count() {
+                features.push((start, name, quoted(&value)));
+            } else {
+                pending = Some((start, name, value));
+            }
+            continue;
+        }
+        if line.starts_with('[') {
+            in_features = line.trim_matches(|c| c == '[' || c == ']').trim() == "features";
+        } else if in_features {
+            let Some((name, value)) = line.split_once('=') else {
+                continue;
+            };
+            let (name, value) = (name.trim().trim_matches('"').to_string(), value.to_string());
+            if value.matches('[').count() <= value.matches(']').count() {
+                features.push((index + 1, name, quoted(&value)));
+            } else {
+                pending = Some((index + 1, name, value));
+            }
+        }
+    }
+    off_by_default(&features)
+}
+
+fn quoted(value: &str) -> Vec<String> {
+    value
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_string)
+        .collect()
+}
+
+fn off_by_default(features: &[(usize, String, Vec<String>)]) -> Vec<(usize, String)> {
+    let mut enabled: Vec<String> = Vec::new();
+    let mut queue: Vec<String> = features
+        .iter()
+        .filter(|(_, name, _)| name == "default")
+        .flat_map(|(_, _, items)| items.clone())
+        .collect();
+    while let Some(name) = queue.pop() {
+        if enabled.contains(&name) {
+            continue;
+        }
+        if let Some((_, _, items)) = features.iter().find(|(_, n, _)| *n == name) {
+            queue.extend(items.iter().cloned());
+        }
+        enabled.push(name);
+    }
+    features
+        .iter()
+        .filter(|(_, name, _)| name != "default" && !enabled.contains(name))
+        .map(|(line, name, _)| (*line, name.clone()))
+        .collect()
 }
 
 pub fn comment_violations(source: &str) -> Vec<usize> {
@@ -184,7 +188,7 @@ mod tests {
     #[test]
     fn flags_grouped_imports() {
         let got = whats("use std::fs::{read, write};\n");
-        assert_eq!(got, vec!["fs::{write}"]);
+        assert_eq!(got, vec!["fs::write"]);
     }
 
     #[test]
@@ -237,6 +241,94 @@ mod tests {
     fn workspace_declaration_is_allowed() {
         let m = "[workspace.dependencies]\ndrift-fixtures = { path = \"crates/drift-fixtures\" }\n";
         assert!(fixtures_dependency_violations(m).is_empty());
+    }
+
+    #[test]
+    fn flags_aliased_fs_module() {
+        let src = "fn a(p: &Path) { use std::fs as disk; disk::write(p, b\"x\").unwrap(); }";
+        assert_eq!(whats(src), vec!["fs::write"]);
+    }
+
+    #[test]
+    fn flags_spaced_and_aliased_group_imports() {
+        assert_eq!(whats("use std::fs::{ read , write };\n"), vec!["fs::write"]);
+        assert_eq!(
+            whats("use std::{fs as d, io};\nfn a() { d::rename(a, b); }\n"),
+            vec!["fs::rename"]
+        );
+        assert_eq!(
+            whats("use std::fs::{self as d, read};\nfn a() { d::copy(a, b); }\n"),
+            vec!["fs::copy"]
+        );
+    }
+
+    #[test]
+    fn flags_renamed_function_and_type_imports() {
+        assert_eq!(whats("use std::fs::write as w;\n"), vec!["fs::write"]);
+        let src = "use std::fs::File as F;\nfn a() { F::create(p); }\n";
+        assert_eq!(whats(src), vec!["File::create"]);
+        assert_eq!(
+            whats("use std::fs::OpenOptions as O;\n"),
+            vec!["OpenOptions"]
+        );
+    }
+
+    #[test]
+    fn flags_glob_and_nested_aliases() {
+        assert_eq!(whats("use std::fs::*;\n"), vec!["fs::*"]);
+        assert_eq!(
+            whats("use std as s;\nfn a() { s::fs::rename(a, b); }\n"),
+            vec!["fs::rename"]
+        );
+        assert_eq!(
+            whats("use std::fs;\nuse fs as disk;\nfn a() { disk::write(p, d); }\n"),
+            vec!["fs::write"]
+        );
+        assert_eq!(
+            whats("type D = std::fs::OpenOptions;\n"),
+            vec!["OpenOptions"]
+        );
+    }
+
+    #[test]
+    fn unrelated_aliases_and_methods_pass() {
+        assert!(write_violations(
+            "use std::io::Write as W;\nfn a(o: &mut impl W) { o.write(b\"x\"); }\n"
+        )
+        .is_empty());
+        assert!(write_violations("use my::disk;\nfn a() { disk::write(p); }\n").is_empty());
+        assert!(write_violations("use std::fs;\nfn a() { fs::read_to_string(p); }\n").is_empty());
+        assert!(write_violations("use std::fs::{self, read_dir};\n").is_empty());
+    }
+
+    #[test]
+    fn default_off_feature_fails() {
+        let m = "[features]\ndefault = []\nextra = []\n";
+        assert_eq!(feature_violations(m), vec![(3, "extra".to_string())]);
+    }
+
+    #[test]
+    fn feature_without_default_fails() {
+        assert_eq!(feature_violations("[features]\nextra = []\n").len(), 1);
+    }
+
+    #[test]
+    fn features_enabled_by_default_pass() {
+        let m = "[features]\ndefault = [\"a\", \"b\"]\na = []\nb = [\"c\"]\nc = []\n";
+        assert!(feature_violations(m).is_empty());
+    }
+
+    #[test]
+    fn multiline_default_and_no_features_table() {
+        let m = "[features]\ndefault = [\n    \"a\", # on\n]\na = []\n";
+        assert!(feature_violations(m).is_empty());
+        assert!(feature_violations("[dependencies]\nx = \"1\"\n").is_empty());
+    }
+
+    #[test]
+    fn feature_reachable_only_through_dependency_chain_passes() {
+        let m = "[features]\ndefault = [\"a\"]\na = [\"b\"]\nb = []\n";
+        assert!(feature_violations(m).is_empty());
     }
 
     #[test]
