@@ -1,0 +1,8 @@
+{
+  "symlinks": {
+    "ours/hypr/alias.lua": "secret.lua"
+  },
+  "absent": [
+    "theirs/hypr/alias.lua"
+  ]
+}

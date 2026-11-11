@@ -1,0 +1,17 @@
+{
+  "files": [
+    {
+      "path": "hypr/secret.lua",
+      "status": "unchanged"
+    },
+    {
+      "path": "hypr/alias.lua",
+      "status": "user-only"
+    },
+    {
+      "path": "hypr/removed.lua",
+      "status": "missing",
+      "badge": "deleted by you"
+    }
+  ]
+}

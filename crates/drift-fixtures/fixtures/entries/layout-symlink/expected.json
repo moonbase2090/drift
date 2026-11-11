@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "hypr/alias.lua",
+      "status": "user-only",
+      "ours": "changed",
+      "base": "absent",
+      "theirs": "absent"
+    }
+  ]
+}

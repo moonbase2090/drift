@@ -1,0 +1,10 @@
+{
+  "files": [
+    {
+      "path": "hypr/note.txt",
+      "base": "changed",
+      "ours": "absent",
+      "theirs": "changed"
+    }
+  ]
+}

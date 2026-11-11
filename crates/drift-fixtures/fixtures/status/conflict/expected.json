@@ -1,0 +1,11 @@
+{
+  "files": [
+    {
+      "path": "hypr/looknfeel.lua",
+      "status": "conflict",
+      "base": "changed",
+      "ours": "changed",
+      "theirs": "changed"
+    }
+  ]
+}
