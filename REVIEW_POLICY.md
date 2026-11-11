@@ -51,8 +51,7 @@ Every test must fail if the behavior it names broke. Reject tests that assert a 
 
 ## Local verification
 
-Every behavior-changing PR must include proof that the change was built and exercised in a clean local VM (a Tart macOS VM, or a clean VM of the relevant OS, including Omarchy/Linux for host-integration changes) and shown working: the commands run plus their output, or a screenshot.
+The owner has waived the clean-VM requirement for this project. Every behavior-changing PR still includes a **Proof** section showing that the change was built and exercised: the commands run plus their output, or a screenshot. Links to green CI runs may sit beside that output but do not replace it.
 
 - Reviewers must not give SHIP without that proof.
 - Docs-only and CI-only PRs are exempt.
-- Only an explicit owner override waives this requirement.
