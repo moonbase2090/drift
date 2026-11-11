@@ -8,3 +8,4 @@ Cargo.lock.bak
 .env
 .env.*
 !.env.example
+.sc/
