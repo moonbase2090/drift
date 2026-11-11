@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path};
 use std::time::UNIX_EPOCH;
@@ -37,7 +38,7 @@ impl std::fmt::Display for TreeDigest {
 }
 
 struct Item {
-    key: String,
+    key: Vec<u8>,
     kind: u8,
     mode: u32,
     mtime_secs: u64,
@@ -52,7 +53,7 @@ pub fn hash_tree(root: &Path) -> Result<TreeDigest, Error> {
     let mut hasher = Sha256::new();
     for item in items {
         update_u32(&mut hasher, item.key.len() as u32);
-        hasher.update(item.key.as_bytes());
+        hasher.update(&item.key);
         hasher.update([item.kind]);
         update_u32(&mut hasher, item.mode);
         update_u64(&mut hasher, item.mtime_secs);
@@ -85,7 +86,7 @@ fn walk(root: &Path, dir: &Path, items: &mut Vec<Item>) -> Result<(), Error> {
 
 fn item(root: &Path, path: &Path, meta: &fs::Metadata) -> Result<Item, Error> {
     let key = if path == root {
-        String::new()
+        Vec::new()
     } else {
         let rel = path.strip_prefix(root).map_err(|source| {
             Error::message(
@@ -93,7 +94,7 @@ fn item(root: &Path, path: &Path, meta: &fs::Metadata) -> Result<Item, Error> {
                 format!("path is outside {root}: {source}", root = root.display()),
             )
         })?;
-        rel_key(rel)
+        rel_key(rel)?
     };
     let modified = meta.modified().map_err(|source| Error::io(path, source))?;
     let since_epoch = modified
@@ -102,10 +103,7 @@ fn item(root: &Path, path: &Path, meta: &fs::Metadata) -> Result<Item, Error> {
     let mode = meta.permissions().mode() & 0o7777;
     let (kind, payload) = if meta.file_type().is_symlink() {
         let target = fs::read_link(path).map_err(|source| Error::io(path, source))?;
-        let text = target
-            .to_str()
-            .ok_or_else(|| Error::message(path, "symlink target is not utf-8"))?;
-        (KIND_SYMLINK, text.as_bytes().to_vec())
+        (KIND_SYMLINK, target.as_os_str().as_bytes().to_vec())
     } else if meta.is_dir() {
         (KIND_DIR, Vec::new())
     } else if meta.is_file() {
@@ -124,14 +122,21 @@ fn item(root: &Path, path: &Path, meta: &fs::Metadata) -> Result<Item, Error> {
     })
 }
 
-fn rel_key(path: &Path) -> String {
-    path.components()
-        .filter_map(|component| match component {
-            Component::Normal(part) => part.to_str(),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/")
+fn rel_key(path: &Path) -> Result<Vec<u8>, Error> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => parts.push(part.as_bytes()),
+            _ => return Err(Error::message(path, "path is outside the tree")),
+        }
+    }
+    let mut key = Vec::new();
+    key.extend_from_slice(&(parts.len() as u32).to_be_bytes());
+    for part in parts {
+        key.extend_from_slice(&(part.len() as u32).to_be_bytes());
+        key.extend_from_slice(part);
+    }
+    Ok(key)
 }
 
 fn update_u32(hasher: &mut Sha256, value: u32) {

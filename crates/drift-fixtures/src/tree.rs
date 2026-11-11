@@ -199,22 +199,32 @@ fn locate(home: &Path, omarchy: &Path, entry: &Entry) -> PathBuf {
 
 fn write_entry(home: &Path, omarchy: &Path, entry: &Entry) -> Result<(), Error> {
     let dest = locate(home, omarchy, entry);
+    let anchor = match entry.root {
+        Root::Config => home.join(LIVE_CONFIG),
+        Root::Templates => omarchy.join(PACKAGE_TEMPLATES),
+        Root::Bases => home.join(REVIEWED_BASES),
+    };
     match &entry.node {
         Node::Directory { mode } => {
-            create_dir(&dest)?;
+            ensure_real_dir(&anchor, &dest)?;
             set_mode(&dest, *mode)?;
         }
         Node::File { bytes, mode } => {
-            if let Some(parent) = dest.parent() {
-                create_dir(parent)?;
+            let parent = dest
+                .parent()
+                .ok_or_else(|| Error::message(&dest, "path is outside the tree"))?;
+            ensure_real_dir(&anchor, parent)?;
+            if is_symlink(&dest)? {
+                return Err(Error::message(&dest, "refusing to follow a symlink"));
             }
             fs::write(&dest, bytes).map_err(|source| Error::io(&dest, source))?;
             set_mode(&dest, *mode)?;
         }
         Node::Symlink { target } => {
-            if let Some(parent) = dest.parent() {
-                create_dir(parent)?;
-            }
+            let parent = dest
+                .parent()
+                .ok_or_else(|| Error::message(&dest, "path is outside the tree"))?;
+            ensure_real_dir(&anchor, parent)?;
             if dest.symlink_metadata().is_ok() {
                 fs::remove_file(&dest).map_err(|source| Error::io(&dest, source))?;
             }
@@ -228,6 +238,49 @@ fn write_entry(home: &Path, omarchy: &Path, entry: &Entry) -> Result<(), Error> 
 fn create_dir(path: impl AsRef<Path>) -> Result<(), Error> {
     let path = path.as_ref();
     fs::create_dir_all(path).map_err(|source| Error::io(path, source))
+}
+
+fn ensure_real_dir(anchor: &Path, dir: &Path) -> Result<(), Error> {
+    if dir == anchor {
+        return require_real_dir(dir);
+    }
+    if !dir.starts_with(anchor) {
+        return Err(Error::message(dir, "path is outside the tree"));
+    }
+    let parent = dir
+        .parent()
+        .ok_or_else(|| Error::message(dir, "path is outside the tree"))?;
+    ensure_real_dir(anchor, parent)?;
+    match fs::symlink_metadata(dir) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            Err(Error::message(dir, "refusing to follow a symlink"))
+        }
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => Err(Error::message(dir, "not a directory")),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(dir).map_err(|source| Error::io(dir, source))
+        }
+        Err(source) => Err(Error::io(dir, source)),
+    }
+}
+
+fn require_real_dir(dir: &Path) -> Result<(), Error> {
+    let meta = fs::symlink_metadata(dir).map_err(|source| Error::io(dir, source))?;
+    if meta.file_type().is_symlink() {
+        return Err(Error::message(dir, "refusing to follow a symlink"));
+    }
+    if !meta.is_dir() {
+        return Err(Error::message(dir, "not a directory"));
+    }
+    Ok(())
+}
+
+fn is_symlink(path: &Path) -> Result<bool, Error> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => Ok(meta.file_type().is_symlink()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(Error::io(path, source)),
+    }
 }
 
 fn set_mode(path: &Path, mode: u32) -> Result<(), Error> {

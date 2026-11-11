@@ -9,7 +9,7 @@ drift-fixtures.workspace = true
 
 `ours/` is the live config and is written to `$HOME/.config/`. `base/` is the reviewed base and is written to `$HOME/.local/share/drift/bases/`. `theirs/` is the installed package templates and is written to `$OMARCHY_PATH/config/`.
 
-Materialize copies bytes, permission bits, and symlink targets. It does not copy mtimes. `hash_tree` is what notices a one-byte edit, a mode change, or an mtime change.
+Materialize copies bytes, permission bits, and symlink targets. It does not copy mtimes. It creates missing parents one directory at a time and refuses to follow a symlink, so a link cannot redirect a write outside the temporary tree. `hash_tree` notices a one-byte edit, a mode change, an mtime change, or a rename, including a name that is not UTF-8.
 
 ## Case directory
 
@@ -82,7 +82,7 @@ let omarchy_path = trees.omarchy_path();
 
 ## Tree hash
 
-`hash_tree` walks a directory without following symlinks. Each path contributes its kind, permission bits, mtime (seconds and nanoseconds), and payload. The payload is the file bytes, the symlink target, or empty for a directory. The digest is SHA-256 over those records in path order.
+`hash_tree` walks a directory without following symlinks. Each path contributes its full relative path as raw filename bytes, its kind, permission bits, mtime (seconds and nanoseconds), and payload. The payload is the file bytes, the raw symlink target, or empty for a directory. The digest is SHA-256 over those records in path order.
 
 ## Golden cases
 

@@ -1,4 +1,6 @@
+use std::ffi::OsStr;
 use std::fs::{self, File};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
@@ -329,6 +331,60 @@ fn tree_hash_sees_one_byte_mode_and_mtime_changes() {
 }
 
 #[test]
+fn materialize_refuses_to_follow_a_symlink_ancestor() {
+    let outside = tempfile::tempdir().unwrap();
+    let victim = outside.path().join("victim");
+    fs::write(&victim, b"original").unwrap();
+    let target = outside
+        .path()
+        .to_str()
+        .expect("temporary path is utf-8")
+        .to_string();
+
+    let error = FixtureBuilder::new()
+        .put(Root::Config, "a", Node::symlink(target))
+        .unwrap()
+        .put(Root::Config, "a/victim", Node::file(b"pwned"))
+        .unwrap()
+        .materialize()
+        .unwrap_err();
+
+    assert!(
+        error.to_string().contains("refusing to follow a symlink"),
+        "{error}"
+    );
+    assert_eq!(fs::read(&victim).unwrap(), b"original");
+}
+
+#[test]
+fn tree_hash_distinguishes_non_utf8_names() {
+    let directory_byte = hash_named_tree(0xff, b"note");
+    let other_directory = hash_named_tree(0xfe, b"note");
+    assert_ne!(directory_byte, other_directory);
+
+    let file_byte = hash_named_tree(b'd', &[0xff]);
+    let other_file = hash_named_tree(b'd', &[0xfe]);
+    assert_ne!(file_byte, other_file);
+}
+
+#[test]
+fn tree_hash_sees_a_rename_when_the_parent_mtime_is_restored() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("parent");
+    fs::create_dir(&parent).unwrap();
+    let from = parent.join(OsStr::from_bytes(&[0xff]));
+    fs::write(&from, b"body\n").unwrap();
+    stamp_tree(root.path(), 1_700_000_210);
+    let before = hash_tree(root.path()).unwrap();
+
+    let to = parent.join(OsStr::from_bytes(&[0xfe]));
+    fs::rename(&from, &to).unwrap();
+    stamp_file(&to, 1_700_000_210);
+    stamp_dirs(root.path(), 1_700_000_210);
+    assert_ne!(hash_tree(root.path()).unwrap(), before);
+}
+
+#[test]
 fn tree_hash_sees_a_symlink_target_change() {
     let root = tempfile::tempdir().unwrap();
     let link = root.path().join("alias");
@@ -500,6 +556,15 @@ fn layout_mode(case_dir: &Path, source_root: &Path, rel: &Path) -> Option<u32> {
 
 fn mode_bits(path: &Path) -> u32 {
     fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+fn hash_named_tree(directory: u8, file: &[u8]) -> drift_fixtures::TreeDigest {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join(OsStr::from_bytes(&[directory]));
+    fs::create_dir(&dir).unwrap();
+    fs::write(dir.join(OsStr::from_bytes(file)), b"body\n").unwrap();
+    stamp_tree(root.path(), 1_700_000_200);
+    hash_tree(root.path()).unwrap()
 }
 
 fn stamp_tree(root: &Path, secs: u64) {
