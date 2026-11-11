@@ -1,13 +1,27 @@
-pub fn crate_name() -> &'static str {
-    env!("CARGO_PKG_NAME")
-}
+mod case;
+mod error;
+mod hash;
+mod tree;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub use case::{
+    case_dirs, fixtures_dir, load_case, materialize_case, Case, Expected, ExpectedFile,
+    MaterializedCase, Presence,
+};
+pub use error::Error;
+pub use hash::{hash_tree, TreeDigest};
+pub use tree::{Entry, FixtureBuilder, FixtureTrees, Node, Root};
 
-    #[test]
-    fn reports_its_name() {
-        assert!(crate_name().starts_with("drift-"));
-    }
-}
+pub const LIVE_CONFIG: &str = ".config";
+pub const REVIEWED_BASES: &str = ".local/share/drift/bases";
+pub const PACKAGE_TEMPLATES: &str = "config";
+
+pub const STATUSES: &[&str] = &[
+    "unchanged",
+    "upstream changed",
+    "local override",
+    "conflict",
+    "user-only",
+    "missing",
+];
+
+pub const BADGES: &[&str] = &["merges cleanly", "base unknown", "deleted by you"];

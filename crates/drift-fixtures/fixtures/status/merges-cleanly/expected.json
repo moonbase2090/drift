@@ -1,0 +1,12 @@
+{
+  "files": [
+    {
+      "path": "hypr/looknfeel.lua",
+      "status": "upstream changed",
+      "badge": "merges cleanly",
+      "base": "changed",
+      "ours": "changed",
+      "theirs": "changed"
+    }
+  ]
+}

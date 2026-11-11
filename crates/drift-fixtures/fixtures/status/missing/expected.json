@@ -1,0 +1,12 @@
+{
+  "files": [
+    {
+      "path": "hypr/monitors.lua",
+      "status": "missing",
+      "badge": "deleted by you",
+      "base": "same",
+      "ours": "absent",
+      "theirs": "same"
+    }
+  ]
+}

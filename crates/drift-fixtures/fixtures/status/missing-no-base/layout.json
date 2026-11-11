@@ -1,0 +1,6 @@
+{
+  "absent": [
+    "base/hypr/monitors.lua",
+    "ours/hypr/monitors.lua"
+  ]
+}
