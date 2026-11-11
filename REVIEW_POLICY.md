@@ -51,8 +51,20 @@ Every test must fail if the behavior it names broke. Reject tests that assert a 
 
 ## Local verification
 
-Every behavior-changing PR must include proof that the change was built and exercised in a clean local VM (a Tart macOS VM, or a clean VM of the relevant OS, including Omarchy/Linux for host-integration changes) and shown working: the commands run plus their output, or a screenshot.
+The owner has waived the clean-VM requirement for this project. Every behavior-changing PR still includes a **Proof** section showing that the change was built and exercised: the commands run plus their output, or a screenshot. Links to green CI runs may sit beside that output but do not replace it.
 
 - Reviewers must not give SHIP without that proof.
 - Docs-only and CI-only PRs are exempt.
-- Only an explicit owner override waives this requirement.
+
+## Scorecard pre-PR check
+
+Before opening a PR, and again before asking for review after new commits, the author runs [Scorecard](https://github.com/moonbase2090/Scorecard) at the head commit:
+
+```
+sc analyze . --diff main --format pretty
+```
+
+- Every enforced gate (types, tests, secrets, lint) must pass. A failing gate is fixed before the PR goes up, not explained away.
+- Paste the gate summary and the commit it ran at into the Proof section.
+- Reviewers re-run it at the tip they review and treat a missing or stale Scorecard result as CHANGES.
+- Mutation testing stays off. Docs-only and CI-only PRs are exempt.
