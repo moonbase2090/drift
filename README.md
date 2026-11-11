@@ -21,7 +21,7 @@ The interface is a path tree plus the per-file diff. Classification uses the ins
 
 ## Development
 
-Rust 1.88 or newer. From this repository:
+Rust 1.99.1, pinned by `rust-toolchain.toml`. From this repository:
 
 ```sh
 cargo test

@@ -3,5 +3,40 @@
 version = 4
 
 [[package]]
-name = "drift"
+name = "drift-apply"
 version = "0.1.0"
+dependencies = [
+ "drift-core",
+]
+
+[[package]]
+name = "drift-cli"
+version = "0.1.0"
+dependencies = [
+ "drift-apply",
+ "drift-core",
+ "drift-source",
+ "drift-tui",
+]
+
+[[package]]
+name = "drift-core"
+version = "0.1.0"
+
+[[package]]
+name = "drift-fixtures"
+version = "0.1.0"
+
+[[package]]
+name = "drift-source"
+version = "0.1.0"
+dependencies = [
+ "drift-core",
+]
+
+[[package]]
+name = "drift-tui"
+version = "0.1.0"
+dependencies = [
+ "drift-core",
+]

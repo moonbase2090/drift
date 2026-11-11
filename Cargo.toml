@@ -1,11 +1,24 @@
-[package]
-name = "drift"
+[workspace]
+resolver = "2"
+members = [
+    "crates/drift-core",
+    "crates/drift-source",
+    "crates/drift-apply",
+    "crates/drift-tui",
+    "crates/drift-cli",
+    "crates/drift-fixtures",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-description = "Compare local Omarchy and Hyprland config against installed package templates"
 repository = "https://github.com/moonbase2090/drift"
-readme = "README.md"
 
-[dependencies]
+[workspace.dependencies]
+drift-core = { path = "crates/drift-core" }
+drift-source = { path = "crates/drift-source" }
+drift-apply = { path = "crates/drift-apply" }
+drift-tui = { path = "crates/drift-tui" }
+drift-fixtures = { path = "crates/drift-fixtures" }

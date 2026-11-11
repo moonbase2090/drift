@@ -1,0 +1,11 @@
+[package]
+name = "drift-source"
+description = "Read-only providers for base, ours and theirs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+drift-core.workspace = true
