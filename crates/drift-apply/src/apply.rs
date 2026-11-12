@@ -283,7 +283,9 @@ fn backup_original(
         let target = fs::read_link(source).map_err(|error| file_failure(bare_io(source, error)))?;
         write_bytes(&roots.state, &dest, target.as_os_str().as_bytes(), 0o644)
             .map_err(file_failure)?;
-        return record_symlink(&roots.state, txn, planned.path().as_str()).map_err(file_failure);
+        let digest = sha256_hex(target.as_os_str().as_bytes());
+        return record_symlink(&roots.state, txn, planned.path().as_str(), &digest)
+            .map_err(file_failure);
     }
     let bytes = read_original(source)?;
     let mode = existing_mode(source).unwrap_or(0o644);
@@ -392,7 +394,7 @@ fn restore_backup(
     dest: &Path,
     backup: &Path,
 ) -> Result<(), ApplyError> {
-    if recorded_symlink(state, txn, rel)? {
+    if recorded_symlink(state, txn, rel)?.is_some() {
         return restore_symlink(anchor, dest, backup);
     }
     let bytes = read_original(backup).map_err(|error| bare(error.message))?;
@@ -433,20 +435,34 @@ fn load_nodes(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>,
     }
 }
 
-fn record_symlink(state: &Path, txn: &str, rel: &str) -> Result<(), ApplyError> {
+fn record_symlink(state: &Path, txn: &str, rel: &str, digest: &str) -> Result<(), ApplyError> {
     let path = nodes_path(state, txn);
     let mut nodes = load_nodes(&path)?;
     nodes.insert(
         rel.to_string(),
-        serde_json::Value::String("symlink".to_string()),
+        serde_json::json!({"kind": "symlink", "sha256": digest}),
     );
     let bytes = serde_json::to_vec(&nodes).map_err(|error| bare(error.to_string()))?;
     write_bytes(state, &path, &bytes, 0o644)
 }
 
-fn recorded_symlink(state: &Path, txn: &str, rel: &str) -> Result<bool, ApplyError> {
+fn recorded_symlink(state: &Path, txn: &str, rel: &str) -> Result<Option<String>, ApplyError> {
     let nodes = load_nodes(&nodes_path(state, txn))?;
-    Ok(nodes.get(rel).and_then(serde_json::Value::as_str) == Some("symlink"))
+    let Some(node) = nodes.get(rel) else {
+        return Ok(None);
+    };
+    if node.as_str() == Some("symlink") {
+        return Ok(Some(String::new()));
+    }
+    let is_link = node.get("kind").and_then(serde_json::Value::as_str) == Some("symlink");
+    if !is_link {
+        return Ok(None);
+    }
+    let digest = node
+        .get("sha256")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    Ok(Some(digest.to_string()))
 }
 
 fn write_pending(state: &Path, plan: &Plan) -> Result<(), ApplyError> {

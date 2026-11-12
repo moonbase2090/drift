@@ -939,3 +939,87 @@ fn leftovers(root: &Path) -> Vec<PathBuf> {
         })
         .collect()
 }
+
+#[test]
+fn a_mode_only_change_is_undone_and_a_later_chmod_is_a_divergence() {
+    let fix = Fixture::new();
+    write_live(&fix.live(A), b"same\n", 0o644);
+    do_apply(&fix, "txn-1", 1, &[edit(A, b"same\n", Some(0o600))]).unwrap();
+    assert_eq!(mode_of(&fix.live(A)), 0o600);
+    let items = inspect_undo(&fix.roots(), "txn-1").unwrap();
+    assert_eq!(items[0].status, UndoStatus::Restore);
+
+    fs::set_permissions(fix.live(A), fs::Permissions::from_mode(0o666)).unwrap();
+    let UndoOutcome::Diverged(items) = do_undo(&fix, "txn-1", "undo-1") else {
+        panic!("expected a warning");
+    };
+    let UndoStatus::Diverged(found) = &items[0].status else {
+        panic!("expected a divergence");
+    };
+    assert_eq!(found.expected, found.found);
+    assert_eq!(found.expected_mode, Some(0o600));
+    assert_eq!(found.found_mode, Some(0o666));
+    assert_eq!(mode_of(&fix.live(A)), 0o666);
+
+    fs::set_permissions(fix.live(A), fs::Permissions::from_mode(0o600)).unwrap();
+    restored(do_undo(&fix, "txn-1", "undo-1"));
+    assert_eq!(mode_of(&fix.live(A)), 0o644);
+    assert_eq!(fs::read(fix.live(A)).unwrap(), b"same\n");
+    restored(do_undo(&fix, "undo-1", "undo-2"));
+    assert_eq!(mode_of(&fix.live(A)), 0o600);
+}
+
+#[test]
+fn an_original_with_the_same_bytes_and_a_different_mode_is_not_already_original() {
+    let fix = Fixture::new();
+    write_live(&fix.live(A), b"same\n", 0o644);
+    do_apply(&fix, "txn-1", 1, &[edit(A, b"same\n", Some(0o600))]).unwrap();
+    fs::set_permissions(fix.live(A), fs::Permissions::from_mode(0o644)).unwrap();
+    let items = inspect_undo(&fix.roots(), "txn-1").unwrap();
+    assert_eq!(items[0].status, UndoStatus::AlreadyOriginal);
+    fs::set_permissions(fix.live(A), fs::Permissions::from_mode(0o640)).unwrap();
+    let items = inspect_undo(&fix.roots(), "txn-1").unwrap();
+    assert!(matches!(items[0].status, UndoStatus::Diverged(_)));
+}
+
+#[test]
+fn a_tampered_symlink_backup_is_refused_and_nothing_is_written() {
+    let fix = Fixture::new();
+    fs::write(fix.root.join("outside"), b"elsewhere\n").unwrap();
+    symlink(fix.root.join("outside"), fix.live(A)).unwrap();
+    do_apply_with(&fix, "txn-1", 1, &[edit(A, b"theirs\n", None)], true).unwrap();
+    let nodes = fs::read_to_string(fix.state("backups/txn-1/nodes.json")).unwrap();
+    assert!(
+        nodes.contains(&sha(fix.root.join("outside").as_os_str().as_bytes())),
+        "{nodes}"
+    );
+    let snapshot = tree(&fix);
+
+    fs::write(fix.state("backups/txn-1/config/a.conf"), b"/etc/passwd").unwrap();
+    let error = undo(&fix.roots(), &request("txn-1", "undo-1")).unwrap_err();
+    assert!(
+        error.message.contains("recorded digest"),
+        "{}",
+        error.message
+    );
+    assert_eq!(tree(&fix), snapshot);
+    assert!(!fix.state("backups/undo-1").exists());
+
+    fs::write(
+        fix.state("backups/txn-1/nodes.json"),
+        br#"{"config/a.conf":"symlink"}"#,
+    )
+    .unwrap();
+    fs::write(
+        fix.state("backups/txn-1/config/a.conf"),
+        fix.root.join("outside").as_os_str().as_bytes(),
+    )
+    .unwrap();
+    let error = undo(&fix.roots(), &request("txn-1", "undo-1")).unwrap_err();
+    assert!(
+        error.message.contains("recorded digest"),
+        "{}",
+        error.message
+    );
+    assert_eq!(tree(&fix), snapshot);
+}

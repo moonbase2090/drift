@@ -4,6 +4,8 @@ use super::*;
 pub struct Divergence {
     pub expected: Option<String>,
     pub found: Option<String>,
+    pub expected_mode: Option<u32>,
+    pub found_mode: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,13 +262,28 @@ fn load_manifest(state: &Path, id: &str) -> Result<Plan, ApplyError> {
     Ok(plan)
 }
 
-fn observe(dest: &Path) -> Result<Option<String>, ApplyError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Node {
+    hash: String,
+    mode: Option<u32>,
+    link: bool,
+}
+
+fn observe(dest: &Path) -> Result<Option<Node>, ApplyError> {
     match fs::symlink_metadata(dest) {
         Ok(meta) if meta.file_type().is_symlink() => {
             let target = fs::read_link(dest).map_err(|source| bare_io(dest, source))?;
-            Ok(Some(sha256_hex(target.as_os_str().as_bytes())))
+            Ok(Some(Node {
+                hash: sha256_hex(target.as_os_str().as_bytes()),
+                mode: None,
+                link: true,
+            }))
         }
-        Ok(meta) if meta.is_file() => hash_file(dest).map(Some),
+        Ok(meta) if meta.is_file() => Ok(Some(Node {
+            hash: hash_file(dest)?,
+            mode: Some(meta.permissions().mode() & 0o777),
+            link: false,
+        })),
         Ok(_) => Err(bare(format!("not a regular file {}", dest.display()))),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(source) => Err(bare_io(dest, source)),
@@ -295,34 +312,53 @@ fn inspect_plan(roots: &Roots, target: &Plan) -> Result<Vec<Inspected>, ApplyErr
             return Err(bare("path is outside the tree"));
         }
         refuse_linked_ancestors(&roots.live, &dest)?;
-        let current = observe(&dest)?;
+        let current_node = observe(&dest)?;
         let backup =
             backup_path(&roots.state, target.id(), planned).map_err(|error| bare(error.message))?;
-        let symlink = recorded_symlink(&roots.state, target.id(), &path)?;
+        let link_digest = recorded_symlink(&roots.state, target.id(), &path)?;
+        let symlink = link_digest.is_some();
         let restore = node_exists(&backup);
         if !restore && planned.sha256_before().is_some() {
             return Err(bare(format!("backup is missing for {path}")));
         }
-        let (original, mode) = if restore {
+        let original_node = if restore {
             let bytes = read_original(&backup).map_err(|error| bare(error.message))?;
             let digest = sha256_hex(&bytes);
-            if !symlink && planned.sha256_before() != Some(digest.as_str()) {
+            let recorded = match &link_digest {
+                Some(recorded) => Some(recorded.as_str()),
+                None => planned.sha256_before(),
+            };
+            if recorded != Some(digest.as_str()) {
                 return Err(bare(format!(
                     "backup does not match its recorded digest for {path}"
                 )));
             }
-            let mode = if symlink {
-                None
-            } else {
-                existing_mode(&backup)
-            };
-            (Some(digest), mode)
+            Some(Node {
+                hash: digest,
+                mode: if symlink {
+                    None
+                } else {
+                    existing_mode(&backup)
+                },
+                link: symlink,
+            })
         } else {
-            (None, None)
+            None
         };
-        let status = if current == original {
+        let current = current_node.as_ref().map(|node| node.hash.clone());
+        let original = original_node.as_ref().map(|node| node.hash.clone());
+        let mode = original_node.as_ref().and_then(|node| node.mode);
+        let expected_mode = planned.mode();
+        let at_expected = match &current_node {
+            None => planned.sha256_after().is_none(),
+            Some(node) => {
+                Some(node.hash.as_str()) == planned.sha256_after()
+                    && (node.link || expected_mode.is_none() || node.mode == expected_mode)
+            }
+        };
+        let status = if current_node == original_node {
             UndoStatus::AlreadyOriginal
-        } else if current.as_deref() == planned.sha256_after() {
+        } else if at_expected {
             if restore {
                 UndoStatus::Restore
             } else {
@@ -332,6 +368,8 @@ fn inspect_plan(roots: &Roots, target: &Plan) -> Result<Vec<Inspected>, ApplyErr
             UndoStatus::Diverged(Divergence {
                 expected: planned.sha256_after().map(str::to_string),
                 found: current.clone(),
+                expected_mode,
+                found_mode: current_node.as_ref().and_then(|node| node.mode),
             })
         };
         items.push(Inspected {
