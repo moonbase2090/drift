@@ -1,6 +1,7 @@
 mod diff;
 mod environment;
 mod scan;
+mod watch;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -140,17 +141,28 @@ fn number(value: Option<&str>, flag: &str) -> Result<u16, String> {
     Ok(parsed)
 }
 
+fn open_review() -> std::io::Result<()> {
+    if !std::io::stdout().is_terminal() {
+        return drift_tui::launch();
+    }
+    let paths = scan::paths_from_env();
+    let registry = scan::load_registry(&paths)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let watched = watch::dirs(
+        &registry,
+        &paths.source.home,
+        &paths.source.package.omarchy_path,
+    );
+    let worker = drift_tui::spawn_scan(move || scan::scan_report(&paths, &registry));
+    let watcher = watch::arm(&watched, worker.changes());
+    let result = drift_tui::launch_worker(worker);
+    drop(watcher);
+    result
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     execute(run(&args))
-}
-
-fn launch_screen() -> std::io::Result<()> {
-    let paths = scan::paths_from_env();
-    match scan::build(&paths) {
-        Ok(report) => drift_tui::launch_with(&report),
-        Err(message) => drift_tui::launch_failed(&message),
-    }
 }
 
 fn execute(action: Result<Action, String>) -> ExitCode {
@@ -189,7 +201,7 @@ fn execute(action: Result<Action, String>) -> ExitCode {
                 }
             }
         }
-        Ok(Action::Launch) => match launch_screen() {
+        Ok(Action::Launch) => match open_review() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("drift: {error}");

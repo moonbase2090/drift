@@ -4,13 +4,15 @@ Drift is an Omarchy plugin, built with [lunatui](https://github.com/moonbase2090
 
 After an Omarchy update, or any time, it reports which files under `~/.config/hypr` and `~/.config/omarchy` still match those templates, which are local overrides, and which conflict with a newly shipped upstream change. It is meant to replace the all-or-nothing `omarchy-refresh-*` commands with a file-by-file review.
 
-**Status:** read-only scan, status and file diff commands are available, and the review screen opens with the scan result as a tree. The product brief is `docs/PRD.md`.
+**Status:** read-only scan, status and file diff commands are available. The review screen scans on a worker thread and shows the result as a tree. The product brief is `docs/PRD.md`.
 
 ## Review screen
 
-`drift` opens a screen with a header, an empty path tree, and the key hints taken from the keymap. Press `q`, or click Quit, to leave. The terminal is restored when the screen closes.
+`drift` opens a screen with a header, a path tree, and the key hints taken from the keymap. While a scan is running the tree shows a scanning row, and the rest of the screen still takes input. Press `r` to scan again. A change under a tracked root starts one follow-up scan after a short pause, including when many changes arrive together. Press `q`, or click Quit, to leave. The terminal is restored when the screen closes.
 
 ![Empty Drift screen](docs/media/empty-screen.gif)
+
+![Scanning](docs/media/scanning.gif)
 
 `drift --snapshot` prints one 80×24 frame and does not take the terminal. Pass `--width` and `--height` together to print another size.
 
