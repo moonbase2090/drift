@@ -7,6 +7,7 @@ members = [
     "crates/drift-tui",
     "crates/drift-cli",
     "crates/drift-fixtures",
+    "xtask",
 ]
 
 [workspace.package]
@@ -15,6 +16,7 @@ edition = "2021"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/moonbase2090/drift"
+publish = false
 
 [workspace.dependencies]
 drift-core = { path = "crates/drift-core" }
