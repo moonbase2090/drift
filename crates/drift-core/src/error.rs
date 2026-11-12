@@ -41,6 +41,12 @@ pub enum Error {
         expected: usize,
         got: usize,
     },
+    BadPlan {
+        message: String,
+    },
+    BadManifest {
+        message: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -68,6 +74,8 @@ impl fmt::Display for Error {
                 message,
                 location: None,
             } => write!(f, "invalid configuration: {message}"),
+            Error::BadPlan { message } => write!(f, "invalid plan: {message}"),
+            Error::BadManifest { message } => write!(f, "invalid manifest: {message}"),
         }
     }
 }

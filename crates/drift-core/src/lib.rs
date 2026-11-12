@@ -4,6 +4,7 @@ mod error;
 mod file;
 mod merge;
 mod path;
+mod plan;
 mod registry;
 mod status;
 
@@ -13,6 +14,7 @@ pub use error::{Error, Location};
 pub use file::{LiveFile, LiveState, LiveTreatment, Template, Verification};
 pub use merge::{merge3, Choice, Hunk, HunkKind, Merge, Segment};
 pub use path::RelPath;
+pub use plan::{Action, ObservedFile, Plan, PlannedFile};
 pub use registry::{
     Mapping, Origin, Registry, Root, BUILTIN_CONFIG_ROOT, VOLATILE_CHROMIUM_PREFERENCES,
 };

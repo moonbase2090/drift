@@ -1,0 +1,27 @@
+plan txn-7
+time 2026-04-01T00:00:00Z
+package 4.5.0-3
+
+take upstream  config/hypr/monitors.lua
+  backup  backups/txn-7/config/hypr/monitors.lua
+  mode  0644
+  before  73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac
+  after  98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4
+
+keep mine  config/hypr/looknfeel.lua
+  mode  0644
+  before  73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac
+  after  73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac
+
+merge  config/omarchy/shell.json
+  backup  backups/txn-7/config/omarchy/shell.json
+  mode  0600
+  before  98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4
+  after  cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+
+take upstream  config/hypr/new.lua
+  mode  0644
+  before  absent
+  after  73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac
+
+prune  txn-1

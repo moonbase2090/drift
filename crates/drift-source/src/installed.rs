@@ -67,6 +67,13 @@ pub struct InstalledPackage {
 }
 
 pub fn read_package(paths: &ReadPaths) -> Result<InstalledPackage, Error> {
+    read_entries(paths, true)
+}
+
+pub(crate) fn read_entries(
+    paths: &ReadPaths,
+    config_only: bool,
+) -> Result<InstalledPackage, Error> {
     let local = paths.root.join("var/lib/pacman/local");
     let dir = package_dir(&local)?;
     let desc_path = dir.join("desc");
@@ -102,7 +109,7 @@ pub fn read_package(paths: &ReadPaths) -> Result<InstalledPackage, Error> {
             continue;
         }
         let relative = &package_path[PACKAGE_PREFIX.len()..];
-        if !relative.starts_with(TEMPLATE_PREFIX) {
+        if config_only && !relative.starts_with(TEMPLATE_PREFIX) {
             continue;
         }
         templates.push(verify(paths, relative, mtree.as_ref()));
@@ -225,7 +232,7 @@ fn is_safe_relative(path: &str) -> bool {
             .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(64);
