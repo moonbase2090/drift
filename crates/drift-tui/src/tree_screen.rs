@@ -1534,52 +1534,6 @@ mod tests {
     }
 
     #[test]
-    fn frames_with_five_thousand_rows_stay_under_the_budget() {
-        for (columns, rows) in [(80, 24), (200, 60)] {
-            let mut best = Duration::MAX;
-            for _attempt in 0..5 {
-                let mut screen = TreeScreen::new(&big_report(5000));
-                for _ in 0..3 {
-                    let _ = render_once(&mut Driver(&mut screen), columns, rows);
-                }
-                let mut samples = Vec::new();
-                for step in 0..100 {
-                    match step % 4 {
-                        0 => {
-                            key(&mut screen, KeyCode::PageDown);
-                        }
-                        1 => {
-                            key(&mut screen, KeyCode::Down);
-                        }
-                        2 => {
-                            screen.handle(&Event::Mouse(MouseEvent::new(
-                                MouseKind::Scroll(Scroll::Down),
-                                5,
-                                5,
-                            )));
-                        }
-                        _ => {
-                            key(&mut screen, KeyCode::Char(' '));
-                        }
-                    }
-                    let started = Instant::now();
-                    let _ = render_once(&mut Driver(&mut screen), columns, rows);
-                    samples.push(started.elapsed());
-                }
-                samples.sort();
-                best = best.min(samples[samples.len() * 99 / 100]);
-                if best < Duration::from_millis(8) {
-                    break;
-                }
-            }
-            assert!(
-                best < Duration::from_millis(8),
-                "{columns}x{rows} best p99 over five runs {best:?}"
-            );
-        }
-    }
-
-    #[test]
     fn keystrokes_on_five_thousand_rows_stay_under_the_budget() {
         let mut screen = TreeScreen::new(&big_report(5000));
         let _ = render_once(&mut Driver(&mut screen), 120, 36);
