@@ -155,7 +155,7 @@ fn open_review() -> std::io::Result<()> {
     );
     let worker = drift_tui::spawn_scan(move || scan::scan_report(&paths, &registry));
     let watcher = watch::arm(&watched, worker.changes());
-    let result = drift_tui::launch_with(worker);
+    let result = drift_tui::launch_worker(worker);
     drop(watcher);
     result
 }

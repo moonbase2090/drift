@@ -7,6 +7,7 @@ use lunatui_widgets::{KeyHintBar, RenderCx, Tree, TreeItem, TreeState, Widget};
 
 use drift_core::ScanReport;
 
+use crate::tree_screen::{Action, TreeScreen};
 use crate::worker::{Note, WorkerHandle};
 
 const QUIT: &str = "app.quit";
@@ -20,6 +21,8 @@ enum Phase {
 }
 
 pub struct Screen {
+    review: Option<TreeScreen>,
+    action: Option<Action>,
     keymap: Keymap,
     tree: TreeState,
     columns: u16,
@@ -34,6 +37,8 @@ pub struct Screen {
 impl Screen {
     pub fn new() -> Self {
         Self {
+            review: None,
+            action: None,
             keymap: keymap(),
             tree: TreeState::new(Vec::new()),
             columns: 0,
@@ -52,6 +57,28 @@ impl Screen {
             worker: Some(worker),
             ..Self::new()
         }
+    }
+}
+
+impl Screen {
+    pub fn with_report(report: &ScanReport) -> Self {
+        let mut screen = Self::new();
+        screen.review = Some(TreeScreen::new(report));
+        screen
+    }
+
+    pub fn failed(message: &str) -> Self {
+        let mut screen = Self::new();
+        screen.review = Some(TreeScreen::failed(message));
+        screen
+    }
+
+    pub fn take_action(&mut self) -> Option<Action> {
+        self.action.take()
+    }
+
+    pub fn review(&self) -> Option<&TreeScreen> {
+        self.review.as_ref()
     }
 }
 
@@ -82,11 +109,23 @@ pub fn frame_text(width: u16, height: u16) -> String {
 }
 
 pub fn launch() -> std::io::Result<()> {
-    let (columns, rows) = terminal_size();
-    run(Screen::new(), RunOptions::new(columns, rows).pixels(false))
+    launch_screen(Screen::new())
 }
 
-pub fn launch_with(worker: WorkerHandle) -> std::io::Result<()> {
+pub fn launch_with(report: &ScanReport) -> std::io::Result<()> {
+    launch_screen(Screen::with_report(report))
+}
+
+pub fn launch_failed(message: &str) -> std::io::Result<()> {
+    launch_screen(Screen::failed(message))
+}
+
+fn launch_screen(screen: Screen) -> std::io::Result<()> {
+    let (columns, rows) = terminal_size();
+    run(screen, RunOptions::new(columns, rows).pixels(false))
+}
+
+pub fn launch_worker(worker: WorkerHandle) -> std::io::Result<()> {
     worker.arm_terminal()?;
     let (columns, rows) = terminal_size();
     run(
@@ -157,15 +196,21 @@ impl Screen {
         self.phase = match note {
             Note::Scanning => Phase::Scanning,
             Note::Ready(report) => {
+                self.review = Some(TreeScreen::new(&report));
                 self.report = Some(report);
                 Phase::Idle
             }
-            Note::Failed(_) => Phase::Failed,
+            Note::Failed(message) => {
+                self.review = Some(TreeScreen::failed(&message));
+                Phase::Failed
+            }
         };
         if !matches!(self.phase, Phase::Scanning) {
             self.spin = 0;
         }
-        self.refresh_tree();
+        if matches!(self.phase, Phase::Scanning) {
+            self.refresh_tree();
+        }
     }
 
     fn kick_scan(&mut self) {
@@ -214,6 +259,21 @@ impl App for Screen {
 
     fn update(&mut self, event: &Event) -> ControlFlow {
         self.apply_notes();
+        if !matches!(self.phase, Phase::Scanning) && self.review.is_some() {
+            let action = self.review.as_mut().and_then(|review| review.handle(event));
+            return match action {
+                Some(Action::Quit) => ControlFlow::Break,
+                Some(Action::Rescan) => {
+                    self.request_rescan();
+                    ControlFlow::Continue
+                }
+                Some(other) => {
+                    self.action = Some(other);
+                    ControlFlow::Continue
+                }
+                None => ControlFlow::Continue,
+            };
+        }
         if let Event::Mouse(mouse) = event {
             if mouse_quits(self.columns, self.rows, mouse) {
                 return ControlFlow::Break;
@@ -235,6 +295,9 @@ impl App for Screen {
         if matches!(self.phase, Phase::Scanning) {
             self.spin = self.spin.wrapping_add(1);
             self.refresh_tree();
+        } else if let Some(review) = self.review.as_mut() {
+            review.render(grid, area, clusters);
+            return;
         }
         self.columns = area.width;
         self.rows = area.height;
@@ -569,7 +632,7 @@ mod tests {
                 }
             }
         });
-        let _ = launch_with(worker);
+        let _ = launch_worker(worker);
     }
 
     fn host_parent() {
@@ -638,7 +701,7 @@ mod tests {
         let ready = wait_text(&captured, &text_rx, "report-one", Duration::from_secs(5));
         parent_trigger.write_all(b"C").unwrap();
         parent_trigger.flush().unwrap();
-        let failed = wait_text(&captured, &text_rx, "scan failed", Duration::from_secs(5));
+        let failed = wait_text(&captured, &text_rx, "unavailable", Duration::from_secs(5));
         let _ = master_write.write_all(b"q");
         let _ = master_write.flush();
         let (done_tx, done_rx) = mpsc::channel();
