@@ -9,6 +9,13 @@ use sha2::{Digest, Sha256};
 
 use drift_core::{Action, Plan, PlannedFile};
 
+mod undo;
+
+pub use undo::{
+    history, inspect_undo, undo, Divergence, History, UndoItem, UndoOutcome, UndoRequest,
+    UndoStatus,
+};
+
 const KEPT_TRANSACTIONS: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,61 +83,71 @@ pub struct Request<'a> {
 
 pub fn apply(roots: &Roots, request: &Request<'_>) -> Result<ApplyReport, ApplyError> {
     if node_exists(&roots.omarchy_lock) {
-        return Err(refused(request, "omarchy update lock is held"));
+        return Err(refused(request.plan, "omarchy update lock is held"));
     }
     if node_exists(&roots.pacman_lock) {
-        return Err(refused(request, "pacman database lock is held"));
+        return Err(refused(request.plan, "pacman database lock is held"));
     }
     let _lock = match DriftLock::take(&roots.state) {
         Ok(lock) => lock,
-        Err(error) => return Err(refused(request, error.message)),
+        Err(error) => return Err(refused(request.plan, error.message)),
     };
     preflight(roots, request)?;
     let expected = transactions_to_prune(&roots.state)?;
     if !same_ids(request.plan.prune(), &expected) {
         return Err(refused(
-            request,
+            request.plan,
             "prune list does not match the transactions that would be removed",
         ));
     }
     reserve_transaction(&roots.state, request.plan.id())
-        .map_err(|error| refused(request, error.message))?;
-    write_pending(&roots.state, request.plan).map_err(|error| refused(request, error.message))?;
+        .map_err(|error| refused(request.plan, error.message))?;
+    write_pending(&roots.state, request.plan)
+        .map_err(|error| refused(request.plan, error.message))?;
 
     let mut applied = Vec::new();
     for (index, planned) in request.plan.files().iter().enumerate() {
         let payload = payload_for(request, planned.path().as_str())?;
         match write_file(roots, request, index, planned, payload) {
             Ok(()) => applied.push(planned.path().as_str().to_string()),
-            Err(error) => return Err(abort_written(roots, request, &applied, index, error)),
+            Err(error) => return Err(abort_written(roots, request.plan, &applied, index, error)),
         }
     }
 
-    if request.fail_at == Some(FailAt::Manifest) {
+    finish(roots, request.plan, applied, request.fail_at)
+}
+
+fn finish(
+    roots: &Roots,
+    plan: &Plan,
+    applied: Vec<String>,
+    fail_at: Option<FailAt>,
+) -> Result<ApplyReport, ApplyError> {
+    if fail_at == Some(FailAt::Manifest) {
         return Err(manifest_failure(
             roots,
-            request,
+            plan,
             &applied,
             "injected failure during manifest",
         ));
     }
-    if let Err(error) = write_manifest(&roots.state, request.plan) {
+    if let Err(error) = write_manifest(&roots.state, plan) {
         return Err(manifest_failure(
             roots,
-            request,
+            plan,
             &applied,
             error.message.as_str(),
         ));
     }
-    remove_pending(&roots.state, request.plan.id());
-    if request.fail_at == Some(FailAt::Prune) {
+    remove_pending(&roots.state, plan.id());
+    if fail_at == Some(FailAt::Prune) {
         return Err(ApplyError {
             message: "injected failure during prune".to_string(),
             applied,
             unapplied: Vec::new(),
         });
     }
-    let pruned = remove_transactions(&roots.state, request.plan.prune())?;
+    let pruned = remove_transactions(&roots.state, plan.prune())?;
     Ok(ApplyReport { applied, pruned })
 }
 
@@ -181,41 +198,65 @@ fn write_file(
     if planned.action() == Action::KeepMine {
         return Ok(());
     }
-    if fails(request, index, FileStep::Backup) {
+    if fails(request.fail_at, index, FileStep::Backup) {
         return Err(injected(FileStep::Backup));
     }
     if node_exists(&dest) {
         backup_original(roots, request.plan.id(), planned, &dest)?;
     }
-    if fails(request, index, FileStep::Temp) {
+    install(&Install {
+        live: &roots.live,
+        dest: &dest,
+        id: request.plan.id(),
+        index,
+        fail_at: request.fail_at,
+        bytes: payload.bytes,
+        mode: planned
+            .mode()
+            .unwrap_or(existing_mode(&dest).unwrap_or(0o644)),
+        allow_symlink: payload.allow_symlink,
+    })
+}
+
+struct Install<'a> {
+    live: &'a Path,
+    dest: &'a Path,
+    id: &'a str,
+    index: usize,
+    fail_at: Option<FailAt>,
+    bytes: &'a [u8],
+    mode: u32,
+    allow_symlink: bool,
+}
+
+fn install(job: &Install<'_>) -> Result<(), FileFailure> {
+    let (index, dest) = (job.index, job.dest);
+    if fails(job.fail_at, index, FileStep::Temp) {
         return Err(injected(FileStep::Temp));
     }
     let parent = dest.parent().ok_or_else(|| FileFailure {
         message: format!("path is outside the tree {}", dest.display()),
         reason: "path is outside the tree".to_string(),
     })?;
-    ensure_real_dir(&roots.live, parent).map_err(file_failure)?;
-    if is_symlink(&dest).map_err(file_failure)? && !payload.allow_symlink {
+    ensure_real_dir(job.live, parent).map_err(file_failure)?;
+    if is_symlink(dest).map_err(file_failure)? && !job.allow_symlink {
         return Err(FileFailure {
             message: format!("refusing to follow a symlink {}", dest.display()),
             reason: "refusing to follow a symlink".to_string(),
         });
     }
-    let mode = planned
-        .mode()
-        .unwrap_or(existing_mode(&dest).unwrap_or(0o644));
-    let temp_path = parent.join(format!(".drift-{}-{index}.tmp", request.plan.id()));
+    let temp_path = parent.join(format!(".drift-{}-{index}.tmp", job.id));
     let mut temp = TempFile::create(&temp_path).map_err(file_failure)?;
-    temp.write_all(payload.bytes).map_err(file_failure)?;
-    set_mode(temp.path(), mode).map_err(file_failure)?;
-    if fails(request, index, FileStep::Sync) {
+    temp.write_all(job.bytes).map_err(file_failure)?;
+    set_mode(temp.path(), job.mode).map_err(file_failure)?;
+    if fails(job.fail_at, index, FileStep::Sync) {
         return Err(injected(FileStep::Sync));
     }
     temp.sync().map_err(file_failure)?;
-    if fails(request, index, FileStep::Rename) {
+    if fails(job.fail_at, index, FileStep::Rename) {
         return Err(injected(FileStep::Rename));
     }
-    fs::rename(temp.path(), &dest).map_err(|source| file_failure(bare_io(&dest, source)))?;
+    fs::rename(temp.path(), dest).map_err(|source| file_failure(bare_io(dest, source)))?;
     temp.forget();
     if let Some(parent) = dest.parent() {
         if let Ok(dir) = File::open(parent) {
@@ -242,7 +283,9 @@ fn backup_original(
         let target = fs::read_link(source).map_err(|error| file_failure(bare_io(source, error)))?;
         write_bytes(&roots.state, &dest, target.as_os_str().as_bytes(), 0o644)
             .map_err(file_failure)?;
-        return record_symlink(&roots.state, txn, planned.path().as_str()).map_err(file_failure);
+        let digest = sha256_hex(target.as_os_str().as_bytes());
+        return record_symlink(&roots.state, txn, planned.path().as_str(), &digest)
+            .map_err(file_failure);
     }
     let bytes = read_original(source)?;
     let mode = existing_mode(source).unwrap_or(0o644);
@@ -283,15 +326,10 @@ fn reserve_transaction(state: &Path, id: &str) -> Result<(), ApplyError> {
     }
 }
 
-fn manifest_failure(
-    roots: &Roots,
-    request: &Request<'_>,
-    applied: &[String],
-    message: &str,
-) -> ApplyError {
-    let still = restore_live(roots, request.plan, applied);
+fn manifest_failure(roots: &Roots, plan: &Plan, applied: &[String], message: &str) -> ApplyError {
+    let still = restore_live(roots, plan, applied);
     let mut unapplied = Vec::new();
-    for file in request.plan.files() {
+    for file in plan.files() {
         let path = file.path().as_str();
         if still.iter().any(|kept| kept == path) {
             continue;
@@ -356,7 +394,7 @@ fn restore_backup(
     dest: &Path,
     backup: &Path,
 ) -> Result<(), ApplyError> {
-    if recorded_symlink(state, txn, rel)? {
+    if recorded_symlink(state, txn, rel)?.is_some() {
         return restore_symlink(anchor, dest, backup);
     }
     let bytes = read_original(backup).map_err(|error| bare(error.message))?;
@@ -397,20 +435,34 @@ fn load_nodes(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>,
     }
 }
 
-fn record_symlink(state: &Path, txn: &str, rel: &str) -> Result<(), ApplyError> {
+fn record_symlink(state: &Path, txn: &str, rel: &str, digest: &str) -> Result<(), ApplyError> {
     let path = nodes_path(state, txn);
     let mut nodes = load_nodes(&path)?;
     nodes.insert(
         rel.to_string(),
-        serde_json::Value::String("symlink".to_string()),
+        serde_json::json!({"kind": "symlink", "sha256": digest}),
     );
     let bytes = serde_json::to_vec(&nodes).map_err(|error| bare(error.to_string()))?;
     write_bytes(state, &path, &bytes, 0o644)
 }
 
-fn recorded_symlink(state: &Path, txn: &str, rel: &str) -> Result<bool, ApplyError> {
+fn recorded_symlink(state: &Path, txn: &str, rel: &str) -> Result<Option<String>, ApplyError> {
     let nodes = load_nodes(&nodes_path(state, txn))?;
-    Ok(nodes.get(rel).and_then(serde_json::Value::as_str) == Some("symlink"))
+    let Some(node) = nodes.get(rel) else {
+        return Ok(None);
+    };
+    if node.as_str() == Some("symlink") {
+        return Ok(Some(String::new()));
+    }
+    let is_link = node.get("kind").and_then(serde_json::Value::as_str) == Some("symlink");
+    if !is_link {
+        return Ok(None);
+    }
+    let digest = node
+        .get("sha256")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    Ok(Some(digest.to_string()))
 }
 
 fn write_pending(state: &Path, plan: &Plan) -> Result<(), ApplyError> {
@@ -478,23 +530,23 @@ fn preflight(roots: &Roots, request: &Request<'_>) -> Result<(), ApplyError> {
         let path = planned.path().as_str();
         let payload = payload_for(request, path)?;
         if payload.volatile && !payload.allow_volatile {
-            return Err(refused(request, "refusing to write a volatile file"));
+            return Err(refused(request.plan, "refusing to write a volatile file"));
         }
         if let Some(expected) = planned.sha256_after() {
             if sha256_hex(payload.bytes) != expected {
                 return Err(refused(
-                    request,
+                    request.plan,
                     format!("SHA-256 digest does not match {path}"),
                 ));
             }
         }
         let dest = roots.live.join(path);
         if !dest.starts_with(&roots.live) {
-            return Err(refused(request, "path is outside the tree"));
+            return Err(refused(request.plan, "path is outside the tree"));
         }
         refuse_linked_ancestors(&roots.live, &dest)?;
         if is_symlink(&dest)? && !payload.allow_symlink {
-            return Err(refused(request, "refusing to follow a symlink"));
+            return Err(refused(request.plan, "refusing to follow a symlink"));
         }
         if planned.action() != Action::KeepMine
             && collides_with_metadata(
@@ -503,7 +555,7 @@ fn preflight(roots: &Roots, request: &Request<'_>) -> Result<(), ApplyError> {
             )
         {
             return Err(refused(
-                request,
+                request.plan,
                 "backup path collides with transaction metadata",
             ));
         }
@@ -627,8 +679,8 @@ fn payload_for<'a>(request: &'a Request<'_>, path: &str) -> Result<&'a Payload<'
         .ok_or_else(|| bare(format!("missing bytes for {path}")))
 }
 
-fn fails(request: &Request<'_>, index: usize, step: FileStep) -> bool {
-    request.fail_at == Some(FailAt::File { index, step })
+fn fails(fail_at: Option<FailAt>, index: usize, step: FileStep) -> bool {
+    fail_at == Some(FailAt::File { index, step })
 }
 
 fn injected(step: FileStep) -> FileFailure {
@@ -646,14 +698,14 @@ fn injected(step: FileStep) -> FileFailure {
 
 fn abort_written(
     roots: &Roots,
-    request: &Request<'_>,
+    plan: &Plan,
     applied: &[String],
     index: usize,
     error: FileFailure,
 ) -> ApplyError {
-    let still = restore_live(roots, request.plan, applied);
+    let still = restore_live(roots, plan, applied);
     let mut unapplied = Vec::new();
-    for (file_index, file) in request.plan.files().iter().enumerate() {
+    for (file_index, file) in plan.files().iter().enumerate() {
         let path = file.path().as_str();
         if still.iter().any(|kept| kept == path) {
             continue;
@@ -677,12 +729,11 @@ fn abort_written(
     }
 }
 
-fn refused(request: &Request<'_>, message: impl Into<String>) -> ApplyError {
+fn refused(plan: &Plan, message: impl Into<String>) -> ApplyError {
     let message = message.into();
     ApplyError {
         applied: Vec::new(),
-        unapplied: request
-            .plan
+        unapplied: plan
             .files()
             .iter()
             .map(|file| Unapplied {

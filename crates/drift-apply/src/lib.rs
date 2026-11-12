@@ -2,7 +2,8 @@ mod apply;
 mod seed;
 
 pub use apply::{
-    apply, ApplyError, ApplyReport, FailAt, FileStep, Payload, Request, Roots, Unapplied,
+    apply, history, inspect_undo, undo, ApplyError, ApplyReport, Divergence, FailAt, FileStep,
+    History, Payload, Request, Roots, Unapplied, UndoItem, UndoOutcome, UndoRequest, UndoStatus,
 };
 pub use seed::{scan, Scan, StoreRoots};
 
