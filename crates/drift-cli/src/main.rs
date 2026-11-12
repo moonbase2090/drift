@@ -1,5 +1,6 @@
 mod environment;
 mod scan;
+mod watch;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -131,6 +132,26 @@ fn number(value: Option<&str>, flag: &str) -> Result<u16, String> {
     Ok(parsed)
 }
 
+fn open_review() -> std::io::Result<()> {
+    if !std::io::stdout().is_terminal() {
+        return drift_tui::launch();
+    }
+    let paths = scan::paths_from_env();
+    let Ok(registry) = scan::load_registry(&paths) else {
+        return drift_tui::launch();
+    };
+    let watched = watch::dirs(
+        &registry,
+        &paths.source.home,
+        &paths.source.package.omarchy_path,
+    );
+    let worker = drift_tui::spawn_scan(move || scan::scan_report(&paths, &registry));
+    let watcher = watch::arm(&watched, worker.changes());
+    let result = drift_tui::launch_with(worker);
+    drop(watcher);
+    result
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     execute(run(&args))
@@ -163,7 +184,7 @@ fn execute(action: Result<Action, String>) -> ExitCode {
                 }
             }
         }
-        Ok(Action::Launch) => match drift_tui::launch() {
+        Ok(Action::Launch) => match open_review() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("drift: {error}");

@@ -1,6 +1,8 @@
 mod screen;
+mod worker;
 
-pub use screen::{frame_text, keymap, launch, quit_bounds, render_frame, Screen};
+pub use screen::{frame_text, keymap, launch, launch_with, quit_bounds, render_frame, Screen};
+pub use worker::{spawn_scan, ChangeSink, WorkerHandle};
 
 pub fn crate_name() -> &'static str {
     env!("CARGO_PKG_NAME")

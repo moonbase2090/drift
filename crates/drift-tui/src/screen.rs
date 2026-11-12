@@ -3,15 +3,29 @@ use lunatui_core::{clip_display_prefix, width, ClusterTable, Grid, Rect, Style};
 use lunatui_runtime::keymap::{Command, KeyChord, Keymap};
 use lunatui_term::{Event, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind};
 use lunatui_theme::{Theme, Token, Variant};
-use lunatui_widgets::{KeyHintBar, RenderCx, Tree, TreeState, Widget};
+use lunatui_widgets::{KeyHintBar, RenderCx, Tree, TreeItem, TreeState, Widget};
+
+use crate::worker::{Note, WorkerHandle};
 
 const QUIT: &str = "app.quit";
+const RESCAN: &str = "app.rescan";
+const SPIN: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+enum Phase {
+    Idle,
+    Scanning,
+    Failed,
+}
 
 pub struct Screen {
     keymap: Keymap,
     tree: TreeState,
     columns: u16,
     rows: u16,
+    phase: Phase,
+    spin: usize,
+    kick: bool,
+    worker: Option<WorkerHandle>,
 }
 
 impl Screen {
@@ -21,6 +35,18 @@ impl Screen {
             tree: TreeState::new(Vec::new()),
             columns: 0,
             rows: 0,
+            phase: Phase::Idle,
+            spin: 0,
+            kick: false,
+            worker: None,
+        }
+    }
+
+    pub(crate) fn attached(worker: WorkerHandle) -> Self {
+        Self {
+            kick: true,
+            worker: Some(worker),
+            ..Self::new()
         }
     }
 }
@@ -34,10 +60,12 @@ impl Default for Screen {
 pub fn keymap() -> Keymap {
     let mut map = Keymap::new();
     map.register(Command::new(QUIT, "Quit", QUIT_CHORDS));
+    map.register(Command::new(RESCAN, "Rescan", RESCAN_CHORDS));
     map
 }
 
 const QUIT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('q'), Modifiers::new())];
+const RESCAN_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('r'), Modifiers::new())];
 
 pub fn render_frame(width: u16, height: u16) -> (Grid, ClusterTable) {
     let mut screen = Screen::new();
@@ -52,6 +80,14 @@ pub fn frame_text(width: u16, height: u16) -> String {
 pub fn launch() -> std::io::Result<()> {
     let (columns, rows) = terminal_size();
     run(Screen::new(), RunOptions::new(columns, rows).pixels(false))
+}
+
+pub fn launch_with(worker: WorkerHandle) -> std::io::Result<()> {
+    let (columns, rows) = terminal_size();
+    run(
+        Screen::attached(worker),
+        RunOptions::new(columns, rows).pixels(false),
+    )
 }
 
 pub fn quit_bounds(columns: u16, rows: u16) -> Option<Rect> {
@@ -101,8 +137,62 @@ fn contains(area: Rect, column: u16, row: u16) -> bool {
         && row < area.y.saturating_add(area.height)
 }
 
+impl Screen {
+    fn apply_notes(&mut self) {
+        while let Some(note) = self.worker.as_ref().and_then(WorkerHandle::try_recv) {
+            self.apply_note(note);
+        }
+    }
+
+    fn apply_note(&mut self, note: Note) {
+        self.phase = match note {
+            Note::Scanning => Phase::Scanning,
+            Note::Ready => Phase::Idle,
+            Note::Failed(_) => Phase::Failed,
+        };
+        if !matches!(self.phase, Phase::Scanning) {
+            self.spin = 0;
+        }
+        self.refresh_tree();
+    }
+
+    fn kick_scan(&mut self) {
+        if !self.kick {
+            return;
+        }
+        self.kick = false;
+        self.request_rescan();
+    }
+
+    fn request_rescan(&mut self) {
+        let Some(worker) = &self.worker else {
+            return;
+        };
+        worker.rescan();
+        self.phase = Phase::Scanning;
+        self.refresh_tree();
+    }
+
+    fn refresh_tree(&mut self) {
+        let items = match self.phase {
+            Phase::Idle => Vec::new(),
+            Phase::Scanning => {
+                let glyph = SPIN[self.spin % SPIN.len()];
+                vec![TreeItem::leaf(format!("{glyph} scanning")).disabled()]
+            }
+            Phase::Failed => vec![TreeItem::leaf("scan failed").disabled()],
+        };
+        self.tree = TreeState::new(items);
+    }
+}
+
 impl App for Screen {
+    fn needs_animation_frames(&self) -> bool {
+        matches!(self.phase, Phase::Scanning)
+    }
+
     fn update(&mut self, event: &Event) -> ControlFlow {
+        self.apply_notes();
         if let Event::Mouse(mouse) = event {
             if mouse_quits(self.columns, self.rows, mouse) {
                 return ControlFlow::Break;
@@ -110,11 +200,21 @@ impl App for Screen {
         }
         match self.keymap.dispatch(event) {
             Some(QUIT) => ControlFlow::Break,
+            Some(RESCAN) => {
+                self.request_rescan();
+                ControlFlow::Continue
+            }
             _ => ControlFlow::Continue,
         }
     }
 
     fn render(&mut self, grid: &mut Grid, area: Rect, clusters: &mut ClusterTable) {
+        self.apply_notes();
+        self.kick_scan();
+        if matches!(self.phase, Phase::Scanning) {
+            self.spin = self.spin.wrapping_add(1);
+            self.refresh_tree();
+        }
         self.columns = area.width;
         self.rows = area.height;
         let theme = Theme::builtin(Variant::Dark);
@@ -156,6 +256,7 @@ mod tests {
     use lunatui_test::styled_snapshot;
 
     use super::*;
+    use crate::worker::Note;
 
     const SIZES: [(u16, u16, &str); 3] =
         [(80, 24, "80x24"), (120, 36, "120x36"), (200, 60, "200x60")];
@@ -171,6 +272,10 @@ mod tests {
             assert!(lines[0].contains("Drift"), "{label}");
             assert!(lines[1].trim().is_empty(), "{label}");
             assert!(lines[usize::from(rows) - 1].contains("[Q] Quit"), "{label}");
+            assert!(
+                lines[usize::from(rows) - 1].contains("[R] Rescan"),
+                "{label}"
+            );
             let expected = match label {
                 "80x24" => include_str!("../snapshots/empty-80x24.txt"),
                 "120x36" => include_str!("../snapshots/empty-120x36.txt"),
@@ -225,5 +330,100 @@ mod tests {
                 samples.len()
             );
         }
+    }
+
+    #[test]
+    fn rescan_without_a_worker_leaves_the_empty_screen() {
+        let mut screen = Screen::new();
+        let key = Event::Key(KeyEvent::press(KeyCode::Char('r')));
+        assert_eq!(screen.update(&key), ControlFlow::Continue);
+        assert!(!screen.needs_animation_frames());
+        let text = frame_text(80, 24);
+        assert!(!text.contains("scanning"));
+        assert!(!text.contains("scan failed"));
+    }
+
+    struct Unlock(Option<std::sync::mpsc::Sender<()>>);
+
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    #[test]
+    fn a_delayed_scan_keeps_the_screen_responsive() {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let unlock = Unlock(Some(release_tx));
+        let worker = crate::worker::WorkerHandle::start(
+            move || {
+                let _ = entered_tx.send(Duration::from_secs(2));
+                let _ = release_rx.recv();
+                Ok(())
+            },
+            Duration::ZERO,
+        );
+        let mut screen = Screen::attached(worker);
+        let started = Instant::now();
+        let (grid, clusters) = render_once(&mut screen, 80, 24);
+        let text = grid.display_text(&clusters);
+        assert!(text.contains("scanning"), "{text}");
+        let key = Event::Key(KeyEvent::press(KeyCode::Char('q')));
+        assert_eq!(screen.update(&key), ControlFlow::Break);
+        assert!(screen.needs_animation_frames());
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(entered_rx.recv().unwrap(), Duration::from_secs(2));
+        drop(unlock);
+        drop(screen);
+    }
+
+    #[test]
+    fn notes_clear_a_finished_scan_and_show_a_failure() {
+        let worker = crate::worker::WorkerHandle::start(|| Ok(()), Duration::ZERO);
+        let mut screen = Screen::attached(worker);
+        screen.kick = false;
+        screen.apply_note(Note::Ready);
+        assert!(!screen.needs_animation_frames());
+        let (grid, clusters) = render_once(&mut screen, 80, 24);
+        let idle = grid.display_text(&clusters);
+        assert!(!idle.contains("scanning"), "{idle}");
+        screen.apply_note(Note::Failed("unavailable".to_string()));
+        let (grid, clusters) = render_once(&mut screen, 80, 24);
+        let failed = grid.display_text(&clusters);
+        assert!(failed.contains("scan failed"), "{failed}");
+        assert!(!screen.needs_animation_frames());
+    }
+
+    #[test]
+    fn rescan_marks_scanning_without_waiting_for_the_worker() {
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let unlock = Unlock(Some(release_tx));
+        let worker = crate::worker::WorkerHandle::start(
+            move || {
+                let _ = release_rx.recv();
+                Ok(())
+            },
+            Duration::from_millis(200),
+        );
+        let mut screen = Screen::attached(worker);
+        screen.kick = false;
+        screen.apply_note(Note::Ready);
+        let started = Instant::now();
+        let key = Event::Key(KeyEvent::press(KeyCode::Char('r')));
+        assert_eq!(screen.update(&key), ControlFlow::Continue);
+        assert!(screen.needs_animation_frames());
+        let (grid, clusters) = render_once(&mut screen, 80, 24);
+        let text = grid.display_text(&clusters);
+        assert!(text.contains("scanning"), "{text}");
+        assert!(started.elapsed() < Duration::from_millis(200));
+        drop(unlock);
+        drop(screen);
     }
 }
