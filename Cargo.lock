@@ -255,6 +255,7 @@ dependencies = [
  "lunatui-widgets",
  "sha2",
  "terminal_size",
+ "unicode-width",
 ]
 
 [[package]]

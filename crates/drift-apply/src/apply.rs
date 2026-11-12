@@ -9,8 +9,14 @@ use sha2::{Digest, Sha256};
 
 use drift_core::{Action, Plan, PlannedFile};
 
+mod hypr;
 mod integrate;
 mod undo;
+
+pub use hypr::{
+    apply_checked, touches_hypr_config, CheckedApply, Hyprctl, HyprlandCheck, HyprlandStatus,
+    WriteFollowup,
+};
 
 pub use integrate::{integrate, IntegrateMode, IntegrateOutcome};
 

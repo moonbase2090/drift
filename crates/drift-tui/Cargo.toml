@@ -19,6 +19,7 @@ lunatui-theme.workspace = true
 lunatui-widgets.workspace = true
 terminal_size.workspace = true
 libc.workspace = true
+unicode-width = "0.2.3"
 
 [dev-dependencies]
 lunatui-test.workspace = true
