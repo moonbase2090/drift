@@ -297,4 +297,18 @@ mod tests {
             ExitCode::from(2)
         );
     }
+    #[test]
+    fn diff_usage_errors_start_with_the_command_prefix() {
+        for values in [
+            vec!["diff"],
+            vec!["diff", ".config/a", ".config/b"],
+            vec!["diff", ".config/a", "--unknown"],
+        ] {
+            let error = match run(&args(&values)) {
+                Err(error) => error,
+                Ok(_) => panic!("expected a usage error for {values:?}"),
+            };
+            assert!(error.starts_with("drift: "), "{values:?}: {error}");
+        }
+    }
 }
