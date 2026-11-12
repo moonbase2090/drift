@@ -14,20 +14,28 @@ pub fn drift_state(state_home: &Path) -> PathBuf {
     state_home.join("drift")
 }
 
-pub fn base_path(share: &Path, rel: &RelPath) -> PathBuf {
-    rel.under(&share.join(BASES))
+pub fn base_path(share: &Path, root: &str, rel: &RelPath) -> Option<PathBuf> {
+    if !root_segment(root) {
+        return None;
+    }
+    let dest = rel.under(&share.join(BASES).join(root));
+    dest.starts_with(share.join(BASES)).then_some(dest)
 }
 
 pub fn reviewed_version_path(state: &Path) -> PathBuf {
     state.join(REVIEWED_VERSION)
 }
 
-pub fn read_base(share: &Path, rel: &RelPath) -> Option<Vec<u8>> {
-    let path = base_path(share, rel);
+pub fn read_base(share: &Path, root: &str, rel: &RelPath) -> Option<Vec<u8>> {
+    let path = base_path(share, root, rel)?;
     if !is_regular_file(&path) {
         return None;
     }
     fs::read(path).ok()
+}
+
+fn root_segment(root: &str) -> bool {
+    !root.is_empty() && !root.contains('/') && !root.contains('\0') && root != "." && root != ".."
 }
 
 pub fn read_reviewed_version(state: &Path) -> Option<String> {

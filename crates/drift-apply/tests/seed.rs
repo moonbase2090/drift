@@ -3,9 +3,9 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 
 use drift_apply::{scan, StoreRoots};
-use drift_core::Registry;
+use drift_core::{Origin, Registry, RelPath, Root};
 use drift_fixtures::{hash_tree, RootBuilder};
-use drift_source::{ReadPaths, SourcePaths};
+use drift_source::{read_base, ReadPaths, SourcePaths};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
@@ -149,10 +149,13 @@ fn the_first_scan_seeds_matching_templates_and_the_second_writes_nothing() {
     assert_eq!(first.reviewed_version.as_deref(), Some(VERSION));
     assert_eq!(
         first.seeded,
-        vec!["hypr/same.lua".to_string(), "hypr/skel.lua".to_string()]
+        vec![
+            "config/hypr/same.lua".to_string(),
+            "config/hypr/skel.lua".to_string(),
+        ]
     );
-    let same = built.root.path().join("share/bases/hypr/same.lua");
-    let skel = built.root.path().join("share/bases/hypr/skel.lua");
+    let same = built.root.path().join("share/bases/config/hypr/same.lua");
+    let skel = built.root.path().join("share/bases/config/hypr/skel.lua");
     assert_eq!(fs::read(&same).unwrap(), MARKER);
     assert_eq!(fs::read(&skel).unwrap(), MARKER);
     assert_eq!(mode_of(&same), 0o644);
@@ -161,7 +164,7 @@ fn the_first_scan_seeds_matching_templates_and_the_second_writes_nothing() {
         assert!(!built
             .root
             .path()
-            .join("share/bases/hypr")
+            .join("share/bases/config/hypr")
             .join(name)
             .exists());
     }
@@ -210,7 +213,73 @@ fn a_read_only_state_directory_still_scans_and_seeds_nothing() {
         .is_some_and(|template| { template.mapping().rel.as_str() == "hypr/same.lua" })));
     assert_eq!(report.reviewed_version, None);
     assert!(report.seeded.is_empty());
-    assert!(!built.root.path().join("share/bases/hypr/same.lua").exists());
+    assert!(!built
+        .root
+        .path()
+        .join("share/bases/config/hypr/same.lua")
+        .exists());
     assert_eq!(hash_tree(&home).unwrap(), before);
     fs::set_permissions(&state, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn two_roots_with_the_same_relative_name_keep_separate_bases() {
+    let config_pkg = "usr/share/omarchy/config/shared.txt";
+    let apps_pkg = "usr/share/omarchy/applications/shared.txt";
+    let dir = format!("var/lib/pacman/local/omarchy-settings-{VERSION}");
+    let built = Tree {
+        root: RootBuilder::new()
+            .file(format!("{dir}/desc"), desc(VERSION))
+            .unwrap()
+            .file(format!("{dir}/files"), file_list(&[config_pkg, apps_pkg]))
+            .unwrap()
+            .file(
+                format!("{dir}/mtree"),
+                mtree(&[(config_pkg, MARKER_SHA), (apps_pkg, OTHER_SHA)]),
+            )
+            .unwrap()
+            .file(config_pkg, MARKER)
+            .unwrap()
+            .file(apps_pkg, b"hi\n")
+            .unwrap()
+            .file("home/.config/shared.txt", MARKER)
+            .unwrap()
+            .file("home/.local/share/apps/shared.txt", b"hi\n")
+            .unwrap()
+            .materialize()
+            .unwrap(),
+    };
+    let registry = Registry::v1()
+        .with_roots(vec![Root::new(
+            "applications",
+            RelPath::new("applications").unwrap(),
+            RelPath::new(".local/share/apps").unwrap(),
+            Vec::new(),
+            Origin::User,
+        )
+        .unwrap()])
+        .unwrap();
+    let first = scan(&registry, &paths(&built), &roots(&built)).unwrap();
+    assert_eq!(
+        first.seeded,
+        vec![
+            "applications/shared.txt".to_string(),
+            "config/shared.txt".to_string(),
+        ]
+    );
+    let config_base = built.root.path().join("share/bases/config/shared.txt");
+    let apps_base = built
+        .root
+        .path()
+        .join("share/bases/applications/shared.txt");
+    assert_eq!(fs::read(&config_base).unwrap(), MARKER);
+    assert_eq!(fs::read(&apps_base).unwrap(), b"hi\n");
+    let share = built.root.path().join("share");
+    let rel = RelPath::new("shared.txt").unwrap();
+    assert_eq!(read_base(&share, "config", &rel).unwrap(), MARKER);
+    assert_eq!(read_base(&share, "applications", &rel).unwrap(), b"hi\n");
+    let second = scan(&registry, &paths(&built), &roots(&built)).unwrap();
+    assert!(second.seeded.is_empty());
+    assert_eq!(fs::read(&config_base).unwrap(), MARKER);
+    assert_eq!(fs::read(&apps_base).unwrap(), b"hi\n");
 }

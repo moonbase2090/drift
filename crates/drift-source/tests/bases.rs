@@ -12,9 +12,15 @@ fn a_base_path_sits_under_the_share_directory() {
     let rel = RelPath::new("hypr/a.lua").unwrap();
     assert_eq!(share, PathBuf::from("data/drift"));
     assert_eq!(
-        base_path(&share, &rel),
-        PathBuf::from("data/drift").join(BASES).join("hypr/a.lua")
+        base_path(&share, "config", &rel),
+        Some(
+            PathBuf::from("data/drift")
+                .join(BASES)
+                .join("config/hypr/a.lua")
+        )
     );
+    assert_eq!(base_path(&share, "..", &rel), None);
+    assert_eq!(base_path(&share, "config/nested", &rel), None);
     assert_eq!(
         drift_state(Path::new("state")),
         PathBuf::from("state/drift")
@@ -24,19 +30,23 @@ fn a_base_path_sits_under_the_share_directory() {
 #[test]
 fn read_base_returns_regular_bytes_and_ignores_a_link() {
     let tree = RootBuilder::new()
-        .file("share/bases/hypr/a.lua", b"x\n")
+        .file("share/bases/config/hypr/a.lua", b"x\n")
+        .unwrap()
+        .file("share/bases/applications/hypr/a.lua", b"hi\n")
         .unwrap()
         .file("secret", b"hidden\n")
         .unwrap()
-        .link("share/bases/hypr/link.lua", "../../../secret")
+        .link("share/bases/config/hypr/link.lua", "../../../../secret")
         .unwrap()
         .materialize()
         .unwrap();
     let share = tree.path().join("share");
     let rel = RelPath::new("hypr/a.lua").unwrap();
-    assert_eq!(read_base(&share, &rel).unwrap(), b"x\n");
+    assert_eq!(read_base(&share, "config", &rel).unwrap(), b"x\n");
+    assert_eq!(read_base(&share, "applications", &rel).unwrap(), b"hi\n");
     let link = RelPath::new("hypr/link.lua").unwrap();
-    assert_eq!(read_base(&share, &link), None);
+    assert_eq!(read_base(&share, "config", &link), None);
+    assert_eq!(read_base(&share, "../secret", &rel), None);
     assert_eq!(
         std::fs::read(tree.path().join("secret")).unwrap(),
         b"hidden\n"

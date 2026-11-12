@@ -77,12 +77,17 @@ fn seed(paths: &SourcePaths, roots: &StoreRoots, files: &[Tracked], version: &st
             complete = false;
             continue;
         };
-        let dest = base_path(&roots.share, &template.mapping().rel);
+        let root = template.mapping().root.as_str();
+        let rel = &template.mapping().rel;
+        let Some(dest) = base_path(&roots.share, root, rel) else {
+            complete = false;
+            continue;
+        };
         if write_bytes(&roots.share, &dest, &bytes).is_err() {
             complete = false;
             continue;
         }
-        seeded.push(template.mapping().rel.as_str().to_string());
+        seeded.push(format!("{root}/{}", rel.as_str()));
     }
     seeded.sort();
     if complete && write_version(&roots.state, version).is_ok() {
