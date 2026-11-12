@@ -1,7 +1,8 @@
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -94,21 +95,14 @@ pub fn apply(roots: &Roots, request: &Request<'_>) -> Result<ApplyReport, ApplyE
     }
     reserve_transaction(&roots.state, request.plan.id())
         .map_err(|error| refused(request, error.message))?;
+    write_pending(&roots.state, request.plan).map_err(|error| refused(request, error.message))?;
 
     let mut applied = Vec::new();
     for (index, planned) in request.plan.files().iter().enumerate() {
         let payload = payload_for(request, planned.path().as_str())?;
         match write_file(roots, request, index, planned, payload) {
             Ok(()) => applied.push(planned.path().as_str().to_string()),
-            Err(error) => {
-                return Err(stopped(
-                    error.message,
-                    applied,
-                    request.plan.files(),
-                    index,
-                    error.reason,
-                ));
-            }
+            Err(error) => return Err(abort_written(roots, request, &applied, index, error)),
         }
     }
 
@@ -128,6 +122,7 @@ pub fn apply(roots: &Roots, request: &Request<'_>) -> Result<ApplyReport, ApplyE
             error.message.as_str(),
         ));
     }
+    remove_pending(&roots.state, request.plan.id());
     if request.fail_at == Some(FailAt::Prune) {
         return Err(ApplyError {
             message: "injected failure during prune".to_string(),
@@ -243,6 +238,12 @@ fn backup_original(
             reason: "backup already exists".to_string(),
         });
     }
+    if is_symlink(source).map_err(file_failure)? {
+        let target = fs::read_link(source).map_err(|error| file_failure(bare_io(source, error)))?;
+        write_bytes(&roots.state, &dest, target.as_os_str().as_bytes(), 0o644)
+            .map_err(file_failure)?;
+        return record_symlink(&roots.state, txn, planned.path().as_str()).map_err(file_failure);
+    }
     let bytes = read_original(source)?;
     let mode = existing_mode(source).unwrap_or(0o644);
     write_bytes(&roots.state, &dest, &bytes, mode).map_err(file_failure)
@@ -313,46 +314,117 @@ fn manifest_failure(
 fn restore_live(roots: &Roots, plan: &Plan, applied: &[String]) -> Vec<String> {
     let mut still = Vec::new();
     for path in applied.iter().rev() {
-        let Some(planned) = plan
-            .files()
-            .iter()
-            .find(|file| file.path().as_str() == path)
-        else {
+        if !reverted(roots, plan, path) {
             still.push(path.clone());
-            continue;
-        };
-        if planned.action() == Action::KeepMine {
-            continue;
-        }
-        let dest = roots.live.join(path.as_str());
-        if planned.sha256_before().is_none() {
-            match fs::remove_file(&dest) {
-                Ok(()) => {}
-                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => still.push(path.clone()),
-            }
-            continue;
-        }
-        let backup = match backup_path(&roots.state, plan.id(), planned) {
-            Ok(path) => path,
-            Err(_) => {
-                still.push(path.clone());
-                continue;
-            }
-        };
-        match restore_backup(&roots.live, &dest, &backup) {
-            Ok(()) => {}
-            Err(_) => still.push(path.clone()),
         }
     }
     still.reverse();
     still
 }
 
-fn restore_backup(anchor: &Path, dest: &Path, backup: &Path) -> Result<(), ApplyError> {
+fn reverted(roots: &Roots, plan: &Plan, path: &str) -> bool {
+    let Some(planned) = plan
+        .files()
+        .iter()
+        .find(|file| file.path().as_str() == path)
+    else {
+        return false;
+    };
+    if planned.action() == Action::KeepMine {
+        return true;
+    }
+    let dest = roots.live.join(path);
+    let backup = match backup_path(&roots.state, plan.id(), planned) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    if node_exists(&backup) {
+        return restore_backup(&roots.live, &roots.state, plan.id(), path, &dest, &backup).is_ok();
+    }
+    if planned.sha256_before().is_some() {
+        return false;
+    }
+    match fs::remove_file(&dest) {
+        Ok(()) => true,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
+}
+
+fn restore_backup(
+    anchor: &Path,
+    state: &Path,
+    txn: &str,
+    rel: &str,
+    dest: &Path,
+    backup: &Path,
+) -> Result<(), ApplyError> {
+    if recorded_symlink(state, txn, rel)? {
+        return restore_symlink(anchor, dest, backup);
+    }
     let bytes = read_original(backup).map_err(|error| bare(error.message))?;
     let mode = existing_mode(backup).unwrap_or(0o644);
     write_bytes(anchor, dest, &bytes, mode)
+}
+
+fn restore_symlink(anchor: &Path, dest: &Path, backup: &Path) -> Result<(), ApplyError> {
+    let bytes = fs::read(backup).map_err(|source| bare_io(backup, source))?;
+    let parent = dest
+        .parent()
+        .ok_or_else(|| bare("path is outside the tree"))?;
+    ensure_real_dir(anchor, parent)?;
+    let temp = parent.join(".drift-restore.tmp");
+    if node_exists(&temp) {
+        fs::remove_file(&temp).map_err(|source| bare_io(&temp, source))?;
+    }
+    symlink(OsStr::from_bytes(&bytes), &temp).map_err(|source| bare_io(&temp, source))?;
+    if let Err(source) = fs::rename(&temp, dest) {
+        let _ = fs::remove_file(&temp);
+        return Err(bare_io(dest, source));
+    }
+    if let Ok(dir) = File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+fn nodes_path(state: &Path, txn: &str) -> PathBuf {
+    state.join("backups").join(txn).join("nodes.json")
+}
+
+fn load_nodes(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, ApplyError> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| bare(error.to_string())),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Map::new()),
+        Err(source) => Err(bare_io(path, source)),
+    }
+}
+
+fn record_symlink(state: &Path, txn: &str, rel: &str) -> Result<(), ApplyError> {
+    let path = nodes_path(state, txn);
+    let mut nodes = load_nodes(&path)?;
+    nodes.insert(
+        rel.to_string(),
+        serde_json::Value::String("symlink".to_string()),
+    );
+    let bytes = serde_json::to_vec(&nodes).map_err(|error| bare(error.to_string()))?;
+    write_bytes(state, &path, &bytes, 0o644)
+}
+
+fn recorded_symlink(state: &Path, txn: &str, rel: &str) -> Result<bool, ApplyError> {
+    let nodes = load_nodes(&nodes_path(state, txn))?;
+    Ok(nodes.get(rel).and_then(serde_json::Value::as_str) == Some("symlink"))
+}
+
+fn write_pending(state: &Path, plan: &Plan) -> Result<(), ApplyError> {
+    let dest = state.join("backups").join(plan.id()).join("pending.json");
+    let text = plan.to_json().map_err(|error| bare(error.to_string()))?;
+    write_bytes(state, &dest, text.as_bytes(), 0o644)
+}
+
+fn remove_pending(state: &Path, id: &str) {
+    let path = state.join("backups").join(id).join("pending.json");
+    let _ = fs::remove_file(path);
 }
 
 fn read_original(source: &Path) -> Result<Vec<u8>, FileFailure> {
@@ -551,26 +623,35 @@ fn injected(step: FileStep) -> FileFailure {
     }
 }
 
-fn stopped(
-    message: String,
-    applied: Vec<String>,
-    files: &[PlannedFile],
+fn abort_written(
+    roots: &Roots,
+    request: &Request<'_>,
+    applied: &[String],
     index: usize,
-    reason: String,
+    error: FileFailure,
 ) -> ApplyError {
-    let mut unapplied = vec![Unapplied {
-        path: files[index].path().as_str().to_string(),
-        reason,
-    }];
-    for file in files.iter().skip(index + 1) {
+    let still = restore_live(roots, request.plan, applied);
+    let mut unapplied = Vec::new();
+    for (file_index, file) in request.plan.files().iter().enumerate() {
+        let path = file.path().as_str();
+        if still.iter().any(|kept| kept == path) {
+            continue;
+        }
+        let reason = if file_index == index {
+            error.reason.clone()
+        } else if file_index < index {
+            "rolled back".to_string()
+        } else {
+            "not applied".to_string()
+        };
         unapplied.push(Unapplied {
-            path: file.path().as_str().to_string(),
-            reason: "not applied".to_string(),
+            path: path.to_string(),
+            reason,
         });
     }
     ApplyError {
-        message,
-        applied,
+        message: error.message,
+        applied: still,
         unapplied,
     }
 }

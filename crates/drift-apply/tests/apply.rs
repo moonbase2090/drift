@@ -1,4 +1,5 @@
 use std::fs::{self, File};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -139,22 +140,23 @@ fn a_file_is_backed_up_and_replaced_without_following_links() {
     assert!(manifest.contains(BEFORE));
     assert!(manifest.contains(AFTER));
     assert!(!fix.roots().state.join("lock").exists());
+    assert!(!fix.root.join("state/backups/txn-7/pending.json").exists());
     assert!(leftovers(&fix.roots().live).is_empty());
 }
 
 #[test]
-fn a_stale_hash_leaves_every_unwritten_file_unchanged() {
+fn a_later_failure_restores_files_already_replaced() {
     let fix = Fixture::new();
     let first = "config/hypr/monitors.lua";
     let second = "config/hypr/looknfeel.lua";
-    write_live(&fix.live(first), b"x\n", 0o644);
+    write_live(&fix.live(first), b"x\n", 0o640);
     write_live(&fix.live(second), b"x\n", 0o644);
     let plan = Plan::new(
         "txn-7",
         "2026-04-02T00:00:00Z",
         "4.5.0-3",
         vec![
-            planned(first, Some(BEFORE), Some(AFTER), Some(0o644), None),
+            planned(first, Some(BEFORE), Some(AFTER), Some(0o600), None),
             planned(second, Some(AFTER), Some(BEFORE), Some(0o644), None),
         ],
         &[],
@@ -171,11 +173,21 @@ fn a_stale_hash_leaves_every_unwritten_file_unchanged() {
     )
     .unwrap_err();
     assert!(error.message.contains("stale hash"), "{}", error.message);
-    assert_eq!(error.applied, [first]);
-    assert_eq!(error.unapplied[0].path, second);
-    assert!(error.unapplied[0].reason.contains("stale hash"));
-    assert_eq!(fs::read(fix.live(first)).unwrap(), b"hi\n");
+    assert!(error.applied.is_empty(), "{:?}", error.applied);
+    assert_eq!(error.unapplied.len(), 2);
+    assert_eq!(error.unapplied[0].path, first);
+    assert_eq!(error.unapplied[0].reason, "rolled back");
+    assert_eq!(error.unapplied[1].path, second);
+    assert!(error.unapplied[1].reason.contains("stale hash"));
+    assert_eq!(fs::read(fix.live(first)).unwrap(), b"x\n");
+    assert_eq!(mode_of(&fix.live(first)), 0o640);
     assert_eq!(fs::read(fix.live(second)).unwrap(), b"x\n");
+    let backup = fix.root.join("state/backups/txn-7").join(first);
+    assert_eq!(fs::read(&backup).unwrap(), b"x\n");
+    let pending = fs::read_to_string(fix.root.join("state/backups/txn-7/pending.json")).unwrap();
+    assert!(pending.contains(first));
+    assert!(pending.contains(second));
+    assert!(!fix.root.join("state/backups/txn-7/manifest.json").exists());
 }
 
 #[test]
@@ -409,6 +421,7 @@ fn a_manifest_failure_restores_the_original_and_reports_the_file() {
         .join("state/backups/txn-7/config/hypr/monitors.lua");
     assert_eq!(fs::read(backup).unwrap(), b"x\n");
     assert!(!fix.root.join("state/backups/txn-7/manifest.json").exists());
+    assert!(fix.root.join("state/backups/txn-7/pending.json").is_file());
 
     let created = Fixture::new();
     let plan = one_plan(planned(path, None, Some(AFTER), Some(0o644), None), &[]);
@@ -424,6 +437,49 @@ fn a_manifest_failure_restores_the_original_and_reports_the_file() {
     assert!(error.applied.is_empty());
     assert_eq!(error.unapplied[0].path, path);
     assert!(!created.live(path).exists());
+}
+
+#[test]
+fn a_manifest_failure_restores_an_overridden_symlink() {
+    let fix = Fixture::new();
+    let outside = fix.root.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("victim"), b"original").unwrap();
+    let path = "a";
+    symlink(outside.join("victim"), fix.live(path)).unwrap();
+    let plan = one_plan(planned(path, None, Some(AFTER), Some(0o644), None), &[]);
+    let files = [Payload {
+        allow_symlink: true,
+        ..payload(path, b"hi\n")
+    }];
+    let error = apply(
+        &fix.roots(),
+        &Request {
+            plan: &plan,
+            files: &files,
+            fail_at: Some(FailAt::Manifest),
+        },
+    )
+    .unwrap_err();
+    assert!(error.message.contains("manifest"), "{}", error.message);
+    assert!(error.applied.is_empty(), "{:?}", error.applied);
+    assert_eq!(error.unapplied[0].path, path);
+    let meta = fs::symlink_metadata(fix.live(path)).unwrap();
+    assert!(meta.file_type().is_symlink());
+    assert_eq!(
+        fs::read_link(fix.live(path)).unwrap(),
+        outside.join("victim")
+    );
+    assert_eq!(fs::read(outside.join("victim")).unwrap(), b"original");
+    let backup = fix.root.join("state/backups/txn-7/a");
+    assert!(!backup.symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(
+        fs::read(&backup).unwrap(),
+        outside.join("victim").as_os_str().as_bytes()
+    );
+    let nodes = fs::read_to_string(fix.root.join("state/backups/txn-7/nodes.json")).unwrap();
+    assert!(nodes.contains("symlink"), "{nodes}");
+    assert!(!fix.root.join("state/backups/txn-7/manifest.json").exists());
 }
 
 #[test]
