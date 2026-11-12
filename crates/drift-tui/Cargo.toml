@@ -25,6 +25,7 @@ unicode-width = "0.2.3"
 lunatui-test.workspace = true
 drift-fixtures.workspace = true
 sha2 = "0.10"
+rustix = { version = "1.1", default-features = false, features = ["time"] }
 
 [[test]]
 name = "editor_pty"

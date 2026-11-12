@@ -1,0 +1,36 @@
+ Drift  omarchy-settings 4.5.0-3  3 drifted  | update pending review: 4.4.0-1 -> 4.5.0-3                                
+ 1 ✓ unchanged 2  2 ↓ upstream changed 1  3 ≠ local override 2  4 ✗ conflict 1  5 + user-only 1  6 ? missing 1          
+ 8 of 8 files                                                                                                           
+> ▾ [ ] .config/  (8 files, 3 drifted)                                  | .config/                                      
+    ▾ [ ] btop/  (1 file, 1 drifted)                                    | ✓ unchanged 2                                 
+        [ ] ? missing           btop.conf                               | ↓ upstream changed 1                          
+    ▾ [ ] chromium/  (1 file, 0 drifted)                                | ≠ local override 2                            
+      ▾ [ ] Default/  (1 file, 0 drifted)                               | ✗ conflict 1                                  
+          [ ] ≠ local override    Preferences                           | + user-only 1                                 
+    ▾ [ ] hypr/  (3 files, 2 drifted)                                   | ? missing 1                                   
+        [ ] ✓ unchanged         input.lua                               |                                               
+        [ ] ↓ upstream changed  looknfeel.lua  [merges cleanly]         |                                               
+        [ ] ✗ conflict          monitors.lua                            |                                               
+    ▾ [ ] waybar/  (2 files, 0 drifted)                                 |                                               
+        [ ] ✓ unchanged         config.jsonc                            |                                               
+        [ ] ≠ local override    style.css  [base unknown]               |                                               
+      [ ] + user-only         alacritty.toml                            |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+[Q] Quit  [/] Search  [1-6] Filter  [0] Clear  [Space] Mark  [Enter] Open  [o] Keep  [t] Take  [m] Merge  [r] Rescan    
