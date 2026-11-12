@@ -35,7 +35,11 @@ enum Action {
 
 fn run(args: &[String]) -> Result<Action, String> {
     match args.first().map(String::as_str) {
-        Some("diff") => return diff::parse(&args[1..]).map(Action::Diff),
+        Some("diff") => {
+            return diff::parse(&args[1..])
+                .map(Action::Diff)
+                .map_err(|error| format!("drift: {error}"))
+        }
         Some("scan") if args.len() == 1 => return Ok(Action::Scan(scan::View::Scan)),
         Some("scan") => return Err(format!("drift: scan takes no arguments\n{USAGE}")),
         Some("status") => {

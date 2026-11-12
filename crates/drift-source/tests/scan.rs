@@ -763,3 +763,45 @@ fn binary_and_oversize_file_diffs_remain_hash_only_on_all_sides() {
         assert!(diff.to_json().contains("\"merge_available\": false"));
     }
 }
+
+#[test]
+fn an_oversize_base_blocks_an_otherwise_clean_small_merge() {
+    let base = format!(
+        "left=old\nspacer\n{}\nspacer2\nright=old\n",
+        "x".repeat(drift_core::MAX_DIFF_BYTES as usize)
+    );
+    let ours = b"left=ours\nspacer\nspacer2\nright=old\n";
+    let theirs = b"left=old\nspacer\nspacer2\nright=theirs\n";
+    assert_eq!(
+        drift_core::merge3(
+            &base,
+            std::str::from_utf8(ours).unwrap(),
+            std::str::from_utf8(theirs).unwrap()
+        )
+        .auto()
+        .unwrap(),
+        "left=ours\nspacer\nspacer2\nright=theirs\n"
+    );
+    let world = WorldBuilder::new()
+        .template("hypr/a.lua", theirs)
+        .live("hypr/a.lua", ours)
+        .base("hypr/a.lua", base.as_bytes())
+        .build("2");
+    let diff = drift_source::build_file_diff(
+        &Registry::v1(),
+        &world.paths(),
+        &BTreeSet::new(),
+        &drift_core::RelPath::new(".config/hypr/a.lua").unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(diff.status, drift_core::Status::Conflict);
+    assert_eq!(diff.badge, None);
+    assert!(
+        matches!(diff.base, drift_core::DiffContent::HashOnly { len, reason: drift_core::HashOnlyReason::Oversize, .. } if len == base.len() as u64)
+    );
+    assert!(diff.to_json().contains("\"merge_available\": false"));
+    assert!(diff
+        .to_json()
+        .contains(&format!("\"bytes\": {}", base.len())));
+}
