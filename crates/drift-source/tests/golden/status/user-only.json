@@ -1,0 +1,37 @@
+{
+  "backups": [],
+  "counts": {
+    "conflict": 0,
+    "local_override": 0,
+    "missing": 0,
+    "unchanged": 1,
+    "upstream_changed": 0,
+    "user_only": 1
+  },
+  "drifted": 0,
+  "files": [
+    {
+      "badge": null,
+      "base": "none",
+      "note": "",
+      "path": ".config/hypr/custom.lua",
+      "status": "user-only",
+      "template": null,
+      "volatile": false
+    },
+    {
+      "badge": null,
+      "base": "none",
+      "note": "",
+      "path": ".config/hypr/shipped.lua",
+      "status": "unchanged",
+      "template": "config/hypr/shipped.lua",
+      "volatile": false
+    }
+  ],
+  "ignored": 0,
+  "package_version": "4.5.0-3",
+  "reviewed_version": null,
+  "schema": 1,
+  "update_pending": false
+}

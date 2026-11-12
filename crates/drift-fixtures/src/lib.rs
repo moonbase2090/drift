@@ -14,7 +14,7 @@ pub use root::{MaterializedRoot, RootBuilder};
 pub use tree::{Entry, FixtureBuilder, FixtureTrees, Node, Root};
 
 pub const LIVE_CONFIG: &str = ".config";
-pub const REVIEWED_BASES: &str = ".local/share/drift/bases";
+pub const REVIEWED_BASES: &str = ".local/share/drift/bases/config";
 pub const PACKAGE_TEMPLATES: &str = "config";
 
 pub const STATUSES: &[&str] = &[

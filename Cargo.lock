@@ -188,8 +188,11 @@ version = "0.1.0"
 dependencies = [
  "drift-apply",
  "drift-core",
+ "drift-fixtures",
  "drift-source",
  "drift-tui",
+ "flate2",
+ "sha2",
 ]
 
 [[package]]
