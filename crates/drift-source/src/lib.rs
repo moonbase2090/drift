@@ -3,7 +3,10 @@ mod error;
 mod installed;
 mod parse;
 
-pub use catalog::{enumerate, SourcePaths, Tracked};
+pub use catalog::{
+    enumerate, is_backup_name, scan, BackupGroup, DirReader, Listing, SourcePaths, StdDirReader,
+    Tracked,
+};
 pub use error::Error;
 pub use installed::{
     read_package, Check, InstalledPackage, ReadPaths, Template, Upgrade, DEFAULT_OMARCHY_PATH,
