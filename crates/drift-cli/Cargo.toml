@@ -13,7 +13,8 @@ drift-core.workspace = true
 drift-source.workspace = true
 drift-apply.workspace = true
 drift-tui.workspace = true
-notify.workspace = true
+inotify.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 drift-fixtures.workspace = true
