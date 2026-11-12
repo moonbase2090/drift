@@ -72,6 +72,9 @@ dependencies = [
 [[package]]
 name = "drift-core"
 version = "0.1.0"
+dependencies = [
+ "toml",
+]
 
 [[package]]
 name = "drift-fixtures"
