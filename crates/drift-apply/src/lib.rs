@@ -2,9 +2,10 @@ mod apply;
 mod seed;
 
 pub use apply::{
-    apply, history, inspect_undo, integrate, undo, ApplyError, ApplyReport, Divergence, FailAt,
-    FileStep, History, IntegrateMode, IntegrateOutcome, Payload, Request, Roots, Unapplied,
-    UndoItem, UndoOutcome, UndoRequest, UndoStatus,
+    apply, apply_checked, history, inspect_undo, integrate, touches_hypr_config, undo, ApplyError,
+    ApplyReport, CheckedApply, Divergence, FailAt, FileStep, History, Hyprctl, HyprlandCheck,
+    HyprlandStatus, IntegrateMode, IntegrateOutcome, Payload, Request, Roots, Unapplied, UndoItem,
+    UndoOutcome, UndoRequest, UndoStatus, WriteFollowup,
 };
 pub use seed::{scan, Scan, StoreRoots};
 
