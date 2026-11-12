@@ -1,6 +1,6 @@
 use crate::path::RelPath;
 use crate::registry::{Mapping, Registry};
-use crate::status::{content_treatment, Treatment};
+use crate::status::{content_treatment, HashOnlyReason, Treatment};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verification {
@@ -39,12 +39,26 @@ impl Template {
     pub fn is_volatile(&self) -> bool {
         self.mapping.volatile
     }
+
+    pub fn note(&self) -> &'static str {
+        if self.is_volatile() {
+            "app rewrites this file"
+        } else {
+            ""
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LiveState {
-    Regular { len: u64, utf8: bool },
-    Symlink { target: String },
+    Regular {
+        len: u64,
+        utf8: bool,
+        sha256: String,
+    },
+    Symlink {
+        target: String,
+    },
     Unreadable,
 }
 
@@ -85,14 +99,44 @@ impl LiveFile {
         }
     }
 
+    pub fn content_hash(&self) -> Option<&str> {
+        match &self.state {
+            LiveState::Regular { sha256, .. } => Some(sha256),
+            _ => None,
+        }
+    }
+
     pub fn treatment(&self) -> LiveTreatment {
         match &self.state {
-            LiveState::Regular { len, utf8 } => {
+            LiveState::Regular { len, utf8, .. } => {
                 LiveTreatment::Content(content_treatment(*len, *utf8))
             }
             LiveState::Symlink { .. } => LiveTreatment::ReadOnlySymlink,
             LiveState::Unreadable => LiveTreatment::Unreadable,
         }
+    }
+
+    pub fn note(&self) -> String {
+        let mut text = match self.treatment() {
+            LiveTreatment::ReadOnlySymlink => {
+                format!("read-only symlink to {}", self.link_target().unwrap_or(""))
+            }
+            LiveTreatment::Unreadable => "unreadable".to_string(),
+            LiveTreatment::Content(Treatment::HashOnly(HashOnlyReason::NonUtf8)) => {
+                "hash only, not UTF-8".to_string()
+            }
+            LiveTreatment::Content(Treatment::HashOnly(HashOnlyReason::Oversize)) => {
+                "hash only, larger than 1 MiB".to_string()
+            }
+            LiveTreatment::Content(Treatment::Diffable) => String::new(),
+        };
+        if self.is_volatile() {
+            if !text.is_empty() {
+                text.push_str("; ");
+            }
+            text.push_str("app rewrites this file");
+        }
+        text
     }
 
     pub fn is_writable(&self) -> bool {
@@ -124,7 +168,11 @@ mod tests {
     }
 
     fn regular(len: u64, utf8: bool) -> LiveState {
-        LiveState::Regular { len, utf8 }
+        LiveState::Regular {
+            len,
+            utf8,
+            sha256: String::new(),
+        }
     }
 
     #[test]
@@ -263,6 +311,49 @@ mod tests {
             .unwrap();
         assert_eq!(live.treatment(), LiveTreatment::Unreadable);
         assert!(live.is_writable());
+        assert_eq!(live.note(), "unreadable");
+    }
+
+    #[test]
+    fn notes_name_the_hash_only_and_symlink_cases() {
+        let registry = Registry::v1();
+        let note = |state| registry.live_file(&rel(".config/a"), state).unwrap().note();
+        assert_eq!(note(regular(5, true)), "");
+        assert_eq!(note(regular(5, false)), "hash only, not UTF-8");
+        assert_eq!(
+            note(regular(MAX_DIFF_BYTES + 1, true)),
+            "hash only, larger than 1 MiB"
+        );
+        assert_eq!(
+            note(LiveState::Symlink {
+                target: "../elsewhere/a.lua".to_string(),
+            }),
+            "read-only symlink to ../elsewhere/a.lua"
+        );
+        let prefs = registry
+            .live_file(
+                &rel(".config/chromium/Default/Preferences"),
+                regular(4, true),
+            )
+            .unwrap();
+        assert_eq!(prefs.note(), "app rewrites this file");
+        let mixed = registry
+            .live_file(
+                &rel(".config/chromium/Default/Preferences"),
+                regular(5, false),
+            )
+            .unwrap();
+        assert_eq!(mixed.note(), "hash only, not UTF-8; app rewrites this file");
+        assert_eq!(
+            registry
+                .template(
+                    &rel("config/chromium/Default/Preferences"),
+                    Verification::Verified,
+                )
+                .unwrap()
+                .note(),
+            "app rewrites this file"
+        );
     }
 
     #[test]

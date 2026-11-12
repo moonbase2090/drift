@@ -1,5 +1,9 @@
+mod apply;
 mod seed;
 
+pub use apply::{
+    apply, ApplyError, ApplyReport, FailAt, FileStep, Payload, Request, Roots, Unapplied,
+};
 pub use seed::{scan, Scan, StoreRoots};
 
 pub fn crate_name() -> &'static str {
