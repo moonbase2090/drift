@@ -1,0 +1,16 @@
+.config/a: local override (base: reviewed)
+
+=== base ===
+x
+
+=== ours ===
+y
+
+=== theirs ===
+x
+
+=== hunks ===
+1: ours
+
+=== result ===
+y

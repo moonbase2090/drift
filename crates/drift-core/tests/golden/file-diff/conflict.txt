@@ -1,0 +1,16 @@
+.config/a: conflict (base: reviewed)
+
+=== base ===
+x
+
+=== ours ===
+y
+
+=== theirs ===
+z
+
+=== hunks ===
+1: conflict
+
+=== result ===
+[unresolved conflicts]

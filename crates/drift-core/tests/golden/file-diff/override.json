@@ -1,0 +1,33 @@
+{
+  "badge": null,
+  "base": {
+    "sha256": "digest",
+    "state": "text",
+    "text": "x\n"
+  },
+  "base_provenance": "reviewed",
+  "hunks": [
+    {
+      "base": "x\n",
+      "kind": "ours",
+      "ours": "y\n",
+      "theirs": "x\n"
+    }
+  ],
+  "merge_available": true,
+  "note": "",
+  "ours": {
+    "sha256": "digest",
+    "state": "text",
+    "text": "y\n"
+  },
+  "path": ".config/a",
+  "result": "y\n",
+  "schema": 1,
+  "status": "local override",
+  "theirs": {
+    "sha256": "digest",
+    "state": "text",
+    "text": "x\n"
+  }
+}
