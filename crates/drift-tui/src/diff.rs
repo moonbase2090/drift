@@ -1334,14 +1334,36 @@ fn mouse_quits(columns: u16, rows: u16, mouse: &MouseEvent) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use drift_core::MAX_DIFF_BYTES;
     use lunatui::render_once;
     use lunatui_term::KeyEvent;
     use lunatui_test::styled_snapshot;
+    use rustix::time::{clock_gettime, ClockId};
 
     use super::*;
+
+    fn thread_cpu_time() -> Duration {
+        let now = clock_gettime(ClockId::ThreadCPUTime);
+        Duration::new(
+            u64::try_from(now.tv_sec).unwrap_or(0),
+            u32::try_from(now.tv_nsec).unwrap_or(0),
+        )
+    }
+
+    fn cpu_cost(mut work: impl FnMut()) -> Duration {
+        let started = thread_cpu_time();
+        work();
+        thread_cpu_time().saturating_sub(started)
+    }
+
+    fn busy_for(cpu: Duration) {
+        let started = thread_cpu_time();
+        while thread_cpu_time().saturating_sub(started) < cpu {
+            std::hint::black_box(0u64);
+        }
+    }
 
     fn sample_near_the_cap() -> (String, usize) {
         let line = format!("{}\n", "a".repeat(63));
@@ -1766,18 +1788,22 @@ mod tests {
         assert!(text.len() <= MAX_DIFF_BYTES as usize);
         let mut changed = changed_near_the_cap(&text);
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Down)));
-        let started = Instant::now();
-        let (grid, clusters) = render_once(&mut changed, 160, 40);
-        let scrolled = started.elapsed();
+        let mut rendered = None;
+        let scrolled = cpu_cost(|| {
+            rendered = Some(render_once(&mut changed, 160, 40));
+        });
+        let (grid, clusters) = rendered.unwrap();
         assert!(grid.display_text(&clusters).contains('B'));
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Tab)));
-        let started = Instant::now();
-        let _ = render_once(&mut changed, 160, 40);
-        let focused = started.elapsed();
+        let focused = cpu_cost(|| {
+            let _ = render_once(&mut changed, 160, 40);
+        });
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Char('n'))));
-        let started = Instant::now();
-        let (grid, clusters) = render_once(&mut changed, 160, 40);
-        let jumped = started.elapsed();
+        let mut rendered = None;
+        let jumped = cpu_cost(|| {
+            rendered = Some(render_once(&mut changed, 160, 40));
+        });
+        let (grid, clusters) = rendered.unwrap();
         assert!(grid.display_text(&clusters).contains('C'));
         assert!(changed.scroll_top() > 0);
         let worst_cold = scrolled.max(focused).max(jumped);
@@ -1795,9 +1821,9 @@ mod tests {
             }
             let mut samples = Vec::new();
             for _ in 0..16 {
-                let started = Instant::now();
-                let _ = render_once(&mut screen, columns, rows);
-                samples.push(started.elapsed());
+                samples.push(cpu_cost(|| {
+                    let _ = render_once(&mut screen, columns, rows);
+                }));
             }
             let worst = samples.iter().copied().max().unwrap();
             assert!(
@@ -1805,6 +1831,24 @@ mod tests {
                 "{columns}x{rows} worst {worst:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_cpu_clock_ignores_waiting_and_counts_work() {
+        let waiting = cpu_cost(|| std::thread::sleep(Duration::from_millis(40)));
+        assert!(waiting < Duration::from_millis(5), "{waiting:?}");
+        let working = cpu_cost(|| busy_for(Duration::from_millis(30)));
+        assert!(working >= Duration::from_millis(20), "{working:?}");
+    }
+
+    #[test]
+    fn a_render_that_burns_cpu_over_the_budget_is_caught() {
+        let mut screen = DiffScreen::new("same\n", "same\n", "same\n");
+        let slow = cpu_cost(|| {
+            busy_for(Duration::from_millis(12));
+            let _ = render_once(&mut screen, 160, 40);
+        });
+        assert!(slow >= Duration::from_millis(8), "{slow:?}");
     }
 
     #[test]
