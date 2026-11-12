@@ -8,7 +8,10 @@ pub use bases::{
     base_path, drift_share, drift_state, read_base, read_reviewed_version, reviewed_version_path,
     BASES, REVIEWED_VERSION,
 };
-pub use catalog::{enumerate, SourcePaths, Tracked};
+pub use catalog::{
+    enumerate, is_backup_name, scan, BackupGroup, DirReader, Listing, SourcePaths, StdDirReader,
+    Tracked,
+};
 pub use error::Error;
 pub use installed::{
     read_package, Check, InstalledPackage, ReadPaths, Template, Upgrade, DEFAULT_OMARCHY_PATH,

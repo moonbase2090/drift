@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -38,7 +38,50 @@ pub struct Tracked {
     pub live: Option<LiveFile>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupGroup {
+    pub dir: String,
+    pub files: Vec<LiveFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    pub tracked: Vec<Tracked>,
+    pub backups: Vec<BackupGroup>,
+    pub ignored: Vec<Tracked>,
+}
+
+pub trait DirReader {
+    fn children(&self, dir: &Path) -> Option<Vec<String>>;
+}
+
+pub struct StdDirReader;
+
+impl DirReader for StdDirReader {
+    fn children(&self, dir: &Path) -> Option<Vec<String>> {
+        read_children(dir)
+    }
+}
+
+pub fn is_backup_name(name: &str) -> bool {
+    match name.rsplit_once(".bak.") {
+        Some((stem, digits)) => {
+            !stem.is_empty() && !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => false,
+    }
+}
+
 pub fn enumerate(registry: &Registry, paths: &SourcePaths) -> Result<Vec<Tracked>, Error> {
+    Ok(scan(registry, paths, &BTreeSet::new(), &StdDirReader)?.tracked)
+}
+
+pub fn scan(
+    registry: &Registry,
+    paths: &SourcePaths,
+    ignored: &BTreeSet<RelPath>,
+    reader: &dyn DirReader,
+) -> Result<Listing, Error> {
     let installed = read_entries(&paths.package, false)?;
     let mut tracked = Vec::new();
     let mut seen_live = BTreeSet::new();
@@ -65,6 +108,7 @@ pub fn enumerate(registry: &Registry, paths: &SourcePaths) -> Result<Vec<Tracked
         });
     }
 
+    let mut ignored_items: Vec<Tracked> = Vec::new();
     let mut parents = BTreeSet::new();
     for item in &tracked {
         if let Some(template) = &item.template {
@@ -73,8 +117,9 @@ pub fn enumerate(registry: &Registry, paths: &SourcePaths) -> Result<Vec<Tracked
             }
         }
     }
+    let mut backups: BTreeMap<String, Vec<LiveFile>> = BTreeMap::new();
     for parent in parents {
-        let Some(entries) = read_children(&paths.home.join(&parent)) else {
+        let Some(entries) = reader.children(&paths.home.join(&parent)) else {
             continue;
         };
         for name in entries {
@@ -92,15 +137,44 @@ pub fn enumerate(registry: &Registry, paths: &SourcePaths) -> Result<Vec<Tracked
                 continue;
             };
             seen_live.insert(live_path);
-            tracked.push(Tracked {
-                template: None,
-                live: Some(live),
-            });
+            if ignored.contains(&path) {
+                ignored_items.push(Tracked {
+                    template: None,
+                    live: Some(live),
+                });
+            } else if is_backup_name(&name) {
+                backups.entry(parent.clone()).or_default().push(live);
+            } else {
+                tracked.push(Tracked {
+                    template: None,
+                    live: Some(live),
+                });
+            }
         }
     }
 
+    let (mut tracked, mut from_templates): (Vec<Tracked>, Vec<Tracked>) =
+        tracked.into_iter().partition(|item| {
+            !item
+                .template
+                .as_ref()
+                .is_some_and(|template| ignored.contains(template.live_path()))
+        });
+    ignored_items.append(&mut from_templates);
     tracked.sort_by_key(track_key);
-    Ok(tracked)
+    ignored_items.sort_by_key(track_key);
+    let backups = backups
+        .into_iter()
+        .map(|(dir, mut files)| {
+            files.sort_by(|a, b| a.path().as_str().cmp(b.path().as_str()));
+            BackupGroup { dir, files }
+        })
+        .collect();
+    Ok(Listing {
+        tracked,
+        backups,
+        ignored: ignored_items,
+    })
 }
 
 fn verification(
