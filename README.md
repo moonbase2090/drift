@@ -62,6 +62,22 @@ Exit codes are 0 for no drift in the selected file, 1 for drift and 2 for an err
 including an unknown path. Local overrides and user-only files count as no drift,
 matching `status`. These commands write no configuration or state.
 
+## Resolving files
+
+```sh
+drift resolve .config/hypr/monitors.lua --keep
+drift resolve .config/hypr/a.lua .config/waybar/style.css --upstream --dry-run
+drift resolve "$HOME/.config/hypr/looknfeel.lua" --merge --yes
+```
+
+`resolve` shows a plan (each file, its action, the backup location and a diff summary) and writes only after you answer `y`; `--yes` skips the question, `--dry-run` only prints the plan, and without a terminal nothing is written unless `--yes` is given. All files in one call go into one transaction.
+
+- `--keep` (keep mine) writes no configuration. It records the shipped template as the reviewed base, so the file reads as an acknowledged local override and stays that way after a rescan.
+- `--upstream` (take upstream) replaces the file with the template, or creates it when it is missing, after backing up the original.
+- `--merge` applies a three-way merge when it has no conflicting hunks. Files with conflicts, no known base, non-text content or only local changes are skipped and named.
+
+Symlinks, files an app rewrites, files without a template and files already equal to upstream are skipped with a reason. A write under `~/.config/hypr` is followed by `hyprctl configerrors`, and Drift offers to undo the transaction if Hyprland reports errors.
+
 ## Development
 
 Rust 1.99.1, pinned by `rust-toolchain.toml`. From this repository:

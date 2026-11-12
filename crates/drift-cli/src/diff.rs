@@ -28,8 +28,8 @@ pub fn parse(args: &[String]) -> Result<DiffArgs, String> {
     })
 }
 
-pub fn run(paths: &ScanPaths, args: &DiffArgs, out: &mut dyn Write) -> Result<u8, String> {
-    let supplied = Path::new(&args.path);
+pub(crate) fn live_path(paths: &ScanPaths, given: &str) -> Result<RelPath, String> {
+    let supplied = Path::new(given);
     let relative = if supplied.is_absolute() {
         supplied
             .strip_prefix(&paths.source.home)
@@ -37,8 +37,11 @@ pub fn run(paths: &ScanPaths, args: &DiffArgs, out: &mut dyn Write) -> Result<u8
     } else {
         supplied
     };
-    let path = RelPath::new(relative.to_str().ok_or("path must be UTF-8")?)
-        .map_err(|error| error.to_string())?;
+    RelPath::new(relative.to_str().ok_or("path must be UTF-8")?).map_err(|error| error.to_string())
+}
+
+pub fn run(paths: &ScanPaths, args: &DiffArgs, out: &mut dyn Write) -> Result<u8, String> {
+    let path = live_path(paths, &args.path)?;
     let registry = crate::scan::registry(paths)?;
     let diff = build_file_diff(&registry, paths, &BTreeSet::new(), &path)
         .map_err(|error| error.to_string())?

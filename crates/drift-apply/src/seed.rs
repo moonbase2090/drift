@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use drift_core::{Registry, Template, Verification};
+use drift_core::{BaseRecord, Registry, Template, Verification};
 use drift_source::{
     base_path, enumerate, read_package, read_reviewed_version, reviewed_version_path, SourcePaths,
     Tracked,
@@ -95,6 +95,29 @@ fn seed(paths: &SourcePaths, roots: &StoreRoots, files: &[Tracked], version: &st
     } else {
         Vec::new()
     }
+}
+
+pub struct Recorded {
+    pub recorded: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+pub fn record_bases(share: &Path, records: &[BaseRecord]) -> Recorded {
+    let mut recorded = Vec::new();
+    let mut failed = Vec::new();
+    let anchored = ensure_anchor(share).is_ok();
+    for record in records {
+        let label = format!("{}/{}", record.root, record.rel.as_str());
+        let written = anchored
+            && base_path(share, &record.root, &record.rel)
+                .is_some_and(|dest| write_bytes(share, &dest, &record.bytes).is_ok());
+        if written {
+            recorded.push(label);
+        } else {
+            failed.push(label);
+        }
+    }
+    Recorded { recorded, failed }
 }
 
 fn recordable_version(version: &str) -> bool {

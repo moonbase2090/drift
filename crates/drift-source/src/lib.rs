@@ -1,6 +1,7 @@
 mod bases;
 mod catalog;
 mod error;
+mod inputs;
 mod installed;
 mod parse;
 mod report;
@@ -15,6 +16,7 @@ pub use catalog::{
     Tracked,
 };
 pub use error::Error;
+pub use inputs::{load_resolve_inputs, LoadedInputs};
 pub use installed::{
     read_package, Check, InstalledPackage, ReadPaths, Template, Upgrade, DEFAULT_OMARCHY_PATH,
     PACKAGE_NAME,

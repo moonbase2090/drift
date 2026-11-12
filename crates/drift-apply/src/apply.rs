@@ -13,6 +13,10 @@ mod hypr;
 mod integrate;
 mod undo;
 
+pub fn pending_prune(state: &Path) -> Result<Vec<String>, ApplyError> {
+    transactions_to_prune(state)
+}
+
 pub use hypr::{
     apply_checked, touches_hypr_config, CheckedApply, Hyprctl, HyprlandCheck, HyprlandStatus,
     WriteFollowup,

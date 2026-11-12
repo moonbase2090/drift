@@ -1,5 +1,6 @@
 mod diff;
 mod environment;
+mod resolve;
 mod scan;
 
 use std::io::IsTerminal;
@@ -12,6 +13,7 @@ const USAGE: &str = "\
 Usage: drift [--snapshot [--width N] [--height N]] [--version] [--help]
        drift integrate [--yes | --dry-run]
        drift diff <path> [--json]
+       drift resolve <path>... --keep | --upstream | --merge [--yes | --dry-run]
        drift scan
        drift status [--json | --bar]
 
@@ -20,6 +22,8 @@ With no arguments, drift opens the review screen.
 integrate shows the changes it would make to the Omarchy menu and hook files and
 asks before writing. --yes skips the question; --dry-run only shows the diff.
 diff prints base, ours, theirs, hunks and the automatic result for one live path.
+resolve shows a plan for keep mine, take upstream or a clean merge of the given files and
+asks before writing; all files go in one transaction. --yes skips the question.
 scan lists every tracked file with its status. status prints a summary, as JSON with
 --json, or as a status-bar module with --bar. Exit codes: 0 no drift, 1 drift, 2 error.
 ";
@@ -31,6 +35,7 @@ enum Action {
     Integrate(IntegrateMode),
     Scan(scan::View),
     Diff(diff::DiffArgs),
+    Resolve(resolve::ResolveArgs),
 }
 
 fn run(args: &[String]) -> Result<Action, String> {
@@ -38,6 +43,11 @@ fn run(args: &[String]) -> Result<Action, String> {
         Some("diff") => {
             return diff::parse(&args[1..])
                 .map(Action::Diff)
+                .map_err(|error| format!("drift: {error}"))
+        }
+        Some("resolve") => {
+            return resolve::parse(&args[1..])
+                .map(Action::Resolve)
                 .map_err(|error| format!("drift: {error}"))
         }
         Some("scan") if args.len() == 1 => return Ok(Action::Scan(scan::View::Scan)),
@@ -145,6 +155,35 @@ fn main() -> ExitCode {
     execute(run(&args))
 }
 
+fn resolve_now(args: &resolve::ResolveArgs) -> Result<u8, String> {
+    let paths = scan::paths_from_env();
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .map_or_else(
+            || std::path::PathBuf::from("/run"),
+            std::path::PathBuf::from,
+        );
+    let roots = resolve::roots_for(&paths, runtime);
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?;
+    let env = resolve::Environment {
+        paths: &paths,
+        roots: &roots,
+        state_display: &roots.state.display().to_string(),
+        checker: &drift_apply::Hyprctl::new(),
+    };
+    resolve::run(
+        &env,
+        args,
+        elapsed,
+        std::io::stdin().is_terminal(),
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+}
+
 fn launch_screen() -> std::io::Result<()> {
     let paths = scan::paths_from_env();
     match scan::build(&paths) {
@@ -165,6 +204,13 @@ fn execute(action: Result<Action, String>) -> ExitCode {
         }
         Ok(Action::Integrate(mode)) => match integrate_now(mode) {
             Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("drift: {error}");
+                ExitCode::from(2)
+            }
+        },
+        Ok(Action::Resolve(args)) => match resolve_now(&args) {
+            Ok(code) => ExitCode::from(code),
             Err(error) => {
                 eprintln!("drift: {error}");
                 ExitCode::from(2)
