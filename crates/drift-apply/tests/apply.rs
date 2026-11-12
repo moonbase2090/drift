@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -381,10 +381,10 @@ fn each_step_before_rename_leaves_the_original() {
 }
 
 #[test]
-fn a_manifest_failure_keeps_the_new_bytes_and_skips_the_manifest() {
+fn a_manifest_failure_restores_the_original_and_reports_the_file() {
     let fix = Fixture::new();
     let path = "config/hypr/monitors.lua";
-    write_live(&fix.live(path), b"x\n", 0o644);
+    write_live(&fix.live(path), b"x\n", 0o640);
     let plan = one_plan(
         planned(path, Some(BEFORE), Some(AFTER), Some(0o644), None),
         &[],
@@ -400,9 +400,166 @@ fn a_manifest_failure_keeps_the_new_bytes_and_skips_the_manifest() {
     )
     .unwrap_err();
     assert!(error.message.contains("manifest"), "{}", error.message);
-    assert_eq!(error.applied, [path]);
-    assert_eq!(fs::read(fix.live(path)).unwrap(), b"hi\n");
+    assert!(error.applied.is_empty());
+    assert_eq!(error.unapplied[0].path, path);
+    assert_eq!(fs::read(fix.live(path)).unwrap(), b"x\n");
+    assert_eq!(mode_of(&fix.live(path)), 0o640);
+    let backup = fix
+        .root
+        .join("state/backups/txn-7/config/hypr/monitors.lua");
+    assert_eq!(fs::read(backup).unwrap(), b"x\n");
     assert!(!fix.root.join("state/backups/txn-7/manifest.json").exists());
+
+    let created = Fixture::new();
+    let plan = one_plan(planned(path, None, Some(AFTER), Some(0o644), None), &[]);
+    let error = apply(
+        &created.roots(),
+        &Request {
+            plan: &plan,
+            files: &files,
+            fail_at: Some(FailAt::Manifest),
+        },
+    )
+    .unwrap_err();
+    assert!(error.applied.is_empty());
+    assert_eq!(error.unapplied[0].path, path);
+    assert!(!created.live(path).exists());
+}
+
+#[test]
+fn a_real_manifest_failure_reports_the_file_and_keeps_the_original() {
+    let fix = Fixture::new();
+    let path = "config/hypr/monitors.lua";
+    write_live(&fix.live(path), b"x\n", 0o644);
+    let manifest = fix.root.join("state/backups/txn-7/manifest.json");
+    fs::create_dir_all(&manifest).unwrap();
+    let inode = fs::symlink_metadata(fix.live(path)).unwrap().ino();
+    let plan = one_plan(
+        planned(path, Some(BEFORE), Some(AFTER), Some(0o644), None),
+        &[],
+    );
+    let error = apply_one(&fix, &plan, b"hi\n").unwrap_err();
+    assert!(
+        error.message.contains("transaction already exists"),
+        "{}",
+        error.message
+    );
+    assert!(error.applied.is_empty());
+    assert_eq!(error.unapplied[0].path, path);
+    assert!(!error.unapplied[0].reason.is_empty());
+    assert_eq!(fs::read(fix.live(path)).unwrap(), b"x\n");
+    assert_eq!(fs::symlink_metadata(fix.live(path)).unwrap().ino(), inode);
+    assert!(manifest.symlink_metadata().unwrap().is_dir());
+}
+
+#[test]
+fn keep_mine_leaves_the_live_file_untouched() {
+    let fix = Fixture::new();
+    let path = "config/hypr/monitors.lua";
+    write_live(&fix.live(path), b"x\n", 0o640);
+    let before = fs::symlink_metadata(fix.live(path)).unwrap();
+    let plan = Plan::new(
+        "txn-7",
+        "2026-04-02T00:00:00Z",
+        "4.5.0-3",
+        vec![PlannedFile::new(
+            path,
+            Action::KeepMine,
+            Some(BEFORE),
+            Some(BEFORE),
+            Some(0o600),
+            None,
+        )
+        .unwrap()],
+        &[],
+    )
+    .unwrap();
+    let report = apply_one(&fix, &plan, b"x\n").unwrap();
+    assert_eq!(report.applied, [path]);
+    let after = fs::symlink_metadata(fix.live(path)).unwrap();
+    assert_eq!(after.ino(), before.ino());
+    assert_eq!(after.modified().unwrap(), before.modified().unwrap());
+    assert_eq!(after.permissions().mode(), before.permissions().mode());
+    assert_eq!(fs::read(fix.live(path)).unwrap(), b"x\n");
+    assert!(leftovers(&fix.roots().live).is_empty());
+    let manifest = fs::read_to_string(fix.root.join("state/backups/txn-7/manifest.json")).unwrap();
+    assert!(manifest.contains("keep mine"));
+    assert!(!fix
+        .root
+        .join("state/backups/txn-7/config/hypr/monitors.lua")
+        .exists());
+}
+
+#[test]
+fn a_reused_transaction_keeps_the_original_backup() {
+    let fix = Fixture::new();
+    let path = "config/hypr/monitors.lua";
+    write_live(&fix.live(path), b"x\n", 0o644);
+    let first = one_plan(
+        planned(path, Some(BEFORE), Some(AFTER), Some(0o644), None),
+        &[],
+    );
+    apply_one(&fix, &first, b"hi\n").unwrap();
+    let backup = fix
+        .root
+        .join("state/backups/txn-7/config/hypr/monitors.lua");
+    let original = fs::read(&backup).unwrap();
+    let manifest = fs::read(fix.root.join("state/backups/txn-7/manifest.json")).unwrap();
+    assert_eq!(original, b"x\n");
+
+    let second = one_plan(
+        planned(path, Some(AFTER), Some(BEFORE), Some(0o644), None),
+        &[],
+    );
+    let error = apply_one(&fix, &second, b"x\n").unwrap_err();
+    assert!(
+        error.message.contains("transaction already exists"),
+        "{}",
+        error.message
+    );
+    assert!(error.applied.is_empty());
+    assert_eq!(error.unapplied[0].path, path);
+    assert_eq!(fs::read(&backup).unwrap(), original);
+    assert_eq!(
+        fs::read(fix.root.join("state/backups/txn-7/manifest.json")).unwrap(),
+        manifest
+    );
+    assert_eq!(fs::read(fix.live(path)).unwrap(), b"hi\n");
+
+    let interrupted = Fixture::new();
+    write_live(&interrupted.live(path), b"x\n", 0o644);
+    let plan = one_plan(
+        planned(path, Some(BEFORE), Some(AFTER), Some(0o644), None),
+        &[],
+    );
+    let files = [payload(path, b"hi\n")];
+    let error = apply(
+        &interrupted.roots(),
+        &Request {
+            plan: &plan,
+            files: &files,
+            fail_at: Some(FailAt::File {
+                index: 0,
+                step: FileStep::Rename,
+            }),
+        },
+    )
+    .unwrap_err();
+    assert!(error.message.contains("rename"), "{}", error.message);
+    let backup = interrupted
+        .root
+        .join("state/backups/txn-7/config/hypr/monitors.lua");
+    assert_eq!(fs::read(&backup).unwrap(), b"x\n");
+    assert_eq!(fs::read(interrupted.live(path)).unwrap(), b"x\n");
+    let error = apply_one(&interrupted, &plan, b"hi\n").unwrap_err();
+    assert!(
+        error.message.contains("transaction already exists"),
+        "{}",
+        error.message
+    );
+    assert!(!error.unapplied.is_empty());
+    assert_eq!(fs::read(&backup).unwrap(), b"x\n");
+    assert_eq!(fs::read(interrupted.live(path)).unwrap(), b"x\n");
 }
 
 #[test]

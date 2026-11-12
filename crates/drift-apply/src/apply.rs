@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use drift_core::{Plan, PlannedFile};
+use drift_core::{Action, Plan, PlannedFile};
 
 const KEPT_TRANSACTIONS: usize = 100;
 
@@ -92,6 +92,8 @@ pub fn apply(roots: &Roots, request: &Request<'_>) -> Result<ApplyReport, ApplyE
             "prune list does not match the transactions that would be removed",
         ));
     }
+    reserve_transaction(&roots.state, request.plan.id())
+        .map_err(|error| refused(request, error.message))?;
 
     let mut applied = Vec::new();
     for (index, planned) in request.plan.files().iter().enumerate() {
@@ -111,13 +113,21 @@ pub fn apply(roots: &Roots, request: &Request<'_>) -> Result<ApplyReport, ApplyE
     }
 
     if request.fail_at == Some(FailAt::Manifest) {
-        return Err(ApplyError {
-            message: "injected failure during manifest".to_string(),
-            applied,
-            unapplied: Vec::new(),
-        });
+        return Err(manifest_failure(
+            roots,
+            request,
+            &applied,
+            "injected failure during manifest",
+        ));
     }
-    write_manifest(&roots.state, request.plan)?;
+    if let Err(error) = write_manifest(&roots.state, request.plan) {
+        return Err(manifest_failure(
+            roots,
+            request,
+            &applied,
+            error.message.as_str(),
+        ));
+    }
     if request.fail_at == Some(FailAt::Prune) {
         return Err(ApplyError {
             message: "injected failure during prune".to_string(),
@@ -173,6 +183,9 @@ fn write_file(
         reason: message.clone(),
         message,
     })?;
+    if planned.action() == Action::KeepMine {
+        return Ok(());
+    }
     if fails(request, index, FileStep::Backup) {
         return Err(injected(FileStep::Backup));
     }
@@ -223,20 +236,123 @@ fn backup_original(
     planned: &PlannedFile,
     source: &Path,
 ) -> Result<(), FileFailure> {
-    let relative = match planned.backup() {
-        Some(path) => path.as_str().to_string(),
-        None => format!("backups/{txn}/{}", planned.path().as_str()),
-    };
-    let dest = roots.state.join(&relative);
-    if !dest.starts_with(&roots.state) {
+    let dest = backup_path(&roots.state, txn, planned)?;
+    if node_exists(&dest) {
         return Err(FileFailure {
-            message: format!("backup path is outside the state directory {relative}"),
-            reason: "backup path is outside the state directory".to_string(),
+            message: "backup already exists".to_string(),
+            reason: "backup already exists".to_string(),
         });
     }
     let bytes = read_original(source)?;
     let mode = existing_mode(source).unwrap_or(0o644);
     write_bytes(&roots.state, &dest, &bytes, mode).map_err(file_failure)
+}
+
+fn backup_path(state: &Path, txn: &str, planned: &PlannedFile) -> Result<PathBuf, FileFailure> {
+    let relative = match planned.backup() {
+        Some(path) => path.as_str().to_string(),
+        None => format!("backups/{txn}/{}", planned.path().as_str()),
+    };
+    let dest = state.join(&relative);
+    if !dest.starts_with(state) {
+        return Err(FileFailure {
+            message: format!("backup path is outside the state directory {relative}"),
+            reason: "backup path is outside the state directory".to_string(),
+        });
+    }
+    Ok(dest)
+}
+
+fn reserve_transaction(state: &Path, id: &str) -> Result<(), ApplyError> {
+    let root = state.join("backups");
+    ensure_real_dir(state, &root)?;
+    let dir = root.join(id);
+    if dir.parent() != Some(root.as_path()) {
+        return Err(bare("transaction id is outside the backup directory"));
+    }
+    match fs::symlink_metadata(&dir) {
+        Ok(_) => Err(bare("transaction already exists")),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            match fs::create_dir(&dir) {
+                Ok(()) => Ok(()),
+                Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Err(bare("transaction already exists"))
+                }
+                Err(source) => Err(bare_io(&dir, source)),
+            }
+        }
+        Err(source) => Err(bare_io(&dir, source)),
+    }
+}
+
+fn manifest_failure(
+    roots: &Roots,
+    request: &Request<'_>,
+    applied: &[String],
+    message: &str,
+) -> ApplyError {
+    let still = restore_live(roots, request.plan, applied);
+    let mut unapplied = Vec::new();
+    for file in request.plan.files() {
+        let path = file.path().as_str();
+        if still.iter().any(|kept| kept == path) {
+            continue;
+        }
+        unapplied.push(Unapplied {
+            path: path.to_string(),
+            reason: message.to_string(),
+        });
+    }
+    ApplyError {
+        message: message.to_string(),
+        applied: still,
+        unapplied,
+    }
+}
+
+fn restore_live(roots: &Roots, plan: &Plan, applied: &[String]) -> Vec<String> {
+    let mut still = Vec::new();
+    for path in applied.iter().rev() {
+        let Some(planned) = plan
+            .files()
+            .iter()
+            .find(|file| file.path().as_str() == path)
+        else {
+            still.push(path.clone());
+            continue;
+        };
+        if planned.action() == Action::KeepMine {
+            continue;
+        }
+        let dest = roots.live.join(path.as_str());
+        if planned.sha256_before().is_none() {
+            match fs::remove_file(&dest) {
+                Ok(()) => {}
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => still.push(path.clone()),
+            }
+            continue;
+        }
+        let backup = match backup_path(&roots.state, plan.id(), planned) {
+            Ok(path) => path,
+            Err(_) => {
+                still.push(path.clone());
+                continue;
+            }
+        };
+        match restore_backup(&roots.live, &dest, &backup) {
+            Ok(()) => {}
+            Err(_) => still.push(path.clone()),
+        }
+    }
+    still.reverse();
+    still
+}
+
+fn restore_backup(anchor: &Path, dest: &Path, backup: &Path) -> Result<(), ApplyError> {
+    let bytes = read_original(backup).map_err(|error| bare(error.message))?;
+    let mode = existing_mode(backup).unwrap_or(0o644);
+    write_bytes(anchor, dest, &bytes, mode)
 }
 
 fn read_original(source: &Path) -> Result<Vec<u8>, FileFailure> {
