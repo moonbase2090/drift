@@ -214,7 +214,11 @@ fn skel_digest(skel: &Path, template_path: &str) -> Option<String> {
     if rest.is_empty() {
         return None;
     }
-    let bytes = fs::read(skel.join(".config").join(rest)).ok()?;
+    let path = skel.join(".config").join(rest);
+    if !fs::metadata(&path).ok()?.is_file() {
+        return None;
+    }
+    let bytes = fs::read(path).ok()?;
     Some(crate::installed::sha256_hex(&bytes))
 }
 

@@ -570,3 +570,86 @@ fn a_missing_package_is_an_error_and_not_an_empty_report() {
     };
     assert!(build_report(&Registry::v1(), &paths, &BTreeSet::new()).is_err());
 }
+
+fn fifo(path: &Path) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let status = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+fn report_within(world: World, seconds: u64) -> ScanReport {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let report = world.report();
+        let _ = sender.send(report);
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(seconds))
+        .expect("the scan did not finish")
+}
+
+#[test]
+fn a_fifo_in_place_of_a_live_file_is_unreadable_and_never_opened() {
+    let world = WorldBuilder::new()
+        .template("hypr/a.lua", b"x\n")
+        .template("hypr/b.lua", b"y\n")
+        .live("hypr/b.lua", b"y\n")
+        .build("4.5.0-3");
+    fifo(&world.root.path().join("home/.config/hypr/a.lua"));
+    fifo(&world.root.path().join("home/.config/hypr/stray.pipe"));
+    let report = report_within(world, 20);
+    assert_eq!(status_of(&report, ".config/hypr/a.lua"), "local override");
+    assert_eq!(status_of(&report, ".config/hypr/b.lua"), "unchanged");
+    assert!(report
+        .entries
+        .iter()
+        .all(|entry| !entry.path.ends_with("stray.pipe")));
+    let note = &report
+        .entries
+        .iter()
+        .find(|entry| entry.path == ".config/hypr/a.lua")
+        .unwrap()
+        .note;
+    assert!(note.contains("unreadable"), "{note}");
+}
+
+#[test]
+fn a_link_to_a_fifo_and_a_fifo_template_are_unreadable_and_never_opened() {
+    let world = WorldBuilder::new()
+        .template("hypr/a.lua", b"x\n")
+        .live("hypr/c.lua", b"c\n")
+        .link("hypr/a.lua", "../../../pipe")
+        .build("4.5.0-3");
+    fifo(&world.root.path().join("pipe"));
+    let report = report_within(world, 20);
+    assert_eq!(status_of(&report, ".config/hypr/a.lua"), "local override");
+
+    let mut builder = WorldBuilder::new();
+    builder
+        .listed_only("hypr/t.lua", b"t\n")
+        .live("hypr/t.lua", b"t\n");
+    let world = builder.build("4.5.0-3");
+    fifo(
+        &world
+            .root
+            .path()
+            .join("usr/share/omarchy/config/hypr/t.lua"),
+    );
+    let report = report_within(world, 20);
+    assert_eq!(status_of(&report, ".config/hypr/t.lua"), "local override");
+}
+
+#[test]
+fn a_fifo_in_the_skel_copy_is_never_opened() {
+    let mut builder = WorldBuilder::new();
+    builder
+        .listed_only("hypr/a.lua", b"x\n")
+        .live("hypr/a.lua", b"x\n");
+    let world = builder.build("4.5.0-3");
+    fifo(&world.root.path().join("skel/.config/hypr/a.lua"));
+    let report = report_within(world, 20);
+    assert_eq!(status_of(&report, ".config/hypr/a.lua"), "local override");
+}

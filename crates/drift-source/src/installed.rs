@@ -168,6 +168,9 @@ enum Disk {
 }
 
 fn hash_disk(path: &Path) -> (Option<String>, Disk) {
+    if fs::metadata(path).is_ok_and(|meta| !meta.is_file()) {
+        return (None, Disk::Unreadable);
+    }
     match fs::read(path) {
         Ok(bytes) => (Some(sha256_hex(&bytes)), Disk::Read),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => (None, Disk::Missing),

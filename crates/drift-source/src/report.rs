@@ -207,6 +207,9 @@ fn read_side(path: &Path) -> Side {
 }
 
 fn try_side(path: &Path) -> Option<Side> {
+    if !fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
     let digested = digest_file(path).ok()?;
     let bytes = if digested.utf8 && digested.len <= MAX_DIFF_BYTES {
         fs::read(path)
