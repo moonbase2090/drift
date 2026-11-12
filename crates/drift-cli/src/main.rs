@@ -1,3 +1,4 @@
+mod diff;
 mod environment;
 mod scan;
 mod watch;
@@ -11,6 +12,7 @@ use drift_apply::IntegrateMode;
 const USAGE: &str = "\
 Usage: drift [--snapshot [--width N] [--height N]] [--version] [--help]
        drift integrate [--yes | --dry-run]
+       drift diff <path> [--json]
        drift scan
        drift status [--json | --bar]
 
@@ -18,6 +20,7 @@ With no arguments, drift opens the review screen.
 --snapshot prints one frame and does not take the terminal.
 integrate shows the changes it would make to the Omarchy menu and hook files and
 asks before writing. --yes skips the question; --dry-run only shows the diff.
+diff prints base, ours, theirs, hunks and the automatic result for one live path.
 scan lists every tracked file with its status. status prints a summary, as JSON with
 --json, or as a status-bar module with --bar. Exit codes: 0 no drift, 1 drift, 2 error.
 ";
@@ -28,10 +31,16 @@ enum Action {
     Launch,
     Integrate(IntegrateMode),
     Scan(scan::View),
+    Diff(diff::DiffArgs),
 }
 
 fn run(args: &[String]) -> Result<Action, String> {
     match args.first().map(String::as_str) {
+        Some("diff") => {
+            return diff::parse(&args[1..])
+                .map(Action::Diff)
+                .map_err(|error| format!("drift: {error}"))
+        }
         Some("scan") if args.len() == 1 => return Ok(Action::Scan(scan::View::Scan)),
         Some("scan") => return Err(format!("drift: scan takes no arguments\n{USAGE}")),
         Some("status") => {
@@ -173,6 +182,15 @@ fn execute(action: Result<Action, String>) -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Ok(Action::Diff(args)) => {
+            match diff::run(&scan::paths_from_env(), &args, &mut std::io::stdout()) {
+                Ok(code) => ExitCode::from(code),
+                Err(error) => {
+                    eprintln!("drift: {error}");
+                    ExitCode::from(2)
+                }
+            }
+        }
         Ok(Action::Scan(view)) => {
             let paths = scan::paths_from_env();
             match scan::run(&paths, view, &mut std::io::stdout()) {
@@ -298,5 +316,19 @@ mod tests {
             execute(run(&args(&["status", "--nope"]))),
             ExitCode::from(2)
         );
+    }
+    #[test]
+    fn diff_usage_errors_start_with_the_command_prefix() {
+        for values in [
+            vec!["diff"],
+            vec!["diff", ".config/a", ".config/b"],
+            vec!["diff", ".config/a", "--unknown"],
+        ] {
+            let error = match run(&args(&values)) {
+                Err(error) => error,
+                Ok(_) => panic!("expected a usage error for {values:?}"),
+            };
+            assert!(error.starts_with("drift: "), "{values:?}: {error}");
+        }
     }
 }

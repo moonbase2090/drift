@@ -3,8 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use drift_core::{
-    classify, merge3, BackupSummary, Base, Classification, MergeOutcome, Registry, RelPath,
-    ScanEntry, ScanReport, Template, Versions, MAX_DIFF_BYTES,
+    classify, content_treatment, merge3, BackupSummary, Base, Classification, DiffContent,
+    FileDiff, MergeOutcome, Registry, RelPath, ScanEntry, ScanReport, Template, Treatment,
+    Versions, MAX_DIFF_BYTES,
 };
 
 use crate::bases::read_reviewed_version;
@@ -21,6 +22,8 @@ pub struct ScanPaths {
 struct Side {
     hash: String,
     bytes: Option<Vec<u8>>,
+    len: Option<u64>,
+    utf8: bool,
 }
 
 struct Item {
@@ -29,16 +32,35 @@ struct Item {
     theirs: Option<Side>,
 }
 
+pub fn build_file_diff(
+    registry: &Registry,
+    paths: &ScanPaths,
+    ignored: &BTreeSet<RelPath>,
+    path: &RelPath,
+) -> Result<Option<FileDiff>, Error> {
+    Ok(build_reports(registry, paths, ignored, Some(path))?.1)
+}
+
 pub fn build_report(
     registry: &Registry,
     paths: &ScanPaths,
     ignored: &BTreeSet<RelPath>,
 ) -> Result<ScanReport, Error> {
+    Ok(build_reports(registry, paths, ignored, None)?.0)
+}
+
+fn build_reports(
+    registry: &Registry,
+    paths: &ScanPaths,
+    ignored: &BTreeSet<RelPath>,
+    selected: Option<&RelPath>,
+) -> Result<(ScanReport, Option<FileDiff>), Error> {
     let installed = read_package(&paths.source.package)?;
     let listing = scan(registry, &paths.source, ignored, &StdDirReader)?;
     let mut items: Vec<Item> = listing
         .tracked
         .into_iter()
+        .filter(|tracked| selected.is_none_or(|path| tracked_path(tracked) == Some(path)))
         .map(|tracked| {
             let ours = tracked
                 .live
@@ -59,7 +81,9 @@ pub fn build_report(
     let wanted: Vec<usize> = items
         .iter()
         .enumerate()
-        .filter(|(_, item)| needs_base(item))
+        .filter(|(_, item)| {
+            needs_base(item) || (selected.is_some() && item.tracked.template.is_some())
+        })
         .map(|(index, _)| index)
         .collect();
     let queries: Vec<BaseQuery<'_>> = wanted
@@ -86,6 +110,7 @@ pub fn build_report(
     }
 
     let mut entries = Vec::new();
+    let mut file_diff = None;
     for (item, base) in items.drain(..).zip(bases) {
         let versions = Versions {
             base: base.as_ref().map(|(base, _)| base.clone()),
@@ -102,7 +127,25 @@ pub fn build_report(
         }) else {
             continue;
         };
-        entries.push(entry(&item.tracked, result));
+        let entry = entry(&item.tracked, result);
+        if selected.is_some() {
+            file_diff = Some(FileDiff {
+                path: entry.path.clone(),
+                status: entry.status,
+                badge: entry.badge,
+                provenance: entry.base,
+                note: entry.note.clone(),
+                base: base.as_ref().map_or(DiffContent::Absent, |(base, bytes)| {
+                    content(&base.hash, bytes)
+                }),
+                ours: item.ours.as_ref().map_or(DiffContent::Absent, side_content),
+                theirs: item
+                    .theirs
+                    .as_ref()
+                    .map_or(DiffContent::Absent, side_content),
+            });
+        }
+        entries.push(entry);
     }
 
     let backups = listing
@@ -113,13 +156,55 @@ pub fn build_report(
             count: group.files.len(),
         })
         .collect();
-    Ok(ScanReport {
-        package_version: installed.version,
-        reviewed_version: read_reviewed_version(&paths.resolve.state),
-        entries,
-        backups,
-        ignored: listing.ignored.len(),
-    })
+    Ok((
+        ScanReport {
+            package_version: installed.version,
+            reviewed_version: read_reviewed_version(&paths.resolve.state),
+            entries,
+            backups,
+            ignored: listing.ignored.len(),
+        },
+        file_diff,
+    ))
+}
+
+fn tracked_path(tracked: &Tracked) -> Option<&RelPath> {
+    tracked
+        .template
+        .as_ref()
+        .map(Template::live_path)
+        .or_else(|| tracked.live.as_ref().map(|live| live.path()))
+}
+
+fn content(hash: &str, bytes: &[u8]) -> DiffContent {
+    let text = std::str::from_utf8(bytes);
+    match content_treatment(bytes.len() as u64, text.is_ok()) {
+        Treatment::Diffable => DiffContent::Text {
+            sha256: hash.to_string(),
+            text: text.unwrap_or_default().to_string(),
+        },
+        Treatment::HashOnly(reason) => DiffContent::HashOnly {
+            sha256: hash.to_string(),
+            len: bytes.len() as u64,
+            reason,
+        },
+    }
+}
+
+fn side_content(side: &Side) -> DiffContent {
+    if let Some(bytes) = &side.bytes {
+        return content(&side.hash, bytes);
+    }
+    if let Some(len) = side.len {
+        if let Treatment::HashOnly(reason) = content_treatment(len, side.utf8) {
+            return DiffContent::HashOnly {
+                sha256: side.hash.clone(),
+                len,
+                reason,
+            };
+        }
+    }
+    DiffContent::Unreadable
 }
 
 fn needs_base(item: &Item) -> bool {
@@ -170,6 +255,12 @@ fn merge_outcome(base: Option<&[u8]>, ours: Option<&[u8]>, theirs: Option<&[u8]>
     let (Some(base), Some(ours), Some(theirs)) = (base, ours, theirs) else {
         return MergeOutcome::Unavailable;
     };
+    if [base, ours, theirs]
+        .iter()
+        .any(|bytes| bytes.len() as u64 > MAX_DIFF_BYTES)
+    {
+        return MergeOutcome::Unavailable;
+    }
     let (Ok(base), Ok(ours), Ok(theirs)) = (
         std::str::from_utf8(base),
         std::str::from_utf8(ours),
@@ -221,6 +312,8 @@ fn try_side(path: &Path) -> Option<Side> {
     Some(Side {
         hash: digested.sha256,
         bytes,
+        len: Some(digested.len),
+        utf8: digested.utf8,
     })
 }
 
@@ -228,5 +321,7 @@ fn unreadable(path: &Path) -> Side {
     Side {
         hash: format!("unreadable:{}", path.display()),
         bytes: None,
+        len: None,
+        utf8: false,
     }
 }
