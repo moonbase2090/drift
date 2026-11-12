@@ -22,6 +22,7 @@ struct Change {
     before: Option<String>,
     after: String,
     mode: Option<u32>,
+    from_mode: Option<u32>,
 }
 
 pub fn integrate(
@@ -41,27 +42,49 @@ pub fn integrate(
             before: menu,
             after,
             mode: None,
+            from_mode: None,
         });
     }
-    if let Some(after) = hook_content(hook.as_deref()).map_err(|error| error.to_string())? {
-        changes.push(Change {
+    let hook_mode = existing_mode(&roots.live.join(HOOK_PATH));
+    match hook_content(hook.as_deref()).map_err(|error| error.to_string())? {
+        Some(after) => changes.push(Change {
             path: HOOK_PATH,
             before: hook,
             after,
             mode: Some(HOOK_MODE),
-        });
+            from_mode: hook_mode,
+        }),
+        None if hook_mode.is_some_and(|mode| mode & 0o100 == 0) => changes.push(Change {
+            path: HOOK_PATH,
+            after: hook.clone().unwrap_or_default(),
+            before: hook,
+            mode: Some(HOOK_MODE),
+            from_mode: hook_mode,
+        }),
+        None => {}
     }
     if changes.is_empty() {
         say(out, "Drift is already integrated. Nothing to change.\n")?;
         return Ok(IntegrateOutcome::AlreadyDone);
     }
     for change in &changes {
-        say(
-            out,
-            &unified_diff(change.path, change.before.as_deref(), &change.after),
-        )?;
-        if change.mode.is_some() && change.before.is_none() {
-            say(out, &format!("(new file, mode {HOOK_MODE:04o})\n"))?;
+        match (&change.before, change.from_mode) {
+            (Some(before), Some(from)) if *before == change.after => {
+                let to = change.mode.unwrap_or(from);
+                say(
+                    out,
+                    &format!("{}: mode {from:04o} -> {to:04o}\n", change.path),
+                )?;
+            }
+            _ => {
+                say(
+                    out,
+                    &unified_diff(change.path, change.before.as_deref(), &change.after),
+                )?;
+                if change.mode.is_some() && change.before.is_none() {
+                    say(out, &format!("(new file, mode {HOOK_MODE:04o})\n"))?;
+                }
+            }
         }
     }
     match mode {

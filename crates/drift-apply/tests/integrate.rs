@@ -260,3 +260,98 @@ fn a_held_update_lock_refuses_the_write() {
     assert_eq!(fs::read_to_string(fix.live(MENU_PATH)).unwrap(), STOCK);
     assert!(!fix.live(HOOK_PATH).exists());
 }
+
+fn set_mode(path: &std::path::Path, mode: u32) {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+fn mode_of(path: &std::path::Path) -> u32 {
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[test]
+fn a_non_executable_hook_with_the_right_content_is_fixed_not_skipped() {
+    let fix = Fixture::new();
+    fix.go("integrate-1", IntegrateMode::Yes, false).0.unwrap();
+    let hook = fix.live(HOOK_PATH);
+    set_mode(&hook, 0o644);
+    let (result, shown) = fix.go("integrate-2", IntegrateMode::Yes, false);
+    let IntegrateOutcome::Applied(report) = result.unwrap() else {
+        panic!("expected a fix");
+    };
+    assert_eq!(report.applied, [HOOK_PATH]);
+    assert_eq!(mode_of(&hook), 0o755);
+    assert_eq!(
+        fs::read_to_string(&hook).unwrap(),
+        "#!/bin/bash\ndrift notify\n"
+    );
+    assert!(shown.contains("mode 0644 -> 0755"), "{shown}");
+    assert!(!shown.contains("already integrated"), "{shown}");
+}
+
+#[test]
+fn fixing_the_hook_mode_can_be_undone_and_is_declinable() {
+    let fix = Fixture::new();
+    fix.go("integrate-1", IntegrateMode::Yes, false).0.unwrap();
+    let hook = fix.live(HOOK_PATH);
+    set_mode(&hook, 0o600);
+    let (result, shown) = fix.go("integrate-2", IntegrateMode::DryRun, false);
+    assert_eq!(result.unwrap(), IntegrateOutcome::DryRun);
+    assert!(shown.contains("mode 0600 -> 0755"), "{shown}");
+    assert_eq!(mode_of(&hook), 0o600);
+    let (result, _) = fix.go("integrate-2", IntegrateMode::Confirm, false);
+    assert_eq!(result.unwrap(), IntegrateOutcome::Declined);
+    assert_eq!(mode_of(&hook), 0o600);
+    fix.go("integrate-3", IntegrateMode::Yes, false).0.unwrap();
+    assert_eq!(mode_of(&hook), 0o755);
+    undo(
+        &fix.roots(),
+        &UndoRequest {
+            target: "integrate-3",
+            id: "undo-1",
+            time: "2026-06-02T00:00:00Z",
+            package_version: "0",
+            restore_anyway: &[],
+            fail_at: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(mode_of(&hook), 0o600);
+}
+
+#[test]
+fn an_owner_executable_hook_is_left_alone() {
+    let fix = Fixture::new();
+    fix.go("integrate-1", IntegrateMode::Yes, false).0.unwrap();
+    let hook = fix.live(HOOK_PATH);
+    for mode in [0o700, 0o750, 0o755, 0o775, 0o500] {
+        set_mode(&hook, mode);
+        let (result, _) = fix.go("integrate-2", IntegrateMode::Yes, false);
+        assert_eq!(result.unwrap(), IntegrateOutcome::AlreadyDone, "{mode:o}");
+        assert_eq!(mode_of(&hook), mode);
+    }
+    for mode in [0o644, 0o610, 0o444] {
+        set_mode(&hook, mode);
+        let (result, _) = fix.go("integrate-3", IntegrateMode::DryRun, false);
+        assert_eq!(result.unwrap(), IntegrateOutcome::DryRun, "{mode:o}");
+    }
+    for mode in [0o011, 0o000] {
+        set_mode(&hook, mode);
+        let (result, _) = fix.go("integrate-4", IntegrateMode::Yes, false);
+        assert!(result.is_err(), "{mode:o}");
+        assert_eq!(mode_of(&hook), mode);
+    }
+}
+
+#[test]
+fn a_menu_file_with_an_escaped_id_is_left_alone() {
+    let fix = Fixture::new();
+    let text = "{\n  \"update\\u002edrift\": {\"label\": \"Mine\"}\n}\n";
+    fs::write(fix.live(MENU_PATH), text).unwrap();
+    let (result, _) = fix.go("integrate-1", IntegrateMode::Yes, false);
+    let IntegrateOutcome::Applied(report) = result.unwrap() else {
+        panic!("the hook is still new");
+    };
+    assert_eq!(report.applied, [HOOK_PATH]);
+    assert_eq!(fs::read_to_string(fix.live(MENU_PATH)).unwrap(), text);
+}

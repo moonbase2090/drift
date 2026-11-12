@@ -146,6 +146,54 @@ fn scan(text: &str) -> Result<Scan, Error> {
     }
 }
 
+fn hex4(chars: &mut std::str::Chars<'_>) -> Result<u32, Error> {
+    let digits: String = chars.by_ref().take(4).collect();
+    if digits.len() != 4 {
+        return Err(fail("bad escape in a key of the menu file"));
+    }
+    u32::from_str_radix(&digits, 16).map_err(|_| fail("bad escape in a key of the menu file"))
+}
+
+fn decode_key(raw: &str) -> Result<String, Error> {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let decoded = match chars.next() {
+            Some('"') => '"',
+            Some('\\') => '\\',
+            Some('/') => '/',
+            Some('b') => '\u{8}',
+            Some('f') => '\u{c}',
+            Some('n') => '\n',
+            Some('r') => '\r',
+            Some('t') => '\t',
+            Some('u') => {
+                let unit = hex4(&mut chars)?;
+                let code = if (0xd800..0xdc00).contains(&unit) {
+                    if chars.next() != Some('\\') || chars.next() != Some('u') {
+                        return Err(fail("bad escape in a key of the menu file"));
+                    }
+                    let low = hex4(&mut chars)?;
+                    if !(0xdc00..0xe000).contains(&low) {
+                        return Err(fail("bad escape in a key of the menu file"));
+                    }
+                    0x10000 + ((unit - 0xd800) << 10) + (low - 0xdc00)
+                } else {
+                    unit
+                };
+                char::from_u32(code).ok_or_else(|| fail("bad escape in a key of the menu file"))?
+            }
+            _ => return Err(fail("bad escape in a key of the menu file")),
+        };
+        out.push(decoded);
+    }
+    Ok(out)
+}
+
 impl Scanner<'_> {
     fn step(&mut self) -> Result<(), Error> {
         let byte = self.bytes[self.index];
@@ -208,7 +256,7 @@ impl Scanner<'_> {
             }
         }
         if self.depth == 1 && self.expect_key {
-            self.keys.push(self.text[start..self.index].to_string());
+            self.keys.push(decode_key(&self.text[start..self.index])?);
             self.expect_key = false;
         }
         self.last = Last::Value(self.index);
@@ -458,5 +506,54 @@ mod tests {
             created.contains("+#!/bin/bash\n+drift notify\n"),
             "{created}"
         );
+    }
+
+    #[test]
+    fn an_escaped_spelling_of_the_id_counts_as_present() {
+        for key in [
+            "update\\u002edrift",
+            "update\\u002Edrift",
+            "\\u0075pdate.drift",
+            "update\\u002e\\u0064rift",
+            "update.drif\\u0074",
+        ] {
+            let text = format!("{{\n  \"{key}\": {{\"label\": \"Mine\"}}\n}}\n");
+            assert_eq!(add_menu_row(Some(&text)).unwrap(), None, "{key}");
+        }
+    }
+
+    #[test]
+    fn other_escapes_in_keys_are_decoded_and_bad_ones_refused() {
+        let text = "{ \"a\\\"b\": 1, \"c\\/d\": 2, \"\\ud83d\\ude00\": 3 }";
+        assert!(add_menu_row(Some(text)).unwrap().is_some());
+        for bad in [
+            "{ \"update\\x2edrift\": 1 }",
+            "{ \"update\\u00zzdrift\": 1 }",
+            "{ \"update\\u00\": 1 }",
+            "{ \"update\\ud83d\": 1 }",
+            "{ \"update\\ude00\": 1 }",
+            "{ \"a\\ud83d\\u0041\": 1 }",
+            "{ \"a\\ud83dx\": 1 }",
+        ] {
+            assert!(add_menu_row(Some(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_similar_looking_key_is_not_the_id() {
+        for key in ["update\\u002fdrift", "update.drift\\u0020", "Update.drift"] {
+            let text = format!("{{ \"{key}\": 1 }}");
+            assert!(add_menu_row(Some(&text)).unwrap().is_some(), "{key}");
+        }
+    }
+
+    #[test]
+    fn keys_decode_to_their_text() {
+        assert_eq!(decode_key("\\ud83d\\ude00").unwrap(), "\u{1f600}");
+        assert_eq!(
+            decode_key("\\u00e9\\n\\t\\\\\\\"").unwrap(),
+            "\u{e9}\n\t\\\""
+        );
+        assert_eq!(decode_key("plain é").unwrap(), "plain é");
     }
 }
