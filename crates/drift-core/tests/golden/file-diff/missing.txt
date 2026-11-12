@@ -1,0 +1,13 @@
+.config/a: missing (base: reviewed)
+
+=== base ===
+x
+
+=== ours ===
+[absent]
+
+=== theirs ===
+y
+
+=== hunks ===
+[three-way merge unavailable]

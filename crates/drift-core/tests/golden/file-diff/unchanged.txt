@@ -1,0 +1,16 @@
+.config/a: unchanged (base: reviewed)
+
+=== base ===
+x
+
+=== ours ===
+x
+
+=== theirs ===
+x
+
+=== hunks ===
+[no changes]
+
+=== result ===
+x

@@ -1,0 +1,26 @@
+{
+  "badge": null,
+  "base": {
+    "sha256": "digest",
+    "state": "text",
+    "text": "x\n"
+  },
+  "base_provenance": "reviewed",
+  "hunks": [],
+  "merge_available": true,
+  "note": "",
+  "ours": {
+    "sha256": "digest",
+    "state": "text",
+    "text": "x\n"
+  },
+  "path": ".config/a",
+  "result": "x\n",
+  "schema": 1,
+  "status": "unchanged",
+  "theirs": {
+    "sha256": "digest",
+    "state": "text",
+    "text": "x\n"
+  }
+}

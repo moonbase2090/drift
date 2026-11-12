@@ -1,0 +1,16 @@
+.config/a: upstream changed (base: reviewed)
+
+=== base ===
+x
+
+=== ours ===
+x
+
+=== theirs ===
+y
+
+=== hunks ===
+1: theirs
+
+=== result ===
+y
