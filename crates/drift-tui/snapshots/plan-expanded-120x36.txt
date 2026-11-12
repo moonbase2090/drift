@@ -1,0 +1,36 @@
+          +- Apply plan txn-42 ------------------------------------------------------------------------------+          
+          | 2026-06-01T09:30:00Z - package 4.5.0-3 - 2 of 3 files will be written                            |          
+          |                                                                                                  |          
+          |   [-] merge         config/hypr/looknfeel.lua  (+3 -2)                                           |          
+          |         backup: ~/.local/state/drift/backups/txn-42/config/hypr/looknfeel.lua                    |          
+          |         @@ -1,4 +1,5 @@                                                                          |          
+          |         -gaps = 5                                                                                |          
+          |         +gaps = 8                                                                                |          
+          |          rounding = 2                                                                            |          
+          |          blur = true                                                                             |          
+          |         -shadow = false                                                                          |          
+          |         +shadow = true                                                                           |          
+          |         +animations = on                                                                         |          
+          | > [-] take upstream config/waybar/style.css  (new file, 3 lines)                                 |          
+          |         backup: none (new file)                                                                  |          
+          |         @@ -0,0 +1,3 @@                                                                          |          
+          |         +* {                                                                                     |          
+          |         +  font-size: 13px;                                                                      |          
+          |         +}                                                                                       |          
+          |   [+] keep mine     config/hypr/monitors.lua  (not written)                                      |          
+          |         backup: none (nothing is written)                                                        |          
+          |                                                                                                  |          
+          |                                                                                                  |          
+          |                                                                                                  |          
+          |                                                                                                  |          
+          |                                                                                                  |          
+          |                                                                                                  |          
+          |                                                                                                  |          
+          |                                                                                                  |          
+          |                                                                                                  |          
+          |                                                                                                  |          
+          |                                                                                                  |          
+          | 2 old transaction(s) will be removed: old-1, old-2                                               |          
+          | d expand diff  up/down select  Tab switch  y confirm  n or Esc cancel                            |          
+          |                                                                          [ Cancel ]  [>Confirm<] |          
+          +--------------------------------------------------------------------------------------------------+          
