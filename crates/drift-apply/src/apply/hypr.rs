@@ -74,7 +74,8 @@ impl HyprlandCheck for Hyprctl {
         match Command::new(&self.program).arg("configerrors").output() {
             Err(error) if error.kind() == ErrorKind::NotFound => HyprlandStatus::Missing,
             Err(error) => HyprlandStatus::Errors(error.to_string()),
-            Ok(output) => reported(&output.stdout),
+            Ok(output) if output.status.success() => reported(&output.stdout),
+            Ok(output) => failed_output(&output),
         }
     }
 }
@@ -127,6 +128,28 @@ fn reported(stdout: &[u8]) -> HyprlandStatus {
     } else {
         HyprlandStatus::Errors(trimmed.to_string())
     }
+}
+
+fn failed_output(output: &std::process::Output) -> HyprlandStatus {
+    let stdout = trimmed_loss(&output.stdout);
+    let stderr = trimmed_loss(&output.stderr);
+    let detail = if !stdout.is_empty() && !stderr.is_empty() {
+        format!("{stdout}\n{stderr}")
+    } else if !stdout.is_empty() {
+        stdout
+    } else if !stderr.is_empty() {
+        stderr
+    } else {
+        match output.status.code() {
+            Some(code) => format!("exited {code}"),
+            None => "exited without a status".to_string(),
+        }
+    };
+    HyprlandStatus::Errors(detail)
+}
+
+fn trimmed_loss(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).trim().to_string()
 }
 
 fn clean_phrase(text: &str) -> bool {

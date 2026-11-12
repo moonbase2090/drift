@@ -138,11 +138,16 @@ fn undo_of<'a>(target: &'a str, id: &'a str) -> UndoRequest<'a> {
 }
 
 fn fake_hyprctl(dir: &Path, stdout: &str, code: i32) -> PathBuf {
+    fake_hyprctl_io(dir, stdout, "", code)
+}
+
+fn fake_hyprctl_io(dir: &Path, stdout: &str, stderr: &str, code: i32) -> PathBuf {
     fs::write(dir.join("out"), stdout).unwrap();
+    fs::write(dir.join("err"), stderr).unwrap();
     let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$(dirname \"$0\")/argv\"\nif [ \"$1\" != configerrors ]; then\n  exit 2\nfi\ncat \"$(dirname \"$0\")/out\"\nexit {code}\n"
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$(dirname \"$0\")/argv\"\nif [ \"$1\" != configerrors ]; then\n  exit 2\nfi\ncat \"$(dirname \"$0\")/out\"\ncat \"$(dirname \"$0\")/err\" >&2\nexit {code}\n"
     );
-    let path = dir.join(format!("hyprctl-{code}-{}", stdout.len()));
+    let path = dir.join(format!("hyprctl-{code}-{}-{}", stdout.len(), stderr.len()));
     fs::write(&path, script).unwrap();
     let mut perms = fs::metadata(&path).unwrap().permissions();
     perms.set_mode(0o755);
@@ -193,8 +198,14 @@ fn a_fake_hyprctl_covers_no_errors_errors_and_a_missing_binary() {
     let down = fake_hyprctl(&fix.root, "", 1);
     assert_eq!(
         Hyprctl::at(down.as_os_str()).config_errors(),
-        HyprlandStatus::Clean
+        HyprlandStatus::Errors("exited 1".to_string())
     );
+    let stderr_only = fake_hyprctl_io(&fix.root, "", "cannot connect to Hyprland\n", 1);
+    assert_eq!(
+        Hyprctl::at(stderr_only.as_os_str()).config_errors(),
+        HyprlandStatus::Errors("cannot connect to Hyprland".to_string())
+    );
+    assert_eq!(argv_of(&stderr_only).trim(), "configerrors");
     let broken = fake_hyprctl(&fix.root, "Config error in file hyprland.lua: bad\n", 1);
     assert_eq!(
         Hyprctl::at(broken.as_os_str()).config_errors(),
@@ -292,6 +303,42 @@ fn reported_errors_offer_undo_and_that_undo_restores_the_previous_bytes() {
             & 0o777,
         mode
     );
+}
+
+#[test]
+fn a_stderr_only_failure_offers_undo_and_keeps_the_write() {
+    let fix = Fixture::new();
+    let program = fake_hyprctl_io(&fix.root, "", "cannot connect to Hyprland\n", 1);
+    let checked = apply_bytes(
+        &fix,
+        Write {
+            id: "txn-stderr",
+            path: "config/hypr/monitors.lua",
+            before: Some(b"mine\n"),
+            after: b"theirs\n",
+            action: Action::TakeUpstream,
+            fail_at: None,
+        },
+        &Hyprctl::at(program.as_os_str()),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(fix.live("config/hypr/monitors.lua")).unwrap(),
+        b"theirs\n"
+    );
+    let WriteFollowup::OfferUndo {
+        transaction,
+        errors,
+    } = &checked.followup
+    else {
+        panic!("{:?}", checked.followup);
+    };
+    assert_eq!(transaction, "txn-stderr");
+    assert_eq!(errors, "cannot connect to Hyprland");
+    let alert = checked.followup.alert().expect("alert");
+    assert!(alert.contains("txn-stderr"), "{alert}");
+    assert!(alert.contains("cannot connect to Hyprland"), "{alert}");
+    assert!(alert.contains("Undo this transaction?"), "{alert}");
 }
 
 #[test]
