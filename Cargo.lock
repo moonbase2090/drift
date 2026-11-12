@@ -194,6 +194,9 @@ name = "drift-source"
 version = "0.1.0"
 dependencies = [
  "drift-core",
+ "drift-fixtures",
+ "flate2",
+ "sha2",
 ]
 
 [[package]]

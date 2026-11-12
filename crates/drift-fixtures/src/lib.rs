@@ -1,6 +1,7 @@
 mod case;
 mod error;
 mod hash;
+mod root;
 mod tree;
 
 pub use case::{
@@ -9,6 +10,7 @@ pub use case::{
 };
 pub use error::Error;
 pub use hash::{hash_tree, TreeDigest};
+pub use root::{MaterializedRoot, RootBuilder};
 pub use tree::{Entry, FixtureBuilder, FixtureTrees, Node, Root};
 
 pub const LIVE_CONFIG: &str = ".config";
