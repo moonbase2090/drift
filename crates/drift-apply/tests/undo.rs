@@ -1023,3 +1023,14 @@ fn a_tampered_symlink_backup_is_refused_and_nothing_is_written() {
     );
     assert_eq!(tree(&fix), snapshot);
 }
+
+#[test]
+fn a_missing_state_directory_is_created_on_the_first_write() {
+    let fix = Fixture::new();
+    fs::remove_dir_all(fix.state("")).unwrap();
+    write_live(&fix.live(A), b"mine\n", 0o644);
+    do_apply(&fix, "txn-1", 1, &[edit(A, b"theirs\n", None)]).unwrap();
+    assert!(fix.state("backups/txn-1/manifest.json").is_file());
+    restored(do_undo(&fix, "txn-1", "undo-1"));
+    assert_eq!(fs::read(fix.live(A)).unwrap(), b"mine\n");
+}

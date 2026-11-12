@@ -1,19 +1,32 @@
+mod environment;
+
+use std::io::IsTerminal;
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use drift_apply::IntegrateMode;
 
 const USAGE: &str = "\
 Usage: drift [--snapshot [--width N] [--height N]] [--version] [--help]
+       drift integrate [--yes | --dry-run]
 
 With no arguments, drift opens the review screen.
 --snapshot prints one frame and does not take the terminal.
+integrate shows the changes it would make to the Omarchy menu and hook files and
+asks before writing. --yes skips the question; --dry-run only shows the diff.
 ";
 
 enum Action {
     Text(String),
     Snapshot { width: u16, height: u16 },
     Launch,
+    Integrate(IntegrateMode),
 }
 
 fn run(args: &[String]) -> Result<Action, String> {
+    if args.first().map(String::as_str) == Some("integrate") {
+        return integrate_mode(&args[1..]).map(Action::Integrate);
+    }
     let mut snapshot = false;
     let mut width = None;
     let mut height = None;
@@ -54,6 +67,41 @@ fn run(args: &[String]) -> Result<Action, String> {
     }
 }
 
+fn integrate_mode(args: &[String]) -> Result<IntegrateMode, String> {
+    let mut mode = IntegrateMode::Confirm;
+    for arg in args {
+        let next = match arg.as_str() {
+            "--yes" | "-y" => IntegrateMode::Yes,
+            "--dry-run" => IntegrateMode::DryRun,
+            other => return Err(format!("drift: unknown argument '{other}'\n{USAGE}")),
+        };
+        if mode != IntegrateMode::Confirm && mode != next {
+            return Err(format!(
+                "drift: --yes and --dry-run cannot be combined\n{USAGE}"
+            ));
+        }
+        mode = next;
+    }
+    Ok(mode)
+}
+
+fn integrate_now(mode: IntegrateMode) -> Result<(), String> {
+    let roots = environment::roots_from_env()?;
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?;
+    let interactive = std::io::stdin().is_terminal();
+    environment::run_integrate(
+        &roots,
+        elapsed,
+        mode,
+        interactive,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+}
+
 fn number(value: Option<&str>, flag: &str) -> Result<u16, String> {
     let Some(value) = value else {
         return Err(format!("drift: {flag} needs a number\n{USAGE}"));
@@ -82,6 +130,13 @@ fn execute(action: Result<Action, String>) -> ExitCode {
             println!("{}", drift_tui::frame_text(width, height));
             ExitCode::SUCCESS
         }
+        Ok(Action::Integrate(mode)) => match integrate_now(mode) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("drift: {error}");
+                ExitCode::from(2)
+            }
+        },
         Ok(Action::Launch) => match drift_tui::launch() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -159,5 +214,24 @@ mod tests {
         assert!(lines[0].contains("Drift"));
         assert!(lines[1].trim().is_empty());
         assert!(lines[23].contains("[Q] Quit"));
+    }
+
+    #[test]
+    fn integrate_takes_yes_or_dry_run_but_not_both() {
+        let mode = |list: &[&str]| match run(&args(list)).unwrap() {
+            Action::Integrate(mode) => mode,
+            _ => panic!("integrate"),
+        };
+        assert_eq!(mode(&["integrate"]), IntegrateMode::Confirm);
+        assert_eq!(mode(&["integrate", "--yes"]), IntegrateMode::Yes);
+        assert_eq!(mode(&["integrate", "-y", "--yes"]), IntegrateMode::Yes);
+        assert_eq!(mode(&["integrate", "--dry-run"]), IntegrateMode::DryRun);
+        assert!(run(&args(&["integrate", "--yes", "--dry-run"])).is_err());
+        assert!(run(&args(&["integrate", "--dry-run", "--yes"])).is_err());
+        assert!(run(&args(&["integrate", "--bogus"])).is_err());
+        assert_eq!(
+            execute(run(&args(&["integrate", "--bogus"]))),
+            ExitCode::from(2)
+        );
     }
 }
