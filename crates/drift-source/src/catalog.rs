@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use drift_core::{LiveFile, LiveState, Registry, RelPath, Template, Verification};
 
 use crate::error::Error;
-use crate::installed::{read_package, Check, ReadPaths};
+use crate::installed::{read_entries, Check, ReadPaths};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourcePaths {
@@ -39,7 +39,7 @@ pub struct Tracked {
 }
 
 pub fn enumerate(registry: &Registry, paths: &SourcePaths) -> Result<Vec<Tracked>, Error> {
-    let installed = read_package(&paths.package)?;
+    let installed = read_entries(&paths.package, false)?;
     let mut tracked = Vec::new();
     let mut seen_live = BTreeSet::new();
 

@@ -1,7 +1,8 @@
 use std::io::Write;
 
 use drift_core::{
-    HashOnlyReason, LiveState, LiveTreatment, Registry, Treatment, Verification, MAX_DIFF_BYTES,
+    HashOnlyReason, LiveState, LiveTreatment, Origin, Registry, RelPath, Root, Treatment,
+    Verification, MAX_DIFF_BYTES,
 };
 use drift_fixtures::RootBuilder;
 use drift_source::{enumerate, ReadPaths, SourcePaths};
@@ -444,6 +445,55 @@ fn a_missing_package_is_an_error() {
         enumerate(&Registry::v1(), &paths),
         Err(drift_source::Error::NotInstalled)
     ));
+}
+
+#[test]
+fn a_user_root_pairs_a_package_file_the_default_registry_skips() {
+    let listed = vec![
+        "usr/share/omarchy/applications/demo.desktop".to_string(),
+        "usr/share/omarchy/bin/tool".to_string(),
+    ];
+    let built = tree(
+        "1.6.0-1",
+        &listed,
+        &[
+            ("usr/share/omarchy/applications/demo.desktop", MARKER_SHA),
+            ("usr/share/omarchy/bin/tool", MARKER_SHA),
+        ],
+        |builder| {
+            builder
+                .file("usr/share/omarchy/applications/demo.desktop", MARKER)
+                .unwrap();
+            builder
+                .file("home/.local/share/applications/demo.desktop", MARKER)
+                .unwrap();
+            builder.file("usr/share/omarchy/bin/tool", MARKER).unwrap();
+        },
+    );
+    let stock = scan(&built);
+    assert!(stock.is_empty(), "{}", stock.len());
+    let root = Root::new(
+        "applications",
+        RelPath::new("applications").unwrap(),
+        RelPath::new(".local/share/applications").unwrap(),
+        Vec::new(),
+        Origin::User,
+    )
+    .unwrap();
+    let registry = Registry::v1().with_roots(vec![root]).unwrap();
+    let tracked = enumerate(&registry, &paths(&built)).unwrap();
+    assert_eq!(tracked.len(), 1);
+    let template = tracked[0].template.as_ref().unwrap();
+    assert_eq!(template.path().as_str(), "applications/demo.desktop");
+    assert_eq!(
+        template.live_path().as_str(),
+        ".local/share/applications/demo.desktop"
+    );
+    assert_eq!(template.verification(), Verification::Verified);
+    assert_eq!(
+        tracked[0].live.as_ref().unwrap().path().as_str(),
+        ".local/share/applications/demo.desktop"
+    );
 }
 
 #[test]

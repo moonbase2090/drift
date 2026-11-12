@@ -82,8 +82,12 @@ impl RootBuilder {
             if !dest.starts_with(dir.path()) {
                 return Err(Error::message(&dest, "path is outside the tree"));
             }
-            if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent).map_err(|source| Error::io(parent, source))?;
+            let parent = dest
+                .parent()
+                .ok_or_else(|| Error::message(&dest, "path is outside the tree"))?;
+            crate::tree::ensure_real_dir(dir.path(), parent)?;
+            if crate::tree::is_symlink(&dest)? {
+                return Err(Error::message(&dest, "refusing to follow a symlink"));
             }
             match node {
                 Node::Bytes { bytes, mode } => {
@@ -152,5 +156,29 @@ mod tests {
             std::path::PathBuf::from("../elsewhere/a.lua")
         );
         assert!(fs::read(linked.path().join("home/.config/secret")).is_err());
+    }
+
+    #[test]
+    fn a_link_ancestor_cannot_escape_the_root() {
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim");
+        fs::write(&victim, b"original").unwrap();
+        let target = outside
+            .path()
+            .to_str()
+            .expect("temporary path is utf-8")
+            .to_string();
+        let error = RootBuilder::new()
+            .link("a", target)
+            .unwrap()
+            .file("a/victim", b"overwritten")
+            .unwrap()
+            .materialize()
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("refusing to follow a symlink"),
+            "{error}"
+        );
+        assert_eq!(fs::read(&victim).unwrap(), b"original");
     }
 }
