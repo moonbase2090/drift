@@ -7,6 +7,7 @@ mod merge;
 mod path;
 mod plan;
 mod registry;
+mod report;
 mod rows;
 mod status;
 
@@ -23,6 +24,7 @@ pub use plan::{Action, ObservedFile, Plan, PlannedFile};
 pub use registry::{
     Mapping, Origin, Registry, Root, BUILTIN_CONFIG_ROOT, VOLATILE_CHROMIUM_PREFERENCES,
 };
+pub use report::{counts_as_drift, BackupSummary, ScanEntry, ScanReport, SCHEMA};
 pub use rows::{
     DiffRows, LineEnding, LineNumbers, Mark, Row, RowCache, Span, MAX_SPAN_GRAPHEMES, TAB_WIDTH,
 };
