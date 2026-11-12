@@ -149,9 +149,30 @@ fn scan(text: &str) -> Result<Scan, Error> {
 fn hex4(chars: &mut std::str::Chars<'_>) -> Result<u32, Error> {
     let digits: String = chars.by_ref().take(4).collect();
     if digits.len() != 4 {
-        return Err(fail("bad escape in a key of the menu file"));
+        return Err(bad_escape());
     }
-    u32::from_str_radix(&digits, 16).map_err(|_| fail("bad escape in a key of the menu file"))
+    u32::from_str_radix(&digits, 16).map_err(|_| bad_escape())
+}
+
+fn bad_escape() -> Error {
+    fail("bad escape in a key of the menu file")
+}
+
+fn decode_unicode(chars: &mut std::str::Chars<'_>) -> Result<char, Error> {
+    let unit = hex4(chars)?;
+    let code = if (0xd800..0xdc00).contains(&unit) {
+        if chars.next() != Some('\\') || chars.next() != Some('u') {
+            return Err(bad_escape());
+        }
+        let low = hex4(chars)?;
+        if !(0xdc00..0xe000).contains(&low) {
+            return Err(bad_escape());
+        }
+        0x10000 + ((unit - 0xd800) << 10) + (low - 0xdc00)
+    } else {
+        unit
+    };
+    char::from_u32(code).ok_or_else(bad_escape)
 }
 
 fn decode_key(raw: &str) -> Result<String, Error> {
@@ -163,31 +184,14 @@ fn decode_key(raw: &str) -> Result<String, Error> {
             continue;
         }
         let decoded = match chars.next() {
-            Some('"') => '"',
-            Some('\\') => '\\',
-            Some('/') => '/',
+            Some(c @ ('"' | '\\' | '/')) => c,
             Some('b') => '\u{8}',
             Some('f') => '\u{c}',
             Some('n') => '\n',
             Some('r') => '\r',
             Some('t') => '\t',
-            Some('u') => {
-                let unit = hex4(&mut chars)?;
-                let code = if (0xd800..0xdc00).contains(&unit) {
-                    if chars.next() != Some('\\') || chars.next() != Some('u') {
-                        return Err(fail("bad escape in a key of the menu file"));
-                    }
-                    let low = hex4(&mut chars)?;
-                    if !(0xdc00..0xe000).contains(&low) {
-                        return Err(fail("bad escape in a key of the menu file"));
-                    }
-                    0x10000 + ((unit - 0xd800) << 10) + (low - 0xdc00)
-                } else {
-                    unit
-                };
-                char::from_u32(code).ok_or_else(|| fail("bad escape in a key of the menu file"))?
-            }
-            _ => return Err(fail("bad escape in a key of the menu file")),
+            Some('u') => decode_unicode(&mut chars)?,
+            _ => return Err(bad_escape()),
         };
         out.push(decoded);
     }

@@ -33,6 +33,27 @@ pub fn integrate(
     out: &mut dyn Write,
     ask: &mut dyn FnMut() -> bool,
 ) -> Result<IntegrateOutcome, String> {
+    let changes = gather(roots)?;
+    if changes.is_empty() {
+        say(out, "Drift is already integrated. Nothing to change.\n")?;
+        return Ok(IntegrateOutcome::AlreadyDone);
+    }
+    show(out, &changes)?;
+    if let Some(outcome) = confirm(mode, out, ask)? {
+        return Ok(outcome);
+    }
+    let report = commit(roots, id, time, &changes)?;
+    say(
+        out,
+        &format!(
+            "Integrated {} file(s) as transaction {id}.\n",
+            report.applied.len()
+        ),
+    )?;
+    Ok(IntegrateOutcome::Applied(report))
+}
+
+fn gather(roots: &Roots) -> Result<Vec<Change>, String> {
     let menu = read_text(&roots.live.join(MENU_PATH))?;
     let hook = read_text(&roots.live.join(HOOK_PATH))?;
     let mut changes = Vec::new();
@@ -46,28 +67,22 @@ pub fn integrate(
         });
     }
     let hook_mode = existing_mode(&roots.live.join(HOOK_PATH));
-    match hook_content(hook.as_deref()).map_err(|error| error.to_string())? {
-        Some(after) => changes.push(Change {
+    let wanted = hook_content(hook.as_deref()).map_err(|error| error.to_string())?;
+    let not_executable = hook_mode.is_some_and(|mode| mode & 0o100 == 0);
+    if wanted.is_some() || not_executable {
+        changes.push(Change {
             path: HOOK_PATH,
-            before: hook,
-            after,
-            mode: Some(HOOK_MODE),
-            from_mode: hook_mode,
-        }),
-        None if hook_mode.is_some_and(|mode| mode & 0o100 == 0) => changes.push(Change {
-            path: HOOK_PATH,
-            after: hook.clone().unwrap_or_default(),
+            after: wanted.unwrap_or_else(|| hook.clone().unwrap_or_default()),
             before: hook,
             mode: Some(HOOK_MODE),
             from_mode: hook_mode,
-        }),
-        None => {}
+        });
     }
-    if changes.is_empty() {
-        say(out, "Drift is already integrated. Nothing to change.\n")?;
-        return Ok(IntegrateOutcome::AlreadyDone);
-    }
-    for change in &changes {
+    Ok(changes)
+}
+
+fn show(out: &mut dyn Write, changes: &[Change]) -> Result<(), String> {
+    for change in changes {
         match (&change.before, change.from_mode) {
             (Some(before), Some(from)) if *before == change.after => {
                 let to = change.mode.unwrap_or(from);
@@ -87,22 +102,34 @@ pub fn integrate(
             }
         }
     }
+    Ok(())
+}
+
+fn confirm(
+    mode: IntegrateMode,
+    out: &mut dyn Write,
+    ask: &mut dyn FnMut() -> bool,
+) -> Result<Option<IntegrateOutcome>, String> {
     match mode {
         IntegrateMode::DryRun => {
             say(out, "Dry run: nothing was written.\n")?;
-            return Ok(IntegrateOutcome::DryRun);
+            Ok(Some(IntegrateOutcome::DryRun))
         }
         IntegrateMode::Confirm => {
             say(out, "Apply these changes? [y/N] ")?;
-            if !ask() {
-                say(out, "Nothing was written.\n")?;
-                return Ok(IntegrateOutcome::Declined);
+            if ask() {
+                return Ok(None);
             }
+            say(out, "Nothing was written.\n")?;
+            Ok(Some(IntegrateOutcome::Declined))
         }
-        IntegrateMode::Yes => {}
+        IntegrateMode::Yes => Ok(None),
     }
+}
+
+fn commit(roots: &Roots, id: &str, time: &str, changes: &[Change]) -> Result<ApplyReport, String> {
     let mut files = Vec::with_capacity(changes.len());
-    for change in &changes {
+    for change in changes {
         let before = change
             .before
             .as_deref()
@@ -133,7 +160,7 @@ pub fn integrate(
             allow_symlink: false,
         })
         .collect();
-    let report = apply(
+    apply(
         roots,
         &Request {
             plan: &plan,
@@ -141,15 +168,7 @@ pub fn integrate(
             fail_at: None,
         },
     )
-    .map_err(|error| error.to_string())?;
-    say(
-        out,
-        &format!(
-            "Integrated {} file(s) as transaction {id}.\n",
-            report.applied.len()
-        ),
-    )?;
-    Ok(IntegrateOutcome::Applied(report))
+    .map_err(|error| error.to_string())
 }
 
 fn say(out: &mut dyn Write, text: &str) -> Result<(), String> {
