@@ -36,18 +36,12 @@ pub struct WorkerHandle {
 }
 
 impl WorkerHandle {
-    pub(crate) fn start<F>(mut scan: F, debounce: Duration) -> Self
+    #[inline(never)]
+    pub(crate) fn start<F>(scan: F, debounce: Duration) -> Self
     where
         F: FnMut() -> Result<(), String> + Send + 'static,
     {
-        let (requests_tx, requests_rx) = mpsc::channel();
-        let (notes_tx, notes_rx) = mpsc::channel();
-        let thread = thread::spawn(move || serve(&mut scan, debounce, requests_rx, notes_tx));
-        Self {
-            requests: requests_tx,
-            notes: notes_rx,
-            thread: Some(thread),
-        }
+        launch(Box::new(scan), debounce)
     }
 
     pub(crate) fn rescan(&self) {
@@ -71,6 +65,20 @@ impl Drop for WorkerHandle {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+fn launch(
+    mut scan: Box<dyn FnMut() -> Result<(), String> + Send>,
+    debounce: Duration,
+) -> WorkerHandle {
+    let (requests_tx, requests_rx) = mpsc::channel();
+    let (notes_tx, notes_rx) = mpsc::channel();
+    let thread = thread::spawn(move || serve(&mut scan, debounce, requests_rx, notes_tx));
+    WorkerHandle {
+        requests: requests_tx,
+        notes: notes_rx,
+        thread: Some(thread),
     }
 }
 
