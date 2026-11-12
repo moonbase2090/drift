@@ -12,11 +12,13 @@ mod registry;
 mod report;
 mod rows;
 mod status;
+mod tree_view;
 
 pub use classify::{classify, Base, Classification, MergeOutcome, Versions};
 pub use config::{parse_user_roots, registry_from_user_config, USER_CONFIG_PATH};
 pub use error::{Error, Location};
 pub use file::{LiveFile, LiveState, LiveTreatment, Template, Verification};
+pub use file_diff::{DiffContent, FileDiff};
 pub use integrate::{
     add_menu_row, hook_content, unified_diff, HOOK_MODE, HOOK_PATH, MENU_ID, MENU_PATH,
 };
@@ -34,5 +36,4 @@ pub use rows::{
 pub use status::{
     content_treatment, Badge, BaseProvenance, HashOnlyReason, Status, Treatment, MAX_DIFF_BYTES,
 };
-
-pub use file_diff::{DiffContent, FileDiff};
+pub use tree_view::{RowKind, TreeRow, TreeView};

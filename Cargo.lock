@@ -244,6 +244,7 @@ dependencies = [
  "lunatui-test",
  "lunatui-theme",
  "lunatui-widgets",
+ "rustix",
  "sha2",
  "terminal_size",
  "unicode-width",
