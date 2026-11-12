@@ -1,10 +1,12 @@
 mod apply;
+mod seed;
 
 pub use apply::{
     apply, history, inspect_undo, integrate, undo, ApplyError, ApplyReport, Divergence, FailAt,
     FileStep, History, IntegrateMode, IntegrateOutcome, Payload, Request, Roots, Unapplied,
     UndoItem, UndoOutcome, UndoRequest, UndoStatus,
 };
+pub use seed::{scan, Scan, StoreRoots};
 
 pub fn crate_name() -> &'static str {
     env!("CARGO_PKG_NAME")
