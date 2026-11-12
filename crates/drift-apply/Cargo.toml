@@ -17,3 +17,4 @@ sha2 = "0.10"
 [dev-dependencies]
 drift-fixtures.workspace = true
 flate2 = "1"
+libc.workspace = true

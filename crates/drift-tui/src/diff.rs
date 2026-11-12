@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use drift_core::{
     merge3, Action, Choice, DiffRows, FileContents, Hunk, HunkKind, Mark, Merge, Plan, PlanView,
@@ -66,6 +67,7 @@ pub struct DiffScreen {
     rows: u16,
     generation: u64,
     painted: Option<Painted>,
+    force_redraw: AtomicBool,
 }
 
 struct Chip {
@@ -171,6 +173,7 @@ impl DiffScreen {
             rows: 0,
             generation: 0,
             painted: None,
+            force_redraw: AtomicBool::new(false),
         }
     }
 
@@ -314,6 +317,7 @@ impl DiffScreen {
                 self.revise();
             }
         }
+        self.force_redraw.store(true, Ordering::Relaxed);
     }
 
     fn write_plan(&mut self) {
@@ -440,7 +444,7 @@ fn default_editor(text: String) -> Result<String, String> {
     let Some(program) = std::env::var_os("EDITOR").filter(|program| !program.is_empty()) else {
         return Err(String::from("editor is not set"));
     };
-    drift_apply::edit_text(&text, &program)
+    crate::suspend::around_editor(|| drift_apply::edit_text(&text, &program))
 }
 
 fn ours_bytes(merge: &Merge) -> Vec<u8> {
@@ -845,6 +849,14 @@ impl App for DiffScreen {
             });
         } else {
             self.painted = None;
+        }
+    }
+
+    fn token_palette(&self) -> Option<&[Color]> {
+        if self.force_redraw.swap(false, Ordering::Relaxed) {
+            Some(&[])
+        } else {
+            None
         }
     }
 }

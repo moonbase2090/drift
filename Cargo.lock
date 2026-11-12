@@ -178,6 +178,7 @@ dependencies = [
  "drift-fixtures",
  "drift-source",
  "flate2",
+ "libc",
  "serde_json",
  "sha2",
 ]
@@ -237,6 +238,7 @@ dependencies = [
  "drift-apply",
  "drift-core",
  "drift-fixtures",
+ "libc",
  "lunatui",
  "lunatui-core",
  "lunatui-runtime",

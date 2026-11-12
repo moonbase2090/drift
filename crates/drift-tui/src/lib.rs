@@ -1,6 +1,7 @@
 mod diff;
 mod plan_dialog;
 mod screen;
+mod suspend;
 
 pub use diff::DiffScreen;
 pub use plan_dialog::{apply_decision, review_plan, Decision, Focus, PlanDialog};
