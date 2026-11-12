@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 drift-core.workspace = true
+drift-apply.workspace = true
 lunatui.workspace = true
 lunatui-core.workspace = true
 lunatui-runtime.workspace = true
@@ -20,3 +21,5 @@ terminal_size.workspace = true
 
 [dev-dependencies]
 lunatui-test.workspace = true
+drift-fixtures.workspace = true
+sha2 = "0.10"
