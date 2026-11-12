@@ -3,6 +3,7 @@ mod catalog;
 mod error;
 mod installed;
 mod parse;
+mod report;
 mod resolve;
 
 pub use bases::{
@@ -18,6 +19,7 @@ pub use installed::{
     read_package, Check, InstalledPackage, ReadPaths, Template, Upgrade, DEFAULT_OMARCHY_PATH,
     PACKAGE_NAME,
 };
+pub use report::{build_report, ScanPaths};
 pub use resolve::{resolve_bases, BaseQuery, ResolvePaths, ResolvedBase};
 
 pub fn crate_name() -> &'static str {

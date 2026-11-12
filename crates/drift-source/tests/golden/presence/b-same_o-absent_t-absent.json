@@ -1,0 +1,18 @@
+{
+  "backups": [],
+  "counts": {
+    "conflict": 0,
+    "local_override": 0,
+    "missing": 0,
+    "unchanged": 0,
+    "upstream_changed": 0,
+    "user_only": 0
+  },
+  "drifted": 0,
+  "files": [],
+  "ignored": 0,
+  "package_version": "4.5.0-3",
+  "reviewed_version": null,
+  "schema": 1,
+  "update_pending": false
+}

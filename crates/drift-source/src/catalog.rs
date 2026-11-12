@@ -251,13 +251,13 @@ fn live_state(path: &Path) -> Option<LiveState> {
     }
 }
 
-struct Digested {
-    len: u64,
-    utf8: bool,
-    sha256: String,
+pub(crate) struct Digested {
+    pub(crate) len: u64,
+    pub(crate) utf8: bool,
+    pub(crate) sha256: String,
 }
 
-fn digest_file(path: &Path) -> std::io::Result<Digested> {
+pub(crate) fn digest_file(path: &Path) -> std::io::Result<Digested> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 8192];

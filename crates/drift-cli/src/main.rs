@@ -1,19 +1,36 @@
+mod scan;
+
 use std::process::ExitCode;
 
 const USAGE: &str = "\
 Usage: drift [--snapshot [--width N] [--height N]] [--version] [--help]
+       drift scan
+       drift status [--json | --bar]
 
 With no arguments, drift opens the review screen.
 --snapshot prints one frame and does not take the terminal.
+scan lists every tracked file with its status. status prints a summary, as JSON with
+--json, or as a status-bar module with --bar. Exit codes: 0 no drift, 1 drift, 2 error.
 ";
 
 enum Action {
     Text(String),
     Snapshot { width: u16, height: u16 },
     Launch,
+    Scan(scan::View),
 }
 
 fn run(args: &[String]) -> Result<Action, String> {
+    match args.first().map(String::as_str) {
+        Some("scan") if args.len() == 1 => return Ok(Action::Scan(scan::View::Scan)),
+        Some("scan") => return Err(format!("drift: scan takes no arguments\n{USAGE}")),
+        Some("status") => {
+            return scan::view_from(&args[1..])
+                .map(Action::Scan)
+                .map_err(|message| format!("drift: {message}\n{USAGE}"));
+        }
+        _ => {}
+    }
     let mut snapshot = false;
     let mut width = None;
     let mut height = None;
@@ -81,6 +98,16 @@ fn execute(action: Result<Action, String>) -> ExitCode {
         Ok(Action::Snapshot { width, height }) => {
             println!("{}", drift_tui::frame_text(width, height));
             ExitCode::SUCCESS
+        }
+        Ok(Action::Scan(view)) => {
+            let paths = scan::paths_from_env();
+            match scan::run(&paths, view, &mut std::io::stdout()) {
+                Ok(code) => ExitCode::from(code),
+                Err(error) => {
+                    eprintln!("drift: {error}");
+                    ExitCode::from(2)
+                }
+            }
         }
         Ok(Action::Launch) => match drift_tui::launch() {
             Ok(()) => ExitCode::SUCCESS,
@@ -159,5 +186,24 @@ mod tests {
         assert!(lines[0].contains("Drift"));
         assert!(lines[1].trim().is_empty());
         assert!(lines[23].contains("[Q] Quit"));
+    }
+
+    #[test]
+    fn scan_and_status_are_subcommands() {
+        let view = |list: &[&str]| match run(&args(list)).unwrap() {
+            Action::Scan(view) => view,
+            _ => panic!("scan"),
+        };
+        assert_eq!(view(&["scan"]), scan::View::Scan);
+        assert_eq!(view(&["status"]), scan::View::Status);
+        assert_eq!(view(&["status", "--json"]), scan::View::Json);
+        assert_eq!(view(&["status", "--bar"]), scan::View::Bar);
+        assert!(run(&args(&["scan", "--json"])).is_err());
+        assert!(run(&args(&["status", "--json", "--bar"])).is_err());
+        assert!(run(&args(&["status", "extra"])).is_err());
+        assert_eq!(
+            execute(run(&args(&["status", "--nope"]))),
+            ExitCode::from(2)
+        );
     }
 }
