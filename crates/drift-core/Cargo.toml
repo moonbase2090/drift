@@ -10,3 +10,6 @@ publish.workspace = true
 
 [dependencies]
 toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
+
+[dev-dependencies]
+drift-fixtures.workspace = true
