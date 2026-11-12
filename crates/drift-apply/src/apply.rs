@@ -9,7 +9,10 @@ use sha2::{Digest, Sha256};
 
 use drift_core::{Action, Plan, PlannedFile};
 
+mod integrate;
 mod undo;
+
+pub use integrate::{integrate, IntegrateMode, IntegrateOutcome};
 
 pub use undo::{
     history, inspect_undo, undo, Divergence, History, UndoItem, UndoOutcome, UndoRequest,
@@ -157,6 +160,9 @@ struct DriftLock {
 
 impl DriftLock {
     fn take(state: &Path) -> Result<Self, ApplyError> {
+        if !node_exists(state) {
+            fs::create_dir_all(state).map_err(|source| bare_io(state, source))?;
+        }
         ensure_real_dir(state, state).map_err(|error| bare(error.message))?;
         let path = state.join("lock");
         match OpenOptions::new().write(true).create_new(true).open(&path) {
