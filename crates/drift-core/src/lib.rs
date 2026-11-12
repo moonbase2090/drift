@@ -2,6 +2,7 @@ mod classify;
 mod config;
 mod error;
 mod file;
+mod file_diff;
 mod integrate;
 mod merge;
 mod path;
@@ -33,3 +34,5 @@ pub use rows::{
 pub use status::{
     content_treatment, Badge, BaseProvenance, HashOnlyReason, Status, Treatment, MAX_DIFF_BYTES,
 };
+
+pub use file_diff::{DiffContent, FileDiff};

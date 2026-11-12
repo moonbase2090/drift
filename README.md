@@ -4,7 +4,7 @@ Drift is an Omarchy plugin, built with [lunatui](https://github.com/moonbase2090
 
 After an Omarchy update, or any time, it reports which files under `~/.config/hypr` and `~/.config/omarchy` still match those templates, which are local overrides, and which conflict with a newly shipped upstream change. It is meant to replace the all-or-nothing `omarchy-refresh-*` commands with a file-by-file review.
 
-**Status:** the review screen opens. The tree is empty until scanning lands. The product brief is `docs/PRD.md`.
+**Status:** read-only scan, status and file diff commands are available. The review screen opens with an empty tree. The product brief is `docs/PRD.md`.
 
 ## Review screen
 
@@ -36,6 +36,25 @@ Before anything is written, the plan dialog lists every file with its action, th
 Launch Drift from the Omarchy menu, or as a floating Hyprland window, through the [Omarchy shell-plugin](https://github.com/basecamp/omarchy/blob/quattro/manual/32-shell-plugins.md) mechanism. It is built for Omarchy 4.5 (Quattro). Package templates are read from `/usr/share/omarchy`.
 
 The interface is a path tree plus the per-file diff. Classification uses the installed package file list and, when available, a cache of the previous package version, so "matches template," "local override," and "conflicts with a new upstream change" stay distinct.
+
+## Read-only commands
+
+```sh
+drift scan
+drift status --json
+drift diff .config/hypr/hyprland.conf
+drift diff "$HOME/.config/hypr/hyprland.conf" --json
+```
+
+`diff` accepts one tracked live path, relative to home or absolute under home.
+It prints base provenance, status, base/ours/theirs contents, hunk kinds and the
+automatic merge result. JSON includes each hunk's three sides. Conflicts have no
+automatic result. Missing or unreadable sides are explicit; non-UTF-8 files and
+files over 1 MiB show their hash and size instead of content.
+
+Exit codes are 0 for no drift in the selected file, 1 for drift and 2 for an error,
+including an unknown path. Local overrides and user-only files count as no drift,
+matching `status`. These commands write no configuration or state.
 
 ## Development
 

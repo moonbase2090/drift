@@ -1,0 +1,13 @@
+.config/a: user-only (base: none)
+
+=== base ===
+[absent]
+
+=== ours ===
+x
+
+=== theirs ===
+[absent]
+
+=== hunks ===
+[three-way merge unavailable]
