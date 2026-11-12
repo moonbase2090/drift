@@ -184,25 +184,28 @@ fn a_fake_hyprctl_covers_no_errors_errors_and_a_missing_binary() {
     ] {
         let program = fake_hyprctl(&fix.root, phrase, 0);
         assert_eq!(
-            Hyprctl::at(&program).config_errors(),
+            Hyprctl::at(program.as_os_str()).config_errors(),
             HyprlandStatus::Clean,
             "{phrase:?}"
         );
         assert_eq!(argv_of(&program).trim(), "configerrors");
     }
     let down = fake_hyprctl(&fix.root, "", 1);
-    assert_eq!(Hyprctl::at(&down).config_errors(), HyprlandStatus::Clean);
+    assert_eq!(
+        Hyprctl::at(down.as_os_str()).config_errors(),
+        HyprlandStatus::Clean
+    );
     let broken = fake_hyprctl(&fix.root, "Config error in file hyprland.lua: bad\n", 1);
     assert_eq!(
-        Hyprctl::at(&broken).config_errors(),
+        Hyprctl::at(broken.as_os_str()).config_errors(),
         HyprlandStatus::Errors("Config error in file hyprland.lua: bad".to_string())
     );
     assert_eq!(
-        Hyprctl::at(fix.root.join("missing-hyprctl")).config_errors(),
+        Hyprctl::at(fix.root.join("missing-hyprctl").as_os_str()).config_errors(),
         HyprlandStatus::Missing
     );
     assert!(matches!(
-        Hyprctl::at(&fix.root).config_errors(),
+        Hyprctl::at(fix.root.as_os_str()).config_errors(),
         HyprlandStatus::Errors(_)
     ));
 }
@@ -221,7 +224,7 @@ fn no_errors_leave_the_write_in_place_without_an_offer() {
             action: Action::TakeUpstream,
             fail_at: None,
         },
-        &Hyprctl::at(&program),
+        &Hyprctl::at(program.as_os_str()),
     )
     .unwrap();
     assert_eq!(checked.followup, WriteFollowup::Clear);
@@ -258,7 +261,7 @@ fn reported_errors_offer_undo_and_that_undo_restores_the_previous_bytes() {
             action: Action::TakeUpstream,
             fail_at: None,
         },
-        &Hyprctl::at(&program),
+        &Hyprctl::at(program.as_os_str()),
     )
     .unwrap();
     assert_eq!(fs::read(fix.live(path)).unwrap(), b"theirs\n");
@@ -304,7 +307,7 @@ fn a_missing_binary_is_skipped_and_the_write_stays() {
             action: Action::TakeUpstream,
             fail_at: None,
         },
-        &Hyprctl::at(fix.root.join("missing-hyprctl")),
+        &Hyprctl::at(fix.root.join("missing-hyprctl").as_os_str()),
     )
     .unwrap();
     assert_eq!(checked.followup, WriteFollowup::Clear);

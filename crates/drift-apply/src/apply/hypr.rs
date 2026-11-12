@@ -49,7 +49,7 @@ pub struct Hyprctl {
 
 impl Default for Hyprctl {
     fn default() -> Self {
-        Self::at("hyprctl")
+        Self::at(OsStr::new("hyprctl"))
     }
 }
 
@@ -58,9 +58,9 @@ impl Hyprctl {
         Self::default()
     }
 
-    pub fn at(program: impl AsRef<OsStr>) -> Self {
+    pub fn at(program: &OsStr) -> Self {
         Self {
-            program: program.as_ref().to_os_string(),
+            program: program.to_os_string(),
         }
     }
 
