@@ -2,13 +2,13 @@ use std::ops::Range;
 
 use drift_core::{merge3, DiffRows, Hunk, HunkKind, Mark, Merge, Row, Span};
 use lunatui::{App, ControlFlow};
-use lunatui_core::{clip_display_prefix, Attrs, Color, Grid, Rect, Style};
+use lunatui_core::{clip_display_prefix, Attrs, Color, Grid, Rect, Style, CLUSTER_TAG};
 use lunatui_runtime::keymap::{Command, KeyChord, Keymap};
 use lunatui_term::{Event, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind, Scroll};
 use lunatui_theme::{Theme, Token, Variant};
 use lunatui_widgets::{
-    CodeHighlight, CodeMark, CodeView, CodeViewState, DividerId, KeyHintBar, RenderCx, Scrollbar,
-    SplitAxis, SplitDrag, SplitTree, Widget, WidgetState,
+    CodeHighlight, CodeMark, CodeView, CodeViewState, DividerId, KeyHintBar, RenderCx, SplitAxis,
+    SplitDrag, SplitLayout, SplitTree, Widget, WidgetState,
 };
 use unicode_width::UnicodeWidthChar;
 
@@ -45,6 +45,15 @@ pub struct DiffScreen {
     keymap: Keymap,
     columns: u16,
     rows: u16,
+    generation: u64,
+    painted: Option<Painted>,
+}
+
+struct Painted {
+    columns: u16,
+    rows: u16,
+    generation: u64,
+    grid: Grid,
 }
 
 #[derive(Clone)]
@@ -52,6 +61,7 @@ struct Line {
     text: String,
     spans: Vec<Range<usize>>,
     mark: Option<CodeMark>,
+    ascii: bool,
 }
 
 impl AsRef<str> for Line {
@@ -113,6 +123,8 @@ impl DiffScreen {
             keymap: keymap(),
             columns: 0,
             rows: 0,
+            generation: 0,
+            painted: None,
         }
     }
 
@@ -153,7 +165,12 @@ impl DiffScreen {
         self.columns >= WIDE && self.rows > 2
     }
 
+    fn revise(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+    }
+
     fn scroll_by(&mut self, lines: isize) {
+        self.revise();
         if lines > 0 {
             self.scroll.down(lines as usize);
         } else {
@@ -166,12 +183,14 @@ impl DiffScreen {
         if count == 0 {
             return;
         }
+        self.revise();
         let next = self.hunk as isize + delta;
         self.hunk = next.clamp(0, count as isize - 1) as usize;
         self.scroll.scroll_to(self.aligned.hunk_rows[self.hunk]);
     }
 
     fn move_focus(&mut self, delta: isize) {
+        self.revise();
         let count = PANES.len() as isize;
         self.focus = (self.focus as isize + delta).rem_euclid(count) as usize;
     }
@@ -180,6 +199,7 @@ impl DiffScreen {
         if !self.wide() {
             return;
         }
+        self.revise();
         let panes = self.tree.panes();
         let Some(pane) = panes.get(self.focus) else {
             return;
@@ -233,11 +253,7 @@ fn align(merge: &Merge) -> Aligned {
                     } else {
                         line
                     };
-                    let plain = Line {
-                        text: shown,
-                        spans: Vec::new(),
-                        mark: None,
-                    };
+                    let plain = owned_line(shown, Vec::new(), None);
                     aligned.base.push(plain.clone());
                     aligned.ours.push(plain.clone());
                     aligned.theirs.push(plain.clone());
@@ -267,11 +283,11 @@ fn push_hunk(aligned: &mut Aligned, hunk: &Hunk, index: usize, rows: &[Row]) {
             let ours = from_mark(rows, Mark::Mine);
             let theirs = from_mark(rows, Mark::Theirs);
             let base = raw_lines(&hunk.base);
-            let result = vec![Line {
-                text: "unresolved".to_string(),
-                spans: Vec::new(),
-                mark: Some(CodeMark::Error),
-            }];
+            let result = vec![owned_line(
+                "unresolved".to_string(),
+                Vec::new(),
+                Some(CodeMark::Error),
+            )];
             (base, ours, theirs, result)
         }
         HunkKind::TheirsOnly => {
@@ -333,6 +349,7 @@ fn plain(lines: &[Line]) -> Vec<Line> {
             text: line.text.clone(),
             spans: Vec::new(),
             mark: None,
+            ascii: line.ascii,
         })
         .collect()
 }
@@ -348,31 +365,19 @@ fn line_from_row(row: &Row) -> Line {
     } else {
         Some(CodeMark::Changed)
     };
-    Line {
-        text: row.text.clone(),
-        spans,
-        mark,
-    }
+    owned_line(row.text.clone(), spans, mark)
 }
 
 fn raw_lines(text: &str) -> Vec<Line> {
     split_lines(text)
         .into_iter()
-        .map(|text| Line {
-            text,
-            spans: Vec::new(),
-            mark: None,
-        })
+        .map(|text| owned_line(text, Vec::new(), None))
         .collect()
 }
 
 fn extend(into: &mut Vec<Line>, mut lines: Vec<Line>, height: usize) {
     while lines.len() < height {
-        lines.push(Line {
-            text: String::new(),
-            spans: Vec::new(),
-            mark: None,
-        });
+        lines.push(owned_line(String::new(), Vec::new(), None));
     }
     into.extend(lines);
 }
@@ -393,6 +398,16 @@ fn split_lines(text: &str) -> Vec<String> {
 
 fn ascii_line(text: &str) -> bool {
     text.bytes().all(|byte| (0x20..0x7f).contains(&byte))
+}
+
+fn owned_line(text: String, spans: Vec<Range<usize>>, mark: Option<CodeMark>) -> Line {
+    let ascii = ascii_line(&text);
+    Line {
+        text,
+        spans,
+        mark,
+        ascii,
+    }
 }
 
 fn columns_to_bytes(text: &str, span: Span) -> Option<Range<usize>> {
@@ -492,6 +507,15 @@ impl App for DiffScreen {
     fn render(&mut self, grid: &mut Grid, area: Rect, clusters: &mut lunatui_core::ClusterTable) {
         self.columns = area.width;
         self.rows = area.height;
+        if let Some(painted) = &self.painted {
+            if painted.columns == area.width
+                && painted.rows == area.height
+                && painted.generation == self.generation
+            {
+                grid.blit(&painted.grid, area, area.x, area.y);
+                return;
+            }
+        }
         let theme = Theme::builtin(Variant::Dark);
         let mut cx = RenderCx::new(grid, clusters, &theme);
         let text = Style::new()
@@ -525,6 +549,16 @@ impl App for DiffScreen {
         if hint.width > 0 && hint.height > 0 {
             KeyHintBar::new(&self.keymap).render(hint, &mut cx);
         }
+        if inline_only(grid) {
+            self.painted = Some(Painted {
+                columns: area.width,
+                rows: area.height,
+                generation: self.generation,
+                grid: grid.clone(),
+            });
+        } else {
+            self.painted = None;
+        }
     }
 }
 
@@ -534,13 +568,16 @@ impl DiffScreen {
         let layout = self.tree.layout(body);
         match mouse.kind {
             MouseKind::Down(MouseButton::Left) => {
+                self.revise();
                 self.drag
                     .press(&self.tree, &layout, mouse.column, mouse.row);
             }
             MouseKind::Drag(MouseButton::Left) => {
+                self.revise();
                 self.drag.drag(&mut self.tree, mouse.column, mouse.row);
             }
             MouseKind::Up(MouseButton::Left) => {
+                self.revise();
                 self.drag.release();
             }
             MouseKind::Scroll(Scroll::Down) => self.scroll_by(3),
@@ -550,7 +587,7 @@ impl DiffScreen {
     }
 
     fn render_wide(&mut self, body: Rect, cx: &mut RenderCx<'_>, accent: Style, text: Style) {
-        let scroll = self.prepare_scroll(body);
+        let scroll = self.prepare_scroll(body.height.saturating_sub(1));
         let layout = self.tree.layout(body);
         let panes = [
             &self.aligned.base,
@@ -568,18 +605,12 @@ impl DiffScreen {
             self.render_code(area.rect, PANES[index], lines, style, scroll, cx);
         }
         let active = self.drag.active().or_else(|| self.focused_divider());
-        layout.render_dividers(text, active, accent, cx);
+        paint_dividers(&layout, text, accent, active, cx);
     }
 
-    fn prepare_scroll(&mut self, body: Rect) -> CodeViewState {
-        let layout = self.tree.layout(body);
-        let height = layout
-            .panes
-            .get(1)
-            .map(|pane| pane.rect.height.saturating_sub(1))
-            .unwrap_or(0);
+    fn prepare_scroll(&mut self, rows: u16) -> CodeViewState {
         let mut scroll = self.scroll;
-        let area = Rect::new(0, 0, 8, height);
+        let area = Rect::new(0, 0, 8, rows);
         CodeView::new(self.aligned.base.as_slice()).sync(area, &mut scroll);
         self.scroll = scroll;
         scroll
@@ -651,13 +682,16 @@ impl DiffScreen {
         let view_area = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
         let top = scroll.top();
         let rows = usize::from(view_area.height);
+        let fast = scroll.left() == 0 && lines.iter().skip(top).take(rows).all(|line| line.ascii);
+        if fast {
+            paint_ascii(view_area, lines, top, rows, cx);
+            return;
+        }
         let mut marks = Vec::new();
-        let mut fast = scroll.left() == 0;
         for (offset, line) in lines.iter().skip(top).take(rows).enumerate() {
             if let Some(mark) = line.mark {
                 marks.push((top + offset, mark));
             }
-            fast = fast && ascii_line(&line.text);
         }
         marks.push((usize::MAX, CodeMark::Changed));
         let state = if self.focused() == title {
@@ -665,10 +699,6 @@ impl DiffScreen {
         } else {
             WidgetState::Normal
         };
-        if fast {
-            paint_ascii(view_area, lines, top, rows, cx);
-            return;
-        }
         let hits = Hits { lines };
         CodeView::new(lines)
             .view(&scroll)
@@ -676,6 +706,51 @@ impl DiffScreen {
             .highlight(&hits)
             .state(state)
             .render(view_area, cx);
+    }
+}
+
+struct DimRun {
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+}
+
+impl DimRun {
+    fn new() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        }
+    }
+
+    fn push(&mut self, cx: &mut RenderCx<'_>, style: Style, x: u16, y: u16, width: u16) {
+        if width == 0 {
+            return;
+        }
+        if self.height > 0
+            && self.x == x
+            && self.width == width
+            && self.y.saturating_add(self.height) == y
+        {
+            self.height = self.height.saturating_add(1);
+            return;
+        }
+        self.flush(cx, style);
+        self.x = x;
+        self.y = y;
+        self.width = width;
+        self.height = 1;
+    }
+
+    fn flush(&mut self, cx: &mut RenderCx<'_>, style: Style) {
+        if self.height == 0 || self.width == 0 {
+            return;
+        }
+        cx.set_style(Rect::new(self.x, self.y, self.width, self.height), style);
+        self.height = 0;
     }
 }
 
@@ -687,11 +762,33 @@ fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mu
     let gutter = places.saturating_add(2);
     let bar = u16::from(view_area.width > gutter && lines.len() > rows);
     let text_width = view_area.width.saturating_sub(gutter).saturating_sub(bar);
-    if view_area.width > 0 && view_area.height > 0 {
-        cx.fill(view_area, plain, ' ');
-    }
     let text_x = view_area.x.saturating_add(gutter.min(view_area.width));
     let limit = usize::from(text_width);
+    let shown_rows = lines.len().saturating_sub(top).min(rows);
+    let repeated = repeated_byte(lines, top, shown_rows, limit);
+    if view_area.width > 0 && view_area.height > 0 {
+        if repeated.is_some() {
+            let gutter_width = gutter.min(view_area.width);
+            if gutter_width > 0 {
+                cx.fill(
+                    Rect::new(view_area.x, view_area.y, gutter_width, view_area.height),
+                    plain,
+                    ' ',
+                );
+            }
+            let rest = rows.saturating_sub(shown_rows);
+            if rest > 0 && text_width > 0 {
+                let y = view_area
+                    .y
+                    .saturating_add(u16::try_from(shown_rows).unwrap_or(0));
+                let height = u16::try_from(rest).unwrap_or(0);
+                cx.fill(Rect::new(text_x, y, text_width, height), plain, ' ');
+            }
+        } else {
+            cx.fill(view_area, plain, ' ');
+        }
+    }
+    let mut dims = DimRun::new();
     for (offset, line) in lines.iter().skip(top).take(rows).enumerate() {
         let y = view_area
             .y
@@ -710,9 +807,10 @@ fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mu
             let x = view_area.x.saturating_add(1).saturating_add(
                 u16::try_from(usize::from(places).saturating_sub(shown.len())).unwrap_or(0),
             );
-            cx.put_str(x, y, shown, numbers);
+            cx.put_str(x, y, shown, plain);
+            dims.push(cx, numbers, x, y, u16::try_from(shown.len()).unwrap_or(0));
         }
-        if limit == 0 || line.text.is_empty() {
+        if repeated.is_some() || limit == 0 || line.text.is_empty() {
             continue;
         }
         let shown = if line.text.len() > limit {
@@ -734,17 +832,129 @@ fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mu
             cx.set_style(Rect::new(x, y, width, 1), highlight);
         }
     }
+    dims.flush(cx, numbers);
+    if let Some(byte) = repeated {
+        let height = u16::try_from(shown_rows).unwrap_or(0);
+        if text_width > 0 && height > 0 {
+            cx.fill(
+                Rect::new(text_x, view_area.y, text_width, height),
+                plain,
+                char::from(byte),
+            );
+        }
+    }
     if bar == 1 {
-        Scrollbar::vertical(lines.len(), rows, top).render(
+        paint_bar(
             Rect::new(
                 view_area.x + view_area.width - 1,
                 view_area.y,
                 1,
                 view_area.height,
             ),
+            lines.len(),
+            rows,
+            top,
             cx,
         );
     }
+}
+
+fn paint_dividers(
+    layout: &SplitLayout,
+    text: Style,
+    accent: Style,
+    active: Option<DividerId>,
+    cx: &mut RenderCx<'_>,
+) {
+    for divider in &layout.dividers {
+        let on = active == Some(divider.id);
+        let (glyph, style) = match (divider.axis, on) {
+            (SplitAxis::Horizontal, false) => ('│', text),
+            (SplitAxis::Horizontal, true) => ('┃', accent),
+            (SplitAxis::Vertical, false) => ('─', text),
+            (SplitAxis::Vertical, true) => ('━', accent),
+        };
+        if divider.rect.width > 0 && divider.rect.height > 0 {
+            cx.fill(divider.rect, style, glyph);
+        }
+    }
+}
+
+fn paint_bar(area: Rect, content: usize, viewport: usize, offset: usize, cx: &mut RenderCx<'_>) {
+    if area.width == 0 || area.height == 0 || content == 0 {
+        return;
+    }
+    let track = usize::from(area.height);
+    cx.fill(Rect::new(area.x, area.y, 1, area.height), Style::new(), '│');
+    let thumb_len = thumb_size(content, track, viewport);
+    let thumb_at = thumb_position(offset, content, viewport, track, thumb_len);
+    if thumb_len > 0 {
+        cx.fill(
+            Rect::new(area.x, area.y.saturating_add(thumb_at), 1, thumb_len),
+            Style::new(),
+            '█',
+        );
+    }
+}
+
+fn repeated_byte(lines: &[Line], top: usize, rows: usize, limit: usize) -> Option<u8> {
+    if limit == 0 || rows == 0 {
+        return None;
+    }
+    let mut matched = None;
+    let mut seen = 0usize;
+    for line in lines.iter().skip(top).take(rows) {
+        if line.mark.is_some() || !line.spans.is_empty() {
+            return None;
+        }
+        let bytes = line.text.as_bytes();
+        if bytes.len() < limit {
+            return None;
+        }
+        let sample = bytes[0];
+        if bytes[..limit].iter().any(|byte| *byte != sample) {
+            return None;
+        }
+        if let Some(previous) = matched {
+            if previous != sample {
+                return None;
+            }
+        } else {
+            matched = Some(sample);
+        }
+        seen += 1;
+    }
+    if seen == 0 {
+        None
+    } else {
+        matched
+    }
+}
+
+fn thumb_size(content: usize, track: usize, viewport: usize) -> u16 {
+    if content == 0 {
+        return 1;
+    }
+    let max_thumb = track.max(1);
+    let proportional = track.saturating_mul(viewport).div_ceil(content).max(1);
+    u16::try_from(proportional.min(max_thumb)).unwrap_or(1)
+}
+
+fn thumb_position(offset: usize, content: usize, viewport: usize, track: usize, thumb: u16) -> u16 {
+    if content <= viewport {
+        return 0;
+    }
+    let scrollable = content.saturating_sub(viewport);
+    let max_y = track.saturating_sub(usize::from(thumb));
+    if scrollable == 0 {
+        return 0;
+    }
+    let offset = offset.min(scrollable);
+    if offset >= scrollable {
+        return u16::try_from(max_y).unwrap_or(0);
+    }
+    let y = (offset as u128) * (max_y as u128) / (scrollable as u128);
+    u16::try_from(usize::try_from(y).unwrap_or(max_y)).unwrap_or(0)
 }
 
 fn digit_places(mut value: usize) -> u16 {
@@ -774,6 +984,17 @@ fn mark_paint(mark: CodeMark, cx: &RenderCx<'_>) -> (&'static str, Style) {
         CodeMark::Error => ("●", Style::new().fg(cx.token(Token::Fail))),
         _ => ("▎", Style::new().fg(cx.token(Token::Warn))),
     }
+}
+
+fn inline_only(grid: &Grid) -> bool {
+    for row in 0..grid.height() {
+        for word in grid.row_bits(row) {
+            if (*word as u32) & CLUSTER_TAG != 0 {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn mouse_quits(columns: u16, rows: u16, mouse: &MouseEvent) -> bool {
@@ -949,6 +1170,34 @@ mod tests {
             KeyEvent::press(KeyCode::Tab).modifiers(Modifiers::new().shift()),
         ));
         assert_eq!(screen.focused(), "hunks");
+    }
+
+    #[test]
+    fn a_second_frame_matches_the_first() {
+        let mut text = String::new();
+        for index in 0..80 {
+            text.push_str(&format!("same{index:02}\n"));
+        }
+        let mut screen = DiffScreen::new(&text, &text, &text);
+        let (first, first_clusters) = render_once(&mut screen, 200, 40);
+        let (second, second_clusters) = render_once(&mut screen, 200, 40);
+        assert_eq!(
+            styled_snapshot(&first, &first_clusters),
+            styled_snapshot(&second, &second_clusters)
+        );
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Down)));
+        let (scrolled, scrolled_clusters) = render_once(&mut screen, 200, 40);
+        assert_ne!(
+            first.display_text(&first_clusters),
+            scrolled.display_text(&scrolled_clusters)
+        );
+        let mut marked = changed();
+        let (once, once_clusters) = render_once(&mut marked, 160, 40);
+        let (again, again_clusters) = render_once(&mut marked, 160, 40);
+        assert_eq!(
+            styled_snapshot(&once, &once_clusters),
+            styled_snapshot(&again, &again_clusters)
+        );
     }
 
     #[test]

@@ -14,6 +14,10 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 
 `drift --snapshot` prints one 80×24 frame and does not take the terminal. Pass `--width` and `--height` together to print another size.
 
+A changed file opens in five columns once the window is at least 160 cells wide: the hunk list, then base, ours, theirs, and the result. The four text panes share one scroll position. `n` and `p` move between hunks, Tab moves focus, and `[` / `]` or a drag resizes the focused pane.
+
+![Four-pane diff](docs/media/four-pane.gif)
+
 ## Safety model
 
 - The first view is always a **read-only preview**. Opening Drift never writes configuration.
