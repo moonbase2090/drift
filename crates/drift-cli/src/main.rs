@@ -1,10 +1,10 @@
 mod environment;
 
-use std::io::{BufRead, IsTerminal};
+use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use drift_apply::{IntegrateMode, IntegrateOutcome};
+use drift_apply::IntegrateMode;
 
 const USAGE: &str = "\
 Usage: drift [--snapshot [--width N] [--height N]] [--version] [--help]
@@ -90,23 +90,16 @@ fn integrate_now(mode: IntegrateMode) -> Result<(), String> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?;
-    let id = format!("integrate-{}", elapsed.as_millis());
-    let time = environment::utc_timestamp(elapsed.as_secs());
     let interactive = std::io::stdin().is_terminal();
-    let mut ask = || {
-        if !interactive {
-            return false;
-        }
-        let mut line = String::new();
-        std::io::stdin().lock().read_line(&mut line).is_ok()
-            && matches!(line.trim(), "y" | "Y" | "yes")
-    };
-    let mut out = std::io::stdout();
-    let outcome = drift_apply::integrate(&roots, &id, &time, mode, &mut out, &mut ask)?;
-    if outcome == IntegrateOutcome::Declined && !interactive {
-        eprintln!("drift: not a terminal, so nothing was written; pass --yes to apply");
-    }
-    Ok(())
+    environment::run_integrate(
+        &roots,
+        elapsed,
+        mode,
+        interactive,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
 }
 
 fn number(value: Option<&str>, flag: &str) -> Result<u16, String> {

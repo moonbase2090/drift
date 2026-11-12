@@ -106,112 +106,165 @@ struct Scan {
     last: Last,
 }
 
+const NOT_AN_OBJECT: &str = "the menu file is not a JSON object";
+const UNBALANCED: &str = "unbalanced braces in the menu file";
+
+struct Scanner<'a> {
+    text: &'a str,
+    bytes: &'a [u8],
+    index: usize,
+    depth: usize,
+    started: bool,
+    expect_key: bool,
+    keys: Vec<String>,
+    last: Last,
+    close: Option<usize>,
+}
+
 fn scan(text: &str) -> Result<Scan, Error> {
-    let bytes = text.as_bytes();
-    let mut index = 0;
-    let mut depth = 0usize;
-    let mut started = false;
-    let mut expect_key = false;
-    let mut keys = Vec::new();
-    let mut last = Last::Open;
-    let mut close = None;
-    while index < bytes.len() {
-        let byte = bytes[index];
+    let mut scanner = Scanner {
+        text,
+        bytes: text.as_bytes(),
+        index: 0,
+        depth: 0,
+        started: false,
+        expect_key: false,
+        keys: Vec::new(),
+        last: Last::Open,
+        close: None,
+    };
+    while scanner.index < scanner.bytes.len() {
+        scanner.step()?;
+    }
+    match scanner.close {
+        Some(close) if scanner.depth == 0 => Ok(Scan {
+            keys: scanner.keys,
+            close,
+            last: scanner.last,
+        }),
+        _ => Err(fail(UNBALANCED)),
+    }
+}
+
+impl Scanner<'_> {
+    fn step(&mut self) -> Result<(), Error> {
+        let byte = self.bytes[self.index];
+        if matches!(byte, b' ' | b'\t' | b'\r' | b'\n' | b':') {
+            self.index += 1;
+            return Ok(());
+        }
+        if byte == b'/' && self.skip_comment()? {
+            return Ok(());
+        }
+        if self.close.is_some() {
+            return Err(fail("text after the closing brace of the menu file"));
+        }
+        if byte != b'{' && !self.started {
+            return Err(fail(NOT_AN_OBJECT));
+        }
         match byte {
-            b' ' | b'\t' | b'\r' | b'\n' => index += 1,
-            b'/' if bytes.get(index + 1) == Some(&b'/') => {
-                while index < bytes.len() && bytes[index] != b'\n' {
-                    index += 1;
-                }
-            }
-            b'/' if bytes.get(index + 1) == Some(&b'*') => match text[index + 2..].find("*/") {
-                Some(end) => index += end + 4,
-                None => return Err(fail("unterminated comment in the menu file")),
-            },
-            _ if close.is_some() => {
-                return Err(fail("text after the closing brace of the menu file"))
-            }
-            b'"' => {
-                let start = index + 1;
-                index += 1;
-                loop {
-                    match bytes.get(index) {
-                        None => return Err(fail("unterminated string in the menu file")),
-                        Some(b'\\') => index += 2,
-                        Some(b'"') => break,
-                        Some(_) => index += 1,
-                    }
-                }
-                if !started {
-                    return Err(fail("the menu file is not a JSON object"));
-                }
-                if depth == 1 && expect_key {
-                    keys.push(text[start..index].to_string());
-                    expect_key = false;
-                }
-                last = Last::Value(index);
-                index += 1;
-            }
-            b'{' | b'[' => {
-                if !started {
-                    if byte != b'{' {
-                        return Err(fail("the menu file is not a JSON object"));
-                    }
-                    started = true;
-                    expect_key = true;
-                    last = Last::Open;
-                } else {
-                    last = Last::Open;
-                }
-                depth += 1;
-                index += 1;
-            }
-            b'}' | b']' => {
-                if !started || depth == 0 {
-                    return Err(fail("unbalanced braces in the menu file"));
-                }
-                depth -= 1;
-                if depth == 0 {
-                    if byte != b'}' {
-                        return Err(fail("unbalanced braces in the menu file"));
-                    }
-                    close = Some(index);
-                } else {
-                    last = Last::Value(index);
-                }
-                index += 1;
-            }
+            b'"' => self.string(),
+            b'{' | b'[' => self.open(byte),
+            b'}' | b']' => self.shut(byte),
             b',' => {
-                if !started {
-                    return Err(fail("the menu file is not a JSON object"));
-                }
-                if depth == 1 {
-                    expect_key = true;
-                }
-                last = Last::Comma;
-                index += 1;
+                self.comma();
+                Ok(())
             }
-            b':' => index += 1,
             _ => {
-                if !started {
-                    return Err(fail("the menu file is not a JSON object"));
-                }
-                index += 1;
-                while index < bytes.len()
-                    && !matches!(
-                        bytes[index],
-                        b' ' | b'\t' | b'\r' | b'\n' | b',' | b'}' | b']' | b'/' | b':'
-                    )
-                {
-                    index += 1;
-                }
-                last = Last::Value(index - 1);
+                self.scalar();
+                Ok(())
             }
         }
     }
-    match close {
-        Some(close) if depth == 0 => Ok(Scan { keys, close, last }),
-        _ => Err(fail("unbalanced braces in the menu file")),
+
+    fn skip_comment(&mut self) -> Result<bool, Error> {
+        match self.bytes.get(self.index + 1) {
+            Some(b'/') => {
+                while self.index < self.bytes.len() && self.bytes[self.index] != b'\n' {
+                    self.index += 1;
+                }
+                Ok(true)
+            }
+            Some(b'*') => match self.text[self.index + 2..].find("*/") {
+                Some(end) => {
+                    self.index += end + 4;
+                    Ok(true)
+                }
+                None => Err(fail("unterminated comment in the menu file")),
+            },
+            _ => Ok(false),
+        }
+    }
+
+    fn string(&mut self) -> Result<(), Error> {
+        let start = self.index + 1;
+        self.index = start;
+        loop {
+            match self.bytes.get(self.index) {
+                None => return Err(fail("unterminated string in the menu file")),
+                Some(b'\\') => self.index += 2,
+                Some(b'"') => break,
+                Some(_) => self.index += 1,
+            }
+        }
+        if self.depth == 1 && self.expect_key {
+            self.keys.push(self.text[start..self.index].to_string());
+            self.expect_key = false;
+        }
+        self.last = Last::Value(self.index);
+        self.index += 1;
+        Ok(())
+    }
+
+    fn open(&mut self, byte: u8) -> Result<(), Error> {
+        if !self.started {
+            if byte != b'{' {
+                return Err(fail(NOT_AN_OBJECT));
+            }
+            self.started = true;
+            self.expect_key = true;
+        }
+        self.last = Last::Open;
+        self.depth += 1;
+        self.index += 1;
+        Ok(())
+    }
+
+    fn shut(&mut self, byte: u8) -> Result<(), Error> {
+        if self.depth == 0 {
+            return Err(fail(UNBALANCED));
+        }
+        self.depth -= 1;
+        if self.depth > 0 {
+            self.last = Last::Value(self.index);
+        } else if byte == b'}' {
+            self.close = Some(self.index);
+        } else {
+            return Err(fail(UNBALANCED));
+        }
+        self.index += 1;
+        Ok(())
+    }
+
+    fn comma(&mut self) {
+        if self.depth == 1 {
+            self.expect_key = true;
+        }
+        self.last = Last::Comma;
+        self.index += 1;
+    }
+
+    fn scalar(&mut self) {
+        self.index += 1;
+        while self.index < self.bytes.len()
+            && !matches!(
+                self.bytes[self.index],
+                b' ' | b'\t' | b'\r' | b'\n' | b',' | b'}' | b']' | b'/' | b':'
+            )
+        {
+            self.index += 1;
+        }
+        self.last = Last::Value(self.index - 1);
     }
 }
 

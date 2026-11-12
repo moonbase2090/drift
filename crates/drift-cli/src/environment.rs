@@ -1,6 +1,35 @@
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
-use drift_apply::Roots;
+use drift_apply::{IntegrateMode, IntegrateOutcome, Roots};
+
+pub fn run_integrate(
+    roots: &Roots,
+    elapsed: Duration,
+    mode: IntegrateMode,
+    interactive: bool,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    let id = format!("integrate-{}", elapsed.as_millis());
+    let time = utc_timestamp(elapsed.as_secs());
+    let mut ask = || {
+        if !interactive {
+            return false;
+        }
+        let mut line = String::new();
+        input.read_line(&mut line).is_ok() && matches!(line.trim(), "y" | "Y" | "yes")
+    };
+    let outcome = drift_apply::integrate(roots, &id, &time, mode, out, &mut ask)?;
+    if outcome == IntegrateOutcome::Declined && !interactive {
+        let note = "drift: not a terminal, so nothing was written; pass --yes to apply\n";
+        err.write_all(note.as_bytes())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
 
 pub fn roots_from_env() -> Result<Roots, String> {
     roots_from(&|name| std::env::var_os(name))
@@ -60,6 +89,72 @@ mod tests {
     use std::ffi::OsString;
 
     use super::*;
+
+    fn absent_roots() -> Roots {
+        Roots {
+            live: PathBuf::from("/nonexistent/drift-test/live"),
+            state: PathBuf::from("/nonexistent/drift-test/state"),
+            omarchy_lock: PathBuf::from("/nonexistent/drift-test/lock"),
+            pacman_lock: PathBuf::from("/nonexistent/drift-test/db.lck"),
+        }
+    }
+
+    fn drive(
+        mode: IntegrateMode,
+        interactive: bool,
+        input: &str,
+    ) -> (Result<(), String>, String, String) {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let result = run_integrate(
+            &absent_roots(),
+            Duration::from_millis(1_700_000_000_123),
+            mode,
+            interactive,
+            &mut input.as_bytes(),
+            &mut out,
+            &mut err,
+        );
+        (
+            result,
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_dry_run_shows_the_diff_and_writes_nothing() {
+        let (result, out, err) = drive(IntegrateMode::DryRun, false, "");
+        result.unwrap();
+        assert!(out.contains("+++ b/hooks/post-update.d/drift"), "{out}");
+        assert!(out.contains("Dry run"), "{out}");
+        assert!(err.is_empty(), "{err}");
+    }
+
+    #[test]
+    fn without_a_terminal_nothing_is_written_and_the_user_is_told() {
+        let (result, out, err) = drive(IntegrateMode::Confirm, false, "y\n");
+        result.unwrap();
+        assert!(out.contains("Nothing was written"), "{out}");
+        assert!(err.contains("pass --yes"), "{err}");
+    }
+
+    #[test]
+    fn only_a_yes_answer_goes_on_to_write() {
+        for answer in ["n\n", "\n", "maybe\n", ""] {
+            let (result, out, err) = drive(IntegrateMode::Confirm, true, answer);
+            result.unwrap();
+            assert!(out.contains("Nothing was written"), "{answer:?} {out}");
+            assert!(err.is_empty(), "{err}");
+        }
+        for answer in ["y\n", "Y\n", "yes\n", "  yes  \n"] {
+            let (result, _, _) = drive(IntegrateMode::Confirm, true, answer);
+            let error = result.unwrap_err();
+            assert!(
+                error.contains("/nonexistent/drift-test"),
+                "{answer:?} {error}"
+            );
+        }
+    }
 
     #[test]
     fn timestamps_are_utc_iso_8601() {
