@@ -77,6 +77,28 @@ fn scan(tree: &Tree) -> Vec<drift_source::Tracked> {
     enumerate(&Registry::v1(), &paths(tree)).unwrap()
 }
 
+fn paired(version: &str, rel: &str, fill: impl FnOnce(&mut RootBuilder)) -> drift_core::LiveFile {
+    let listed = vec![format!("usr/share/omarchy/config/{rel}")];
+    let package = listed[0].clone();
+    let built = tree(
+        version,
+        &listed,
+        &[(package.as_str(), MARKER_SHA)],
+        |builder| {
+            builder
+                .file(format!("usr/share/omarchy/config/{rel}"), MARKER)
+                .unwrap();
+            fill(builder);
+        },
+    );
+    scan(&built)
+        .into_iter()
+        .find(|item| item.template.is_some())
+        .unwrap()
+        .live
+        .unwrap()
+}
+
 #[test]
 fn forty_nine_config_templates_are_paired() {
     let mut listed = Vec::new();
@@ -431,6 +453,119 @@ fn the_registry_volatile_file_is_marked_on_both_sides() {
         .unwrap();
     assert!(!bookmarks.template.as_ref().unwrap().is_volatile());
     assert!(!bookmarks.live.as_ref().unwrap().is_volatile());
+    assert_eq!(
+        prefs.template.as_ref().unwrap().note(),
+        "app rewrites this file"
+    );
+    assert_eq!(
+        prefs.live.as_ref().unwrap().note(),
+        "app rewrites this file"
+    );
+    assert_eq!(bookmarks.template.as_ref().unwrap().note(), "");
+    assert_eq!(bookmarks.live.as_ref().unwrap().note(), "");
+}
+
+#[test]
+fn a_symlink_note_names_the_destination_and_not_the_target_bytes() {
+    let live = paired("1.7.0-1", "hypr/a.lua", |builder| {
+        builder
+            .link("home/.config/hypr/a.lua", "../elsewhere/a.lua")
+            .unwrap();
+        builder
+            .file("home/.config/hypr/elsewhere/a.lua", b"hidden\n")
+            .unwrap();
+    });
+    assert_eq!(live.note(), "read-only symlink to ../elsewhere/a.lua");
+    assert_eq!(live.content_hash(), None);
+    let debug = format!("{:?}", live.state());
+    assert!(!debug.contains("hidden"));
+    assert!(debug.len() < 160, "{debug}");
+}
+
+#[test]
+fn an_unreadable_file_is_noted_and_the_scan_finishes() {
+    let live = paired("1.8.0-1", "hypr/secret.lua", |builder| {
+        builder
+            .file_with_mode("home/.config/hypr/secret.lua", b"secret-bytes\n", 0)
+            .unwrap();
+    });
+    assert_eq!(live.note(), "unreadable");
+    assert_eq!(live.treatment(), LiveTreatment::Unreadable);
+    assert_eq!(live.content_hash(), None);
+    let debug = format!("{:?}", live.state());
+    assert!(!debug.contains("secret-bytes"));
+}
+
+#[test]
+fn a_non_utf8_file_is_hash_only_and_keeps_no_payload() {
+    const DIGEST: &str = "b3d510ef04275ca8e698e5b3cbb0ece3949ef9252f0cdc839e9ee347409a2209";
+    let live = paired("1.9.0-1", "hypr/binary.lua", |builder| {
+        builder
+            .file("home/.config/hypr/binary.lua", [0xff, 0xfe])
+            .unwrap();
+    });
+    assert_eq!(live.note(), "hash only, not UTF-8");
+    assert_eq!(
+        live.treatment(),
+        LiveTreatment::Content(Treatment::HashOnly(HashOnlyReason::NonUtf8))
+    );
+    assert_eq!(live.content_hash(), Some(DIGEST));
+    let debug = format!("{:?}", live.state());
+    assert!(debug.len() < 160, "{debug}");
+    assert!(!debug.contains("secret-bytes"));
+    assert!(debug.contains(DIGEST));
+}
+
+#[test]
+fn an_oversize_file_is_hash_only_and_keeps_no_payload() {
+    const DIGEST: &str = "4a3f0c0c213adea174f9a3d4c13177315b588bdb2e9c1012d3d0bf0453ca0f6a";
+    let huge = vec![b'a'; MAX_DIFF_BYTES as usize + 1];
+    let live = paired("1.10.0-1", "hypr/huge.lua", |builder| {
+        builder.file("home/.config/hypr/huge.lua", huge).unwrap();
+    });
+    assert_eq!(live.note(), "hash only, larger than 1 MiB");
+    assert_eq!(
+        live.treatment(),
+        LiveTreatment::Content(Treatment::HashOnly(HashOnlyReason::Oversize))
+    );
+    assert_eq!(live.content_hash(), Some(DIGEST));
+    let debug = format!("{:?}", live.state());
+    assert!(debug.len() < 160, "{debug}");
+    assert!(!debug.contains(&"a".repeat(32)));
+}
+
+#[test]
+fn a_volatile_file_notes_that_the_app_rewrites_it() {
+    let live = paired("1.11.0-1", "chromium/Default/Preferences", |builder| {
+        builder
+            .file("home/.config/chromium/Default/Preferences", MARKER)
+            .unwrap();
+    });
+    assert_eq!(live.note(), "app rewrites this file");
+    assert!(live.is_volatile());
+    let bookmarks = paired("1.11.0-1", "chromium/Default/Bookmarks", |builder| {
+        builder
+            .file("home/.config/chromium/Default/Bookmarks", MARKER)
+            .unwrap();
+    });
+    assert_eq!(bookmarks.note(), "");
+    assert!(!bookmarks.note().contains("app rewrites this file"));
+}
+
+#[test]
+fn a_utf8_character_split_across_reads_stays_diffable() {
+    const DIGEST: &str = "270098c7daaf49db7300d5d03ef353dc8a57eeeeaedc2768879b0b76fe85040f";
+    let mut bytes = vec![b'a'; 8191];
+    bytes.extend_from_slice(&[0xc3, 0xa9]);
+    let live = paired("1.12.0-1", "hypr/split.lua", |builder| {
+        builder.file("home/.config/hypr/split.lua", bytes).unwrap();
+    });
+    assert_eq!(live.note(), "");
+    assert_eq!(
+        live.treatment(),
+        LiveTreatment::Content(Treatment::Diffable)
+    );
+    assert_eq!(live.content_hash(), Some(DIGEST));
 }
 
 #[test]

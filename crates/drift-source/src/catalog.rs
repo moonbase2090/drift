@@ -1,6 +1,9 @@
 use std::collections::BTreeSet;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
 
 use drift_core::{LiveFile, LiveState, Registry, RelPath, Template, Verification};
 
@@ -163,14 +166,86 @@ fn live_state(path: &Path) -> Option<LiveState> {
     if !meta.is_file() {
         return Some(LiveState::Unreadable);
     }
-    match fs::read(path) {
-        Ok(bytes) => Some(LiveState::Regular {
-            len: bytes.len() as u64,
-            utf8: std::str::from_utf8(&bytes).is_ok(),
+    match digest_file(path) {
+        Ok(digested) => Some(LiveState::Regular {
+            len: digested.len,
+            utf8: digested.utf8,
+            sha256: digested.sha256,
         }),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => Some(LiveState::Unreadable),
     }
+}
+
+struct Digested {
+    len: u64,
+    utf8: bool,
+    sha256: String,
+}
+
+fn digest_file(path: &Path) -> std::io::Result<Digested> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+    let mut len = 0u64;
+    let mut pending = [0u8; 3];
+    let mut pending_len = 0usize;
+    let mut utf8 = true;
+    loop {
+        let read = file.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+        if utf8 && !accept_utf8(&mut pending, &mut pending_len, &buf[..read]) {
+            utf8 = false;
+        }
+        len += read as u64;
+    }
+    if pending_len > 0 {
+        utf8 = false;
+    }
+    Ok(Digested {
+        len,
+        utf8,
+        sha256: hex_digest(&hasher.finalize()),
+    })
+}
+
+fn accept_utf8(pending: &mut [u8; 3], pending_len: &mut usize, chunk: &[u8]) -> bool {
+    let mut scratch = [0u8; 8195];
+    let total = *pending_len + chunk.len();
+    if total > scratch.len() {
+        return false;
+    }
+    scratch[..*pending_len].copy_from_slice(&pending[..*pending_len]);
+    scratch[*pending_len..total].copy_from_slice(chunk);
+    match std::str::from_utf8(&scratch[..total]) {
+        Ok(_) => {
+            *pending_len = 0;
+            true
+        }
+        Err(error) if error.error_len().is_none() => {
+            let tail = total - error.valid_up_to();
+            if tail > pending.len() {
+                return false;
+            }
+            pending[..tail].copy_from_slice(&scratch[error.valid_up_to()..total]);
+            *pending_len = tail;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn hex_digest(digest: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0xf) as usize] as char);
+    }
+    out
 }
 
 fn read_children(dir: &Path) -> Option<Vec<String>> {
@@ -213,4 +288,32 @@ fn track_key(item: &Tracked) -> (String, String) {
             .map(|live| live.path().as_str().to_string())
             .unwrap_or_default(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::accept_utf8;
+
+    #[test]
+    fn utf8_continues_across_a_read_boundary() {
+        let mut pending = [0u8; 3];
+        let mut pending_len = 0;
+        assert!(accept_utf8(&mut pending, &mut pending_len, &[b'a', 0xc3]));
+        assert_eq!(pending_len, 1);
+        assert_eq!(pending[0], 0xc3);
+        assert!(accept_utf8(&mut pending, &mut pending_len, &[0xa9, b'b']));
+        assert_eq!(pending_len, 0);
+        assert!(accept_utf8(&mut pending, &mut pending_len, &[0xe2, 0x82]));
+        assert_eq!(pending_len, 2);
+        assert!(accept_utf8(&mut pending, &mut pending_len, &[0xac]));
+        assert_eq!(pending_len, 0);
+    }
+
+    #[test]
+    fn a_broken_byte_stops_the_utf8_check() {
+        let mut pending = [0u8; 3];
+        let mut pending_len = 0;
+        assert!(!accept_utf8(&mut pending, &mut pending_len, &[0xff, 0xfe]));
+        assert!(!accept_utf8(&mut pending, &mut pending_len, &[0xc3, 0x20]));
+    }
 }
