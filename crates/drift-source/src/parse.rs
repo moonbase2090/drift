@@ -262,4 +262,27 @@ etc/foo
     fn a_corrupt_mtree_is_rejected() {
         assert!(matches!(mtree_hashes(b"not gzip"), Err(Error::BadMtree)));
     }
+
+    #[test]
+    fn mtree_unescapes_octal_and_controls() {
+        let text = "/set type=file\n./usr/share/omarchy/config/a\\n\\t\\r\\7\\40\\040\\\\b.lua sha256digest=abc\n";
+        let map = mtree_text(text).unwrap();
+        assert_eq!(
+            map.keys().next().map(String::as_str),
+            Some("usr/share/omarchy/config/a\n\t\r\u{7}  \\b.lua")
+        );
+    }
+
+    #[test]
+    fn broken_mtree_escapes_are_rejected() {
+        for line in [
+            "./usr/share/omarchy/config/a\\q.lua sha256digest=abc",
+            "./usr/share/omarchy/config/a\\",
+            "./usr/share/omarchy/config/a\\777.lua sha256digest=abc",
+            "./usr/share/omarchy/config/a\\377.lua sha256digest=abc",
+        ] {
+            let text = format!("/set type=file\n{line}\n");
+            assert!(matches!(mtree_text(&text), Err(Error::BadMtree)), "{line}");
+        }
+    }
 }

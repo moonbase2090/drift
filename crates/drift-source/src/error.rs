@@ -47,3 +47,37 @@ impl std::error::Error for Error {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as StdError;
+
+    use super::*;
+
+    #[test]
+    fn messages_name_the_failure() {
+        let missing = Error::io(
+            "var/lib/pacman/local",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "gone"),
+        );
+        let text = missing.to_string();
+        assert!(text.contains("var/lib/pacman/local"), "{text}");
+        assert!(text.contains("gone"), "{text}");
+        assert!(StdError::source(&missing).is_some());
+        let cases = [
+            (Error::NotInstalled, "omarchy-settings is not installed"),
+            (
+                Error::Ambiguous(2),
+                "found 2 omarchy-settings database entries",
+            ),
+            (Error::MissingDesc, "package entry has no desc"),
+            (Error::MissingFileList, "package entry has no file list"),
+            (Error::MissingVersion, "package entry has no version"),
+            (Error::BadMtree, "package mtree could not be read"),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+            assert!(StdError::source(&error).is_none());
+        }
+    }
+}
