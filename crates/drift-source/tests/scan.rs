@@ -572,7 +572,6 @@ fn a_missing_package_is_an_error_and_not_an_empty_report() {
 }
 
 fn fifo(path: &Path) {
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let status = std::process::Command::new("mkfifo")
         .arg(path)
         .status()
@@ -630,7 +629,8 @@ fn a_link_to_a_fifo_and_a_fifo_template_are_unreadable_and_never_opened() {
     let mut builder = WorldBuilder::new();
     builder
         .listed_only("hypr/t.lua", b"t\n")
-        .live("hypr/t.lua", b"t\n");
+        .live("hypr/t.lua", b"t\n")
+        .file("usr/share/omarchy/config/hypr/keep", b"k\n");
     let world = builder.build("4.5.0-3");
     fifo(
         &world
@@ -647,7 +647,8 @@ fn a_fifo_in_the_skel_copy_is_never_opened() {
     let mut builder = WorldBuilder::new();
     builder
         .listed_only("hypr/a.lua", b"x\n")
-        .live("hypr/a.lua", b"x\n");
+        .live("hypr/a.lua", b"x\n")
+        .file("skel/.config/hypr/keep", b"k\n");
     let world = builder.build("4.5.0-3");
     fifo(&world.root.path().join("skel/.config/hypr/a.lua"));
     let report = report_within(world, 20);
