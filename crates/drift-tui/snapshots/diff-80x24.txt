@@ -2,9 +2,9 @@
 Diff  1 ours                                                                    
 stacked                                                                         
   alpha                                                                         
+- hello world                                                                   
 + hello WORLD                                                                   
   omega                                                                         
-                                                                                
                                                                                 
                                                                                 
                                                                                 

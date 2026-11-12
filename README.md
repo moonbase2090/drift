@@ -18,7 +18,7 @@ A changed file opens in five columns once the window is at least 160 cells wide:
 
 ![Four-pane diff](docs/media/four-pane.gif)
 
-Below 160 columns the same file uses fewer panes. From 100 columns it shows ours and theirs side by side, with the result underneath. Narrower than that, the rows stack in one column and a changed line is marked. `v` cycles those layouts. A resize that crosses a width boundary follows the width again and keeps the selected hunk. A file with no base stays on two panes, and the header says the base is unknown.
+Below 160 columns the same file uses fewer panes. From 100 columns it shows ours and theirs side by side, with the result underneath. Narrower than that, the rows stack in one column. A removed line keeps a minus mark, an added line keeps a plus mark, and a conflict shows ours and theirs. `v` cycles those layouts. A resize that crosses a width boundary follows the width again and keeps the selected hunk. A file with no base stays on two panes, and the header says the base is unknown.
 
 ![Narrower diff layouts](docs/media/layout-cycle.gif)
 

@@ -66,6 +66,7 @@ pub struct DiffScreen {
     columns: u16,
     rows: u16,
     generation: u64,
+    stacked_scroll: Option<bool>,
     painted: Option<Painted>,
 }
 
@@ -97,6 +98,8 @@ struct Aligned {
     result: Vec<Line>,
     hunk_rows: Vec<usize>,
     hunk_labels: Vec<String>,
+    stacked: Vec<String>,
+    stacked_hunk_rows: Vec<usize>,
 }
 
 struct Hits<'a> {
@@ -153,6 +156,7 @@ impl DiffScreen {
             columns: 0,
             rows: 0,
             generation: 0,
+            stacked_scroll: None,
             painted: None,
         }
     }
@@ -253,7 +257,20 @@ impl DiffScreen {
         self.revise();
         let next = self.hunk as isize + delta;
         self.hunk = next.clamp(0, count as isize - 1) as usize;
-        self.scroll.scroll_to(self.aligned.hunk_rows[self.hunk]);
+        self.scroll.scroll_to(self.hunk_scroll_row());
+    }
+
+    fn stacked_unified(&self) -> bool {
+        self.effective() == Layout::Stacked && !self.two_way
+    }
+
+    fn hunk_scroll_row(&self) -> usize {
+        let rows = if self.stacked_unified() {
+            &self.aligned.stacked_hunk_rows
+        } else {
+            &self.aligned.hunk_rows
+        };
+        rows.get(self.hunk).copied().unwrap_or(0)
     }
 
     fn move_focus(&mut self, delta: isize) {
@@ -350,12 +367,15 @@ fn align(merge: &Merge) -> Aligned {
         result: Vec::new(),
         hunk_rows: Vec::new(),
         hunk_labels: Vec::new(),
+        stacked: Vec::new(),
+        stacked_hunk_rows: Vec::new(),
     };
     let mut hunk_index = 0;
     for segment in merge.segments() {
         match segment {
             drift_core::Segment::Stable(text) => {
                 for line in split_lines(text) {
+                    aligned.stacked.push(format!("  {line}"));
                     let shown = if at < rows.len() && rows[at].hunk.is_none() {
                         let text = rows[at].text.clone();
                         at += 1;
@@ -371,6 +391,7 @@ fn align(merge: &Merge) -> Aligned {
                 }
             }
             drift_core::Segment::Hunk(hunk) => {
+                push_stacked(&mut aligned, hunk);
                 let start = at;
                 while at < rows.len() && rows[at].hunk == Some(hunk_index) {
                     at += 1;
@@ -578,22 +599,29 @@ fn split_pair(area: Rect) -> (Rect, Rect) {
     (left, right)
 }
 
-fn stacked_line(aligned: &Aligned, index: usize) -> Option<String> {
-    let base = aligned.base.get(index)?;
-    let ours = aligned
-        .ours
-        .get(index)
-        .filter(|line| line.text != base.text);
-    let theirs = aligned
-        .theirs
-        .get(index)
-        .filter(|line| line.text != base.text);
-    let (prefix, text) = match (ours, theirs) {
-        (Some(line), _) => ("+ ", line.text.as_str()),
-        (None, Some(line)) => ("+ ", line.text.as_str()),
-        (None, None) => ("  ", base.text.as_str()),
-    };
-    Some(format!("{prefix}{text}"))
+fn push_stacked(aligned: &mut Aligned, hunk: &Hunk) {
+    aligned.stacked_hunk_rows.push(aligned.stacked.len());
+    match hunk.kind {
+        HunkKind::Conflict => {
+            push_marked(&mut aligned.stacked, "- ", &hunk.base);
+            push_marked(&mut aligned.stacked, "< ours ", &hunk.ours);
+            push_marked(&mut aligned.stacked, "> theirs ", &hunk.theirs);
+        }
+        HunkKind::TheirsOnly => {
+            push_marked(&mut aligned.stacked, "- ", &hunk.base);
+            push_marked(&mut aligned.stacked, "+ ", &hunk.theirs);
+        }
+        HunkKind::OursOnly | HunkKind::BothSame => {
+            push_marked(&mut aligned.stacked, "- ", &hunk.base);
+            push_marked(&mut aligned.stacked, "+ ", &hunk.ours);
+        }
+    }
+}
+
+fn push_marked(into: &mut Vec<String>, mark: &str, text: &str) {
+    for line in split_lines(text) {
+        into.push(format!("{mark}{line}"));
+    }
 }
 
 fn regions(area: Rect) -> (Rect, Rect, Rect) {
@@ -841,19 +869,25 @@ impl DiffScreen {
         let scroll = self.prepare_scroll(view.height);
         let top = scroll.top();
         let rows = usize::from(view.height);
-        for (offset, index) in (top..).take(rows).enumerate() {
-            let Some(shown) = stacked_line(&self.aligned, index) else {
-                break;
-            };
+        for (offset, shown) in self.aligned.stacked.iter().skip(top).take(rows).enumerate() {
             let y = view.y.saturating_add(u16::try_from(offset).unwrap_or(0));
-            cx.put_str(view.x, y, clip_display_prefix(&shown, view.width), text);
+            cx.put_str(view.x, y, clip_display_prefix(shown, view.width), text);
         }
     }
 
     fn prepare_scroll(&mut self, rows: u16) -> CodeViewState {
         let mut scroll = self.scroll;
         let area = Rect::new(0, 0, 8, rows);
-        CodeView::new(self.aligned.base.as_slice()).sync(area, &mut scroll);
+        let stacked = self.stacked_unified();
+        if stacked {
+            CodeView::new(self.aligned.stacked.as_slice()).sync(area, &mut scroll);
+        } else {
+            CodeView::new(self.aligned.base.as_slice()).sync(area, &mut scroll);
+        }
+        if self.stacked_scroll != Some(stacked) {
+            scroll.scroll_to(self.hunk_scroll_row());
+            self.stacked_scroll = Some(stacked);
+        }
         self.scroll = scroll;
         scroll
     }
@@ -1437,10 +1471,117 @@ mod tests {
         let (grid, clusters) = render_once(&mut screen, 80, 24);
         let text = grid.display_text(&clusters);
         assert!(text.contains("stacked"), "{text}");
-        assert!(text.contains("hello WORLD"), "{text}");
+        assert!(text.contains("- hello world"), "{text}");
+        assert!(text.contains("+ hello WORLD"), "{text}");
         assert_eq!(
             screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('q')))),
             ControlFlow::Break
+        );
+    }
+
+    fn frame(screen: &mut DiffScreen) -> String {
+        let (grid, clusters) = render_once(screen, 80, 24);
+        grid.display_text(&clusters)
+    }
+
+    fn stacked_body(text: &str) -> Vec<&str> {
+        let lines: Vec<&str> = text.lines().collect();
+        if lines.len() < 3 {
+            return Vec::new();
+        }
+        lines[2..lines.len() - 1].to_vec()
+    }
+
+    #[test]
+    fn stacked_keeps_a_conflict_a_replacement_and_a_deletion() {
+        let mut conflict = DiffScreen::new("BASE_OLD\n", "OURS_NEW\n", "THEIRS_NEW\n");
+        let text = frame(&mut conflict);
+        assert!(text.contains("conflict"), "{text}");
+        let body = stacked_body(&text);
+        assert!(
+            body.iter().any(|line| line.contains("- BASE_OLD")),
+            "{text}"
+        );
+        assert!(
+            body.iter().any(|line| line.contains("< ours OURS_NEW")),
+            "{text}"
+        );
+        assert!(
+            body.iter().any(|line| line.contains("> theirs THEIRS_NEW")),
+            "{text}"
+        );
+
+        let mut replacement = DiffScreen::new("BASE_OLD\n", "BASE_OLD\n", "THEIRS_NEW\n");
+        let text = frame(&mut replacement);
+        let body = stacked_body(&text);
+        assert!(
+            body.iter().any(|line| line.contains("- BASE_OLD")),
+            "{text}"
+        );
+        assert!(
+            body.iter().any(|line| line.contains("+ THEIRS_NEW")),
+            "{text}"
+        );
+
+        let mut deletion = DiffScreen::new("BASE_OLD\n", "BASE_OLD\n", "");
+        let text = frame(&mut deletion);
+        let body = stacked_body(&text);
+        assert!(
+            body.iter().any(|line| line.contains("- BASE_OLD")),
+            "{text}"
+        );
+        assert!(body.iter().all(|line| !line.contains("+ ")), "{text}");
+    }
+
+    #[test]
+    fn stacked_navigation_and_scrolling_follow_expanded_rows() {
+        let mut base = String::from("alpha\n");
+        let mut ours = String::from("ALPHA\n");
+        let mut theirs = String::from("alpha\n");
+        for index in 0..30 {
+            let line = format!("c{index:02}\n");
+            base.push_str(&line);
+            ours.push_str(&line);
+            theirs.push_str(&line);
+        }
+        base.push_str("old\n");
+        ours.push_str("old\n");
+        theirs.push_str("new\n");
+        for index in 0..25 {
+            let line = format!("d{index:02}\n");
+            base.push_str(&line);
+            ours.push_str(&line);
+            theirs.push_str(&line);
+        }
+        let mut screen = DiffScreen::new(&base, &ours, &theirs);
+        let text = frame(&mut screen);
+        assert!(text.contains("- alpha"), "{text}");
+        assert!(text.contains("+ ALPHA"), "{text}");
+        assert!(!text.contains("+ new"), "{text}");
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('n'))));
+        let jumped = frame(&mut screen);
+        let body = stacked_body(&jumped);
+        assert!(
+            body.first().is_some_and(|line| line.contains("- old")),
+            "{jumped}"
+        );
+        assert!(jumped.contains("+ new"), "{jumped}");
+        let top = screen.scroll_top();
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Down)));
+        let scrolled = frame(&mut screen);
+        let next = stacked_body(&scrolled);
+        assert!(screen.scroll_top() > top);
+        assert!(
+            next.first().is_some_and(|line| line.contains("+ new")),
+            "{scrolled}"
+        );
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('p'))));
+        let back = frame(&mut screen);
+        let home = stacked_body(&back);
+        assert_eq!(screen.scroll_top(), 0);
+        assert!(
+            home.first().is_some_and(|line| line.contains("- alpha")),
+            "{back}"
         );
     }
 
