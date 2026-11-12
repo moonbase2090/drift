@@ -1,3 +1,7 @@
+mod seed;
+
+pub use seed::{scan, Scan, StoreRoots};
+
 pub fn crate_name() -> &'static str {
     env!("CARGO_PKG_NAME")
 }

@@ -1,8 +1,13 @@
+mod bases;
 mod catalog;
 mod error;
 mod installed;
 mod parse;
 
+pub use bases::{
+    base_path, drift_share, drift_state, read_base, read_reviewed_version, reviewed_version_path,
+    BASES, REVIEWED_VERSION,
+};
 pub use catalog::{enumerate, SourcePaths, Tracked};
 pub use error::Error;
 pub use installed::{

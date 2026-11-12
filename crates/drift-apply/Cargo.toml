@@ -10,3 +10,8 @@ publish.workspace = true
 
 [dependencies]
 drift-core.workspace = true
+drift-source.workspace = true
+
+[dev-dependencies]
+drift-fixtures.workspace = true
+flate2 = "1"
