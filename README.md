@@ -4,7 +4,7 @@ Drift is an Omarchy plugin, built with [lunatui](https://github.com/moonbase2090
 
 After an Omarchy update, or any time, it reports which files under `~/.config/hypr` and `~/.config/omarchy` still match those templates, which are local overrides, and which conflict with a newly shipped upstream change. It is meant to replace the all-or-nothing `omarchy-refresh-*` commands with a file-by-file review.
 
-**Status:** the review screen opens. The tree is empty until scanning lands. The product brief is `docs/PRD.md`.
+**Status:** the review screen opens with the scan result as a tree. The product brief is `docs/PRD.md`.
 
 ## Review screen
 
@@ -13,6 +13,12 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 ![Empty Drift screen](docs/media/empty-screen.gif)
 
 `drift --snapshot` prints one 80×24 frame and does not take the terminal. Pass `--width` and `--height` together to print another size.
+
+## Tree screen
+
+`drift` scans the installed package against your files and shows the result as a path tree. Every file has a glyph, its status label and a colour, so no status depends on colour alone; the header counts each status and doubles as the filter buttons. `j` and `k` move, `h` and `l` collapse and expand, `1`-`6` filter by status and `0` clears, `/` searches as you type, `Space` marks and `a` marks everything in the filter. The mouse selects, double-clicks to open, scrolls, toggles carets and checkboxes, and presses the header counts and the hint bar. The capture below is the real program: `cargo run -p drift-tui --example tree_screen` opens the screen on a sample report. It moves to a file (the summary pane shows its template and base), marks it, filters to upstream changes, then searches for `way`.
+
+![Tree screen](docs/media/tree-screen.gif)
 
 ## Safety model
 
