@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io::{ErrorKind, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -7,7 +8,7 @@ use std::thread::{self, JoinHandle};
 
 use drift_core::Registry;
 use drift_tui::ChangeSink;
-use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
+use inotify::{Event, EventMask, Inotify, WatchDescriptor, WatchMask};
 
 pub(crate) struct Watch {
     stop: Option<UnixStream>,
@@ -36,13 +37,7 @@ pub(crate) fn dirs(registry: &Registry, home: &Path, omarchy: &Path) -> Vec<Path
 pub(crate) fn arm(paths: &[PathBuf], sink: ChangeSink) -> Option<Watch> {
     let mut inotify = Inotify::init().ok()?;
     let mut watched = HashMap::new();
-    let mut armed = false;
-    for path in paths {
-        if watch_tree(&mut inotify, path, &mut watched) {
-            armed = true;
-        }
-    }
-    if !armed {
+    if !arm_roots(&mut inotify, paths, &mut watched) {
         return None;
     }
     let (stop, wake) = UnixStream::pair().ok()?;
@@ -51,6 +46,20 @@ pub(crate) fn arm(paths: &[PathBuf], sink: ChangeSink) -> Option<Watch> {
         stop: Some(stop),
         thread: Some(thread),
     })
+}
+
+fn arm_roots(
+    inotify: &mut Inotify,
+    paths: &[PathBuf],
+    watched: &mut HashMap<WatchDescriptor, PathBuf>,
+) -> bool {
+    let mut armed = false;
+    for path in paths {
+        if watch_tree(inotify, path, watched) {
+            armed = true;
+        }
+    }
+    armed
 }
 
 fn watch_mask() -> WatchMask {
@@ -90,6 +99,18 @@ fn watch_tree(
     true
 }
 
+enum Wait {
+    Again,
+    Stop,
+    Events,
+}
+
+struct Batch {
+    interesting: bool,
+    born: Vec<PathBuf>,
+    gone: Vec<WatchDescriptor>,
+}
+
 fn listen(
     mut inotify: Inotify,
     mut watched: HashMap<WatchDescriptor, PathBuf>,
@@ -100,34 +121,70 @@ fn listen(
     let inotify_fd = inotify.as_raw_fd();
     let wake_fd = wake.as_raw_fd();
     loop {
-        let mut fds = [
-            libc::pollfd {
-                fd: inotify_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: wake_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
-        if ready < 0 {
-            if std::io::Error::last_os_error().kind() == ErrorKind::Interrupted {
-                continue;
-            }
+        if !step(
+            &mut inotify,
+            &mut watched,
+            &mut buffer,
+            inotify_fd,
+            wake_fd,
+            &sink,
+        ) {
             break;
         }
-        if fds[1].revents != 0 {
-            break;
-        }
-        if !readable(fds[0].revents) {
-            continue;
-        }
-        if !take_events(&mut inotify, &mut watched, &mut buffer, &sink) {
-            break;
-        }
+    }
+}
+
+fn step(
+    inotify: &mut Inotify,
+    watched: &mut HashMap<WatchDescriptor, PathBuf>,
+    buffer: &mut [u8],
+    inotify_fd: i32,
+    wake_fd: i32,
+    sink: &ChangeSink,
+) -> bool {
+    let mut fds = [
+        libc::pollfd {
+            fd: inotify_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: wake_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    match wait(&mut fds) {
+        Wait::Again => true,
+        Wait::Stop => false,
+        Wait::Events => take_events(inotify, watched, buffer, sink),
+    }
+}
+
+fn wait(fds: &mut [libc::pollfd; 2]) -> Wait {
+    let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+    if ready < 0 {
+        return interrupted();
+    }
+    woken(fds)
+}
+
+fn interrupted() -> Wait {
+    if std::io::Error::last_os_error().kind() == ErrorKind::Interrupted {
+        Wait::Again
+    } else {
+        Wait::Stop
+    }
+}
+
+fn woken(fds: &[libc::pollfd; 2]) -> Wait {
+    if fds[1].revents != 0 {
+        return Wait::Stop;
+    }
+    if readable(fds[0].revents) {
+        Wait::Events
+    } else {
+        Wait::Again
     }
 }
 
@@ -142,32 +199,60 @@ fn take_events(
         Err(error) if error.kind() == ErrorKind::WouldBlock => return true,
         Err(_) => return false,
     };
-    let mut interesting = false;
-    let mut born = Vec::new();
-    let mut gone = Vec::new();
+    let mut batch = Batch {
+        interesting: false,
+        born: Vec::new(),
+        gone: Vec::new(),
+    };
     for event in events {
-        if relevant(event.mask) {
-            interesting = true;
-        }
-        if event.mask.contains(EventMask::IGNORED) {
-            gone.push(event.wd.clone());
-        }
-        if new_directory(event.mask) {
-            if let (Some(parent), Some(name)) = (watched.get(&event.wd), event.name) {
-                born.push(parent.join(name));
-            }
-        }
+        note(&mut batch, watched, &event);
     }
-    for descriptor in gone {
-        watched.remove(&descriptor);
+    settle(inotify, watched, &batch, sink);
+    true
+}
+
+fn note(batch: &mut Batch, watched: &HashMap<WatchDescriptor, PathBuf>, event: &Event<&OsStr>) {
+    if relevant(event.mask) {
+        batch.interesting = true;
     }
-    for path in born {
-        let _ = watch_tree(inotify, &path, watched);
+    if event.mask.contains(EventMask::IGNORED) {
+        batch.gone.push(event.wd.clone());
     }
-    if interesting {
+    push_born(batch, watched, event);
+}
+
+fn push_born(
+    batch: &mut Batch,
+    watched: &HashMap<WatchDescriptor, PathBuf>,
+    event: &Event<&OsStr>,
+) {
+    if !new_directory(event.mask) {
+        return;
+    }
+    let Some(parent) = watched.get(&event.wd) else {
+        return;
+    };
+    let Some(name) = event.name else {
+        return;
+    };
+    batch.born.push(parent.join(name));
+}
+
+fn settle(
+    inotify: &mut Inotify,
+    watched: &mut HashMap<WatchDescriptor, PathBuf>,
+    batch: &Batch,
+    sink: &ChangeSink,
+) {
+    for descriptor in &batch.gone {
+        watched.remove(descriptor);
+    }
+    for path in &batch.born {
+        let _ = watch_tree(inotify, path, watched);
+    }
+    if batch.interesting {
         sink.changed();
     }
-    true
 }
 
 fn relevant(mask: EventMask) -> bool {
@@ -201,7 +286,7 @@ mod tests {
     use drift_core::Registry;
     use inotify::EventMask;
 
-    use super::{dirs, relevant};
+    use super::{dirs, new_directory, readable, relevant};
 
     #[test]
     fn tracked_roots_watch_the_live_tree_and_the_package_templates() {
@@ -229,5 +314,27 @@ mod tests {
         assert!(!relevant(EventMask::OPEN));
         assert!(!relevant(EventMask::CLOSE_NOWRITE));
         assert!(!relevant(EventMask::IGNORED));
+    }
+
+    #[test]
+    fn a_new_directory_is_only_a_create_or_a_move_onto_a_directory() {
+        assert!(new_directory(EventMask::CREATE | EventMask::ISDIR));
+        assert!(new_directory(EventMask::MOVED_TO | EventMask::ISDIR));
+        assert!(!new_directory(EventMask::CREATE));
+        assert!(!new_directory(EventMask::DELETE | EventMask::ISDIR));
+    }
+
+    #[test]
+    fn a_quiet_poll_is_not_ready() {
+        assert!(readable(libc::POLLIN));
+        assert!(readable(libc::POLLHUP));
+        assert!(!readable(0));
+    }
+
+    #[test]
+    fn a_missing_root_does_not_start_a_watch() {
+        let worker = drift_tui::spawn_scan(|| Ok(()));
+        let watch = super::arm(&[PathBuf::from("/no/such/drift/root")], worker.changes());
+        assert!(watch.is_none());
     }
 }
