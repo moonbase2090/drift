@@ -673,6 +673,128 @@ fn an_absent_file_is_created_and_an_existing_mode_is_kept() {
     assert_eq!(fs::read(kept.live(path)).unwrap(), b"hi\n");
 }
 
+#[test]
+fn reserved_metadata_destinations_are_refused_before_any_live_change() {
+    let names = ["manifest.json", "pending.json", "nodes.json"];
+    for name in names {
+        let explicit = format!("backups/txn/{name}");
+        refuse_reserved("config/hypr/a.lua", Some(&explicit));
+        refuse_reserved(name, None);
+    }
+
+    let nested = Fixture::new();
+    let path = "config/manifest.json";
+    write_live(&nested.live(path), b"x\n", 0o644);
+    let plan = Plan::new(
+        "txn",
+        "2026-04-02T00:00:00Z",
+        "4.5.0-3",
+        vec![planned(path, Some(BEFORE), Some(AFTER), Some(0o644), None)],
+        &[],
+    )
+    .unwrap();
+    let files = [payload(path, b"hi\n")];
+    apply(
+        &nested.roots(),
+        &Request {
+            plan: &plan,
+            files: &files,
+            fail_at: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(fs::read(nested.live(path)).unwrap(), b"hi\n");
+    assert_eq!(
+        fs::read(nested.root.join("state/backups/txn/config/manifest.json")).unwrap(),
+        b"x\n"
+    );
+    let manifest = fs::read(nested.root.join("state/backups/txn/manifest.json")).unwrap();
+    assert_ne!(manifest, b"x\n");
+    assert!(String::from_utf8(manifest).unwrap().contains("txn"));
+
+    let kept = Fixture::new();
+    write_live(&kept.live("manifest.json"), b"x\n", 0o640);
+    let before = fs::symlink_metadata(kept.live("manifest.json")).unwrap();
+    let plan = Plan::new(
+        "txn",
+        "2026-04-02T00:00:00Z",
+        "4.5.0-3",
+        vec![PlannedFile::new(
+            "manifest.json",
+            Action::KeepMine,
+            Some(BEFORE),
+            Some(BEFORE),
+            Some(0o600),
+            None,
+        )
+        .unwrap()],
+        &[],
+    )
+    .unwrap();
+    let files = [payload("manifest.json", b"x\n")];
+    apply(
+        &kept.roots(),
+        &Request {
+            plan: &plan,
+            files: &files,
+            fail_at: None,
+        },
+    )
+    .unwrap();
+    let after = fs::symlink_metadata(kept.live("manifest.json")).unwrap();
+    assert_eq!(after.ino(), before.ino());
+    assert_eq!(fs::read(kept.live("manifest.json")).unwrap(), b"x\n");
+    assert_eq!(mode_of(&kept.live("manifest.json")), 0o640);
+    let manifest = fs::read(kept.root.join("state/backups/txn/manifest.json")).unwrap();
+    assert_ne!(manifest, b"x\n");
+}
+
+fn refuse_reserved(live: &str, backup: Option<&str>) {
+    let fix = Fixture::new();
+    write_live(&fix.live(live), b"x\n", 0o640);
+    let before = fs::symlink_metadata(fix.live(live)).unwrap();
+    let plan = Plan::new(
+        "txn",
+        "2026-04-02T00:00:00Z",
+        "4.5.0-3",
+        vec![planned(
+            live,
+            Some(BEFORE),
+            Some(AFTER),
+            Some(0o644),
+            backup,
+        )],
+        &[],
+    )
+    .unwrap();
+    let files = [payload(live, b"hi\n")];
+    let error = apply(
+        &fix.roots(),
+        &Request {
+            plan: &plan,
+            files: &files,
+            fail_at: None,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.message.contains("collides with transaction metadata"),
+        "{live} {backup:?}: {}",
+        error.message
+    );
+    assert!(error.applied.is_empty(), "{live} {backup:?}");
+    assert_eq!(error.unapplied[0].path, live);
+    let after = fs::symlink_metadata(fix.live(live)).unwrap();
+    assert_eq!(after.ino(), before.ino());
+    assert_eq!(after.permissions().mode(), before.permissions().mode());
+    assert_eq!(fs::read(fix.live(live)).unwrap(), b"x\n");
+    assert!(
+        !fix.root.join("state/backups").exists(),
+        "{live} {backup:?}"
+    );
+    assert!(!fix.roots().state.join("lock").exists());
+}
+
 fn leftovers(root: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut pending = vec![root.to_path_buf()];

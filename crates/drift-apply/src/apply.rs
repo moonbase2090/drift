@@ -250,10 +250,7 @@ fn backup_original(
 }
 
 fn backup_path(state: &Path, txn: &str, planned: &PlannedFile) -> Result<PathBuf, FileFailure> {
-    let relative = match planned.backup() {
-        Some(path) => path.as_str().to_string(),
-        None => format!("backups/{txn}/{}", planned.path().as_str()),
-    };
+    let relative = backup_relative(txn, planned);
     let dest = state.join(&relative);
     if !dest.starts_with(state) {
         return Err(FileFailure {
@@ -499,8 +496,32 @@ fn preflight(roots: &Roots, request: &Request<'_>) -> Result<(), ApplyError> {
         if is_symlink(&dest)? && !payload.allow_symlink {
             return Err(refused(request, "refusing to follow a symlink"));
         }
+        if planned.action() != Action::KeepMine
+            && collides_with_metadata(
+                request.plan.id(),
+                &backup_relative(request.plan.id(), planned),
+            )
+        {
+            return Err(refused(
+                request,
+                "backup path collides with transaction metadata",
+            ));
+        }
     }
     Ok(())
+}
+
+fn backup_relative(txn: &str, planned: &PlannedFile) -> String {
+    match planned.backup() {
+        Some(path) => path.as_str().to_string(),
+        None => format!("backups/{txn}/{}", planned.path().as_str()),
+    }
+}
+
+fn collides_with_metadata(txn: &str, relative: &str) -> bool {
+    ["manifest.json", "pending.json", "nodes.json"]
+        .iter()
+        .any(|name| relative == format!("backups/{txn}/{name}"))
 }
 
 fn refuse_linked_ancestors(anchor: &Path, path: &Path) -> Result<(), ApplyError> {
