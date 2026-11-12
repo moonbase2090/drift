@@ -1,0 +1,5 @@
+  1|  1|  1       indent
+  2|   |    -         deep
+   |  2|    +         deeper
+                          ~~
+  3|  3|  3   x   tab
