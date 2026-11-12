@@ -240,7 +240,7 @@ fn create_dir(path: impl AsRef<Path>) -> Result<(), Error> {
     fs::create_dir_all(path).map_err(|source| Error::io(path, source))
 }
 
-fn ensure_real_dir(anchor: &Path, dir: &Path) -> Result<(), Error> {
+pub(crate) fn ensure_real_dir(anchor: &Path, dir: &Path) -> Result<(), Error> {
     if dir == anchor {
         return require_real_dir(dir);
     }
@@ -275,7 +275,7 @@ fn require_real_dir(dir: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn is_symlink(path: &Path) -> Result<bool, Error> {
+pub(crate) fn is_symlink(path: &Path) -> Result<bool, Error> {
     match fs::symlink_metadata(path) {
         Ok(meta) => Ok(meta.file_type().is_symlink()),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),

@@ -1,7 +1,9 @@
+mod catalog;
 mod error;
 mod installed;
 mod parse;
 
+pub use catalog::{enumerate, SourcePaths, Tracked};
 pub use error::Error;
 pub use installed::{
     read_package, Check, InstalledPackage, ReadPaths, Template, Upgrade, DEFAULT_OMARCHY_PATH,
