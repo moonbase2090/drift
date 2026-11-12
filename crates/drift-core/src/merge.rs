@@ -208,7 +208,7 @@ fn terminator_for(text: &str) -> &'static str {
 
 fn both(hunk: &Hunk, terminator: &str) -> String {
     let mut out = hunk.ours.clone();
-    if !out.is_empty() && !out.ends_with('\n') {
+    if !out.is_empty() && !hunk.theirs.is_empty() && !out.ends_with('\n') {
         out.push_str(terminator);
     }
     out.push_str(&hunk.theirs);
@@ -517,6 +517,24 @@ mod tests {
         assert_eq!(m.render(&[Some(Choice::Both)]).unwrap(), "a\nX\nY");
         let crlf = merge3("a\r\nb", "a\r\nX", "a\r\nY");
         assert_eq!(crlf.render(&[Some(Choice::Both)]).unwrap(), "a\r\nX\r\nY");
+    }
+
+    #[test]
+    fn both_adds_no_separator_when_either_side_is_empty() {
+        let theirs_deleted = merge3("base", "ours", "");
+        assert_eq!(
+            theirs_deleted.render(&[Some(Choice::Both)]).unwrap(),
+            "ours"
+        );
+        let ours_deleted = merge3("base", "", "theirs");
+        assert_eq!(
+            ours_deleted.render(&[Some(Choice::Both)]).unwrap(),
+            "theirs"
+        );
+        let crlf = merge3("a\r\nbase", "a\r\nours", "a\r\n");
+        assert_eq!(crlf.render(&[Some(Choice::Both)]).unwrap(), "a\r\nours");
+        let terminated = merge3("base\n", "ours\n", "");
+        assert_eq!(terminated.render(&[Some(Choice::Both)]).unwrap(), "ours\n");
     }
 
     #[test]
