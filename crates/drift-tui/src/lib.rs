@@ -1,8 +1,9 @@
+mod diff;
 mod plan_dialog;
 mod screen;
 
+pub use diff::DiffScreen;
 pub use plan_dialog::{apply_decision, review_plan, Decision, Focus, PlanDialog};
-
 pub use screen::{frame_text, keymap, launch, quit_bounds, render_frame, Screen};
 
 pub fn crate_name() -> &'static str {
