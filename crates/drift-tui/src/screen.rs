@@ -72,6 +72,10 @@ fn quit_label() -> String {
     format!("[{chord}] Quit")
 }
 
+pub(crate) fn terminal_dimensions() -> (u16, u16) {
+    terminal_size()
+}
+
 fn terminal_size() -> (u16, u16) {
     terminal_size::terminal_size()
         .map(|(columns, rows)| (columns.0, rows.0))
