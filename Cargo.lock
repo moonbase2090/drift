@@ -163,6 +163,8 @@ name = "drift-apply"
 version = "0.1.0"
 dependencies = [
  "drift-core",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -1,3 +1,9 @@
+mod apply;
+
+pub use apply::{
+    apply, ApplyError, ApplyReport, FailAt, FileStep, Payload, Request, Roots, Unapplied,
+};
+
 pub fn crate_name() -> &'static str {
     env!("CARGO_PKG_NAME")
 }
