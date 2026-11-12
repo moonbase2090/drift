@@ -47,6 +47,9 @@ pub enum Error {
     BadManifest {
         message: String,
     },
+    Integration {
+        message: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -76,6 +79,7 @@ impl fmt::Display for Error {
             } => write!(f, "invalid configuration: {message}"),
             Error::BadPlan { message } => write!(f, "invalid plan: {message}"),
             Error::BadManifest { message } => write!(f, "invalid manifest: {message}"),
+            Error::Integration { message } => write!(f, "cannot integrate: {message}"),
         }
     }
 }

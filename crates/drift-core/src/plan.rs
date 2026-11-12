@@ -12,6 +12,8 @@ pub enum Action {
     TakeUpstream,
     #[serde(rename = "merge")]
     Merge,
+    #[serde(rename = "undo")]
+    Undo,
 }
 
 impl Action {
@@ -20,6 +22,7 @@ impl Action {
             Action::KeepMine => "keep mine",
             Action::TakeUpstream => "take upstream",
             Action::Merge => "merge",
+            Action::Undo => "undo",
         }
     }
 }
@@ -492,14 +495,42 @@ mod tests {
         let err = Plan::new("txn-9", "t", "1", files, &[]);
         assert!(err.unwrap_err().to_string().contains("duplicate path"));
         let err = Plan::from_json(
-            r#"{"id":"txn-9","time":"t","package_version":"1","files":[{"path":"config/a","action":"undo","sha256_before":null,"sha256_after":null,"mode":null,"backup":null}],"prune":[]}"#,
+            r#"{"id":"txn-9","time":"t","package_version":"1","files":[{"path":"config/a","action":"bogus","sha256_before":null,"sha256_after":null,"mode":null,"backup":null}],"prune":[]}"#,
         );
-        assert!(err.unwrap_err().to_string().contains("undo"));
+        assert!(err.unwrap_err().to_string().contains("bogus"));
         let err = Plan::from_json(
             r#"{"id":"txn-9","time":"t","package_version":"1","files":[],"prune":[],"extra":1}"#,
         );
         assert!(err.unwrap_err().to_string().contains("extra"));
         assert!(Plan::new("txn-9", "", "1", Vec::new(), &[]).is_err());
         assert!(Plan::new("txn-9", "t", "1", Vec::new(), &["../old"]).is_err());
+    }
+
+    #[test]
+    fn an_undo_action_round_trips_and_renders() {
+        let plan = Plan::new(
+            "txn-9",
+            "t",
+            "1",
+            vec![file(
+                "config/a",
+                Action::Undo,
+                Some(BEFORE),
+                Some(AFTER),
+                Some(0o600),
+                None,
+            )],
+            &[],
+        )
+        .unwrap();
+        let json = plan.to_json().unwrap();
+        assert!(json.contains(r#""action": "undo""#), "{json}");
+        assert_eq!(Plan::from_json(&json).unwrap(), plan);
+        assert!(
+            plan.render().contains("undo  config/a\n"),
+            "{}",
+            plan.render()
+        );
+        assert_eq!(Action::Undo.label(), "undo");
     }
 }

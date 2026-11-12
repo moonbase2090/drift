@@ -291,3 +291,66 @@ fn without_a_recorded_version_the_log_selects_the_snapshot() {
     assert_eq!(resolved[0].provenance, BaseProvenance::Snapshot);
     assert_eq!(resolved[0].bytes.as_deref(), Some(SNAPSHOT));
 }
+
+#[test]
+fn a_dot_version_does_not_escape_the_snapshot_directory() {
+    let escaped = b"escaped\n";
+    let dotted = b"dotted\n";
+    let parent = lay(|builder| {
+        builder
+            .file("state/reviewed-version", "..\n")
+            .unwrap()
+            .file("config/a", escaped)
+            .unwrap();
+    });
+    let rel_file = rel("a");
+    let template = rel("config/a");
+    let resolved = resolve_bases(
+        &paths(&parent),
+        "1.2.0-1",
+        &[query("config", &rel_file, &template)],
+    )
+    .unwrap();
+    assert_eq!(resolved[0].provenance, BaseProvenance::None);
+    assert_eq!(resolved[0].bytes, None);
+    assert_eq!(
+        std::fs::read(parent.root.path().join("config/a")).unwrap(),
+        escaped
+    );
+    let here = lay(|builder| {
+        builder
+            .file("state/reviewed-version", ".\n")
+            .unwrap()
+            .file("snapshots/config/a", dotted)
+            .unwrap();
+    });
+    let resolved = resolve_bases(
+        &paths(&here),
+        "1.2.0-1",
+        &[query("config", &rel_file, &template)],
+    )
+    .unwrap();
+    assert_eq!(resolved[0].provenance, BaseProvenance::None);
+    assert_eq!(resolved[0].bytes, None);
+}
+
+#[test]
+fn a_complete_reviewed_store_ignores_an_unreadable_log() {
+    let built = lay(|builder| {
+        builder
+            .file("share/bases/config/a", REVIEWED)
+            .unwrap()
+            .file_with_mode("var/log/pacman.log", b"hidden\n", 0)
+            .unwrap();
+    });
+    let rel_file = rel("a");
+    let template = rel("config/a");
+    let resolved = resolve_bases(
+        &paths(&built),
+        "1.2.0-1",
+        &[query("config", &rel_file, &template)],
+    )
+    .unwrap();
+    assert_eq!(resolved[0].provenance, BaseProvenance::Reviewed);
+    assert_eq!(resolved[0].bytes.as_deref(), Some(REVIEWED));
+}
