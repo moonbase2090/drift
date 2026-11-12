@@ -709,6 +709,56 @@ impl DiffScreen {
     }
 }
 
+struct MarkRun {
+    x: u16,
+    y: u16,
+    height: u16,
+    glyph: char,
+    style: Style,
+}
+
+impl MarkRun {
+    fn new() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            height: 0,
+            glyph: ' ',
+            style: Style::new(),
+        }
+    }
+
+    fn push(&mut self, cx: &mut RenderCx<'_>, x: u16, y: u16, glyph: char, style: Style) {
+        if self.height > 0
+            && self.x == x
+            && self.glyph == glyph
+            && self.style == style
+            && self.y.saturating_add(self.height) == y
+        {
+            self.height = self.height.saturating_add(1);
+            return;
+        }
+        self.flush(cx);
+        self.x = x;
+        self.y = y;
+        self.height = 1;
+        self.glyph = glyph;
+        self.style = style;
+    }
+
+    fn flush(&mut self, cx: &mut RenderCx<'_>) {
+        if self.height == 0 {
+            return;
+        }
+        cx.fill(
+            Rect::new(self.x, self.y, 1, self.height),
+            self.style,
+            self.glyph,
+        );
+        self.height = 0;
+    }
+}
+
 struct DimRun {
     x: u16,
     y: u16,
@@ -789,6 +839,7 @@ fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mu
         }
     }
     let mut dims = DimRun::new();
+    let mut marks = MarkRun::new();
     for (offset, line) in lines.iter().skip(top).take(rows).enumerate() {
         let y = view_area
             .y
@@ -796,7 +847,7 @@ fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mu
         if let Some(mark) = line.mark {
             let (glyph, style) = mark_paint(mark, cx);
             if view_area.width > 0 {
-                cx.put_str(view_area.x, y, glyph, style);
+                marks.push(cx, view_area.x, y, glyph, style);
             }
         }
         if places > 0 && gutter <= view_area.width {
@@ -832,6 +883,7 @@ fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mu
             cx.set_style(Rect::new(x, y, width, 1), highlight);
         }
     }
+    marks.flush(cx);
     dims.flush(cx, numbers);
     if let Some(byte) = repeated {
         let height = u16::try_from(shown_rows).unwrap_or(0);
@@ -979,10 +1031,10 @@ fn write_number(mut number: usize, buffer: &mut [u8; 20]) -> &str {
     std::str::from_utf8(&buffer[at..]).unwrap_or("")
 }
 
-fn mark_paint(mark: CodeMark, cx: &RenderCx<'_>) -> (&'static str, Style) {
+fn mark_paint(mark: CodeMark, cx: &RenderCx<'_>) -> (char, Style) {
     match mark {
-        CodeMark::Error => ("●", Style::new().fg(cx.token(Token::Fail))),
-        _ => ("▎", Style::new().fg(cx.token(Token::Warn))),
+        CodeMark::Error => ('●', Style::new().fg(cx.token(Token::Fail))),
+        _ => ('▎', Style::new().fg(cx.token(Token::Warn))),
     }
 }
 
@@ -1019,6 +1071,19 @@ mod tests {
         let line = format!("{}\n", "a".repeat(63));
         let count = (MAX_DIFF_BYTES as usize - 1) / line.len();
         (line.repeat(count), count)
+    }
+
+    fn changed_near_the_cap(text: &str) -> DiffScreen {
+        let mut ours = text.as_bytes().to_vec();
+        let line = 64;
+        for row in 0..48 {
+            ours[row * line] = b'B';
+        }
+        ours[120 * line] = b'C';
+        let ours = String::from_utf8(ours).unwrap();
+        let screen = DiffScreen::new(text, &ours, text);
+        assert!(screen.aligned.hunk_rows.len() >= 2);
+        screen
     }
 
     fn cmp_row(text: &str, needle: &str) -> Option<usize> {
@@ -1216,6 +1281,27 @@ mod tests {
         let (text, lines) = sample_near_the_cap();
         assert!(text.len() > MAX_DIFF_BYTES as usize - 128);
         assert!(text.len() <= MAX_DIFF_BYTES as usize);
+        let mut changed = changed_near_the_cap(&text);
+        changed.update(&Event::Key(KeyEvent::press(KeyCode::Down)));
+        let started = Instant::now();
+        let (grid, clusters) = render_once(&mut changed, 160, 40);
+        let scrolled = started.elapsed();
+        assert!(grid.display_text(&clusters).contains('B'));
+        changed.update(&Event::Key(KeyEvent::press(KeyCode::Tab)));
+        let started = Instant::now();
+        let _ = render_once(&mut changed, 160, 40);
+        let focused = started.elapsed();
+        changed.update(&Event::Key(KeyEvent::press(KeyCode::Char('n'))));
+        let started = Instant::now();
+        let (grid, clusters) = render_once(&mut changed, 160, 40);
+        let jumped = started.elapsed();
+        assert!(grid.display_text(&clusters).contains('C'));
+        assert!(changed.scroll_top() > 0);
+        let worst_cold = scrolled.max(focused).max(jumped);
+        assert!(
+            worst_cold < Duration::from_millis(8),
+            "160x40 cold changed worst {worst_cold:?} scroll {scrolled:?} focus {focused:?} hunk {jumped:?}"
+        );
         let mut screen = DiffScreen::new(&text, &text, &text);
         assert_eq!(screen.aligned.base.len(), lines);
         let (grid, clusters) = render_once(&mut screen, 200, 60);
