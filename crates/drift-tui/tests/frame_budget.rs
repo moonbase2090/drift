@@ -1,14 +1,36 @@
-#![doc = "Frame budget for the tree screen with 5,000 rows."]
+#![doc = "Frame budget for the tree screen with 5,000 rows, measured in CPU time."]
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use drift_core::{BaseProvenance, ScanEntry, ScanReport, Status};
 use drift_tui::TreeScreen;
 use lunatui::{render_once, App, ControlFlow};
 use lunatui_core::{ClusterTable, Grid, Rect};
 use lunatui_term::{Event, KeyCode, KeyEvent, MouseEvent, MouseKind, Scroll};
+use rustix::time::{clock_gettime, ClockId};
 
 const BUDGET: Duration = Duration::from_millis(8);
+
+fn thread_cpu_time() -> Duration {
+    let now = clock_gettime(ClockId::ThreadCPUTime);
+    Duration::new(
+        u64::try_from(now.tv_sec).unwrap_or(0),
+        u32::try_from(now.tv_nsec).unwrap_or(0),
+    )
+}
+
+fn cpu_cost(mut work: impl FnMut()) -> Duration {
+    let started = thread_cpu_time();
+    work();
+    thread_cpu_time().saturating_sub(started)
+}
+
+fn busy_for(cpu: Duration) {
+    let started = thread_cpu_time();
+    while thread_cpu_time().saturating_sub(started) < cpu {
+        std::hint::black_box(0u64);
+    }
+}
 
 struct Driver<'a>(&'a mut TreeScreen);
 
@@ -69,9 +91,9 @@ fn five_thousand_rows_render_under_the_budget_in_every_frame() {
                 }
                 _ => press(&mut screen, KeyCode::Char(' ')),
             }
-            let started = Instant::now();
-            let _ = render_once(&mut Driver(&mut screen), columns, rows);
-            let took = started.elapsed();
+            let took = cpu_cost(|| {
+                let _ = render_once(&mut Driver(&mut screen), columns, rows);
+            });
             if took > worst.0 {
                 worst = (took, step);
             }
@@ -84,4 +106,22 @@ fn five_thousand_rows_render_under_the_budget_in_every_frame() {
             worst.1
         );
     }
+}
+
+#[test]
+fn the_cpu_clock_ignores_waiting_and_counts_work() {
+    let waiting = cpu_cost(|| std::thread::sleep(Duration::from_millis(40)));
+    assert!(waiting < Duration::from_millis(5), "{waiting:?}");
+    let working = cpu_cost(|| busy_for(Duration::from_millis(30)));
+    assert!(working >= Duration::from_millis(20), "{working:?}");
+}
+
+#[test]
+fn a_render_that_burns_cpu_over_the_budget_is_caught() {
+    let mut screen = TreeScreen::new(&report(5000));
+    let slow = cpu_cost(|| {
+        busy_for(Duration::from_millis(12));
+        let _ = render_once(&mut Driver(&mut screen), 80, 24);
+    });
+    assert!(slow >= BUDGET, "{slow:?}");
 }

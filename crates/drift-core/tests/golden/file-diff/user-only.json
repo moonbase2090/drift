@@ -1,0 +1,22 @@
+{
+  "badge": null,
+  "base": {
+    "state": "absent"
+  },
+  "base_provenance": "none",
+  "hunks": [],
+  "merge_available": false,
+  "note": "",
+  "ours": {
+    "sha256": "digest",
+    "state": "text",
+    "text": "x\n"
+  },
+  "path": ".config/a",
+  "result": null,
+  "schema": 1,
+  "status": "user-only",
+  "theirs": {
+    "state": "absent"
+  }
+}

@@ -57,7 +57,7 @@ pub fn paths_from(source: SourcePaths, lookup: &dyn Fn(&str) -> Option<OsString>
     }
 }
 
-fn registry(paths: &ScanPaths) -> Result<Registry, String> {
+pub(crate) fn registry(paths: &ScanPaths) -> Result<Registry, String> {
     let path = paths.source.home.join(USER_CONFIG_PATH);
     match fs::read_to_string(&path) {
         Ok(text) => {
@@ -288,5 +288,45 @@ mod tests {
         let (result, _) = output(&paths(&bad), View::Status);
         let error = result.unwrap_err();
         assert!(error.contains("config.toml"), "{error}");
+    }
+    #[test]
+    fn diff_views_are_read_only_and_use_the_selected_files_exit_code() {
+        let root = world(
+            &[("hypr/a.lua", b"x\n", b""), ("hypr/b.lua", b"y\n", b"y\n")],
+            &[],
+        );
+        let paths = paths(&root);
+        let before = hash_tree(root.path()).unwrap();
+        for json in [false, true] {
+            for (path, code) in [(".config/hypr/a.lua", 1), (".config/hypr/b.lua", 0)] {
+                let mut out = Vec::new();
+                let args = crate::diff::DiffArgs {
+                    path: path.to_string(),
+                    json,
+                };
+                assert_eq!(crate::diff::run(&paths, &args, &mut out).unwrap(), code);
+                let text = String::from_utf8(out).unwrap();
+                assert!(text.contains(path));
+                assert_eq!(text.starts_with("{\n"), json);
+                let args = crate::diff::DiffArgs {
+                    path: paths.source.home.join(path).to_string_lossy().into_owned(),
+                    json,
+                };
+                assert_eq!(
+                    crate::diff::run(&paths, &args, &mut Vec::new()).unwrap(),
+                    code
+                );
+            }
+        }
+        for path in [".config/unknown", "../outside", "/outside/home"] {
+            let mut out = Vec::new();
+            let args = crate::diff::DiffArgs {
+                path: path.to_string(),
+                json: true,
+            };
+            assert!(crate::diff::run(&paths, &args, &mut out).is_err());
+            assert!(out.is_empty());
+        }
+        assert_eq!(hash_tree(root.path()).unwrap(), before);
     }
 }
