@@ -989,6 +989,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn column_spans_follow_wide_characters() {
+        assert_eq!(columns_to_bytes("abc", Span { start: 1, end: 1 }), None);
+        assert_eq!(
+            columns_to_bytes("abc", Span { start: 1, end: 3 }),
+            Some(1..3)
+        );
+        assert_eq!(columns_to_bytes("abc", Span { start: 1, end: 8 }), None);
+        let text = "a你b";
+        let got = columns_to_bytes(text, Span { start: 1, end: 3 }).unwrap();
+        assert_eq!(&text[got], "你");
+        assert_eq!(
+            columns_to_bytes("a你", Span { start: 0, end: 1 }),
+            Some(0..1)
+        );
+        let mixed = "e\u{0301}x";
+        let got = columns_to_bytes(mixed, Span { start: 0, end: 2 }).unwrap();
+        assert_eq!(&mixed[got], mixed);
+        assert_eq!(columns_to_bytes("你", Span { start: 2, end: 4 }), None);
+    }
+
     fn fg_colors(snap: &str, row: usize) -> Vec<String> {
         let mut colors = Vec::new();
         let section = snap.split("@fg\n").nth(1).unwrap_or("");
