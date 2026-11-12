@@ -10,3 +10,13 @@ publish.workspace = true
 
 [dependencies]
 drift-core.workspace = true
+lunatui.workspace = true
+lunatui-core.workspace = true
+lunatui-runtime.workspace = true
+lunatui-term.workspace = true
+lunatui-theme.workspace = true
+lunatui-widgets.workspace = true
+terminal_size.workspace = true
+
+[dev-dependencies]
+lunatui-test.workspace = true
