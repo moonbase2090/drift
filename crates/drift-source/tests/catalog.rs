@@ -5,7 +5,14 @@ use drift_core::{
     Verification, MAX_DIFF_BYTES,
 };
 use drift_fixtures::RootBuilder;
-use drift_source::{enumerate, ReadPaths, SourcePaths};
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use drift_source::{
+    enumerate, is_backup_name, scan as scan_listing, DirReader, ReadPaths, SourcePaths,
+    StdDirReader,
+};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
@@ -688,5 +695,364 @@ fn live_read_of_templates_and_live_files() {
         unreadable,
         volatile,
         warnings
+    );
+}
+
+struct CountingReader {
+    reads: RefCell<Vec<PathBuf>>,
+}
+
+impl CountingReader {
+    fn new() -> Self {
+        CountingReader {
+            reads: RefCell::new(Vec::new()),
+        }
+    }
+
+    fn read_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = self.reads.borrow().clone();
+        dirs.sort();
+        dirs
+    }
+}
+
+impl DirReader for CountingReader {
+    fn children(&self, dir: &Path) -> Option<Vec<String>> {
+        self.reads.borrow_mut().push(dir.to_path_buf());
+        StdDirReader.children(dir)
+    }
+}
+
+fn templates_tree(package: &[&str], fill: impl FnOnce(&mut RootBuilder)) -> Tree {
+    let listed: Vec<String> = package
+        .iter()
+        .map(|path| format!("usr/share/omarchy/config/{path}"))
+        .collect();
+    let digests: Vec<(&str, &str)> = listed.iter().map(|p| (p.as_str(), MARKER_SHA)).collect();
+    tree("9.9.9-1", &listed, &digests, |builder| {
+        for path in package {
+            builder
+                .file(format!("usr/share/omarchy/config/{path}"), MARKER)
+                .unwrap();
+        }
+        fill(builder);
+    })
+}
+
+fn rel(path: &str) -> RelPath {
+    RelPath::new(path).unwrap()
+}
+
+fn live_paths(tracked: &[drift_source::Tracked]) -> Vec<String> {
+    let mut paths: Vec<String> = tracked
+        .iter()
+        .filter_map(|item| item.live.as_ref())
+        .map(|live| live.path().as_str().to_string())
+        .collect();
+    paths.sort();
+    paths
+}
+
+#[test]
+fn only_directories_that_hold_a_template_are_read() {
+    let built = templates_tree(&["hypr/a.lua", "hypr/conf/b.lua"], |builder| {
+        builder.file("home/.config/hypr/a.lua", MARKER).unwrap();
+        builder.file("home/.config/hypr/mine.lua", MARKER).unwrap();
+        builder
+            .file("home/.config/hypr/conf/b.lua", MARKER)
+            .unwrap();
+        builder
+            .file("home/.config/hypr/conf/deeper/x.lua", MARKER)
+            .unwrap();
+        builder
+            .file("home/.config/hypr/untracked-dir/y.lua", MARKER)
+            .unwrap();
+        for index in 0..150 {
+            builder
+                .file(format!("home/.config/chromium/Default/f{index}"), MARKER)
+                .unwrap();
+            builder
+                .file(format!("home/.config/chromium/Cache/c{index}"), MARKER)
+                .unwrap();
+        }
+        builder
+            .file("home/.config/chromium/Local State", MARKER)
+            .unwrap();
+    });
+    let reader = CountingReader::new();
+    let listing = scan_listing(&Registry::v1(), &paths(&built), &BTreeSet::new(), &reader).unwrap();
+    let home = built.root.path().join("home");
+    assert_eq!(
+        reader.read_dirs(),
+        [home.join(".config/hypr"), home.join(".config/hypr/conf")]
+    );
+    let live = live_paths(&listing.tracked);
+    assert_eq!(
+        live,
+        [
+            ".config/hypr/a.lua",
+            ".config/hypr/conf/b.lua",
+            ".config/hypr/mine.lua"
+        ]
+    );
+    let user_only: Vec<_> = listing
+        .tracked
+        .iter()
+        .filter(|item| item.template.is_none())
+        .collect();
+    assert_eq!(user_only.len(), 1);
+}
+
+#[test]
+fn each_template_directory_is_read_once_however_many_templates_it_holds() {
+    let names: Vec<String> = (0..20).map(|i| format!("waybar/t{i}.jsonc")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let built = templates_tree(&refs, |builder| {
+        builder
+            .file("home/.config/waybar/extra.jsonc", MARKER)
+            .unwrap();
+    });
+    let reader = CountingReader::new();
+    scan_listing(&Registry::v1(), &paths(&built), &BTreeSet::new(), &reader).unwrap();
+    assert_eq!(reader.read_dirs().len(), 1);
+}
+
+#[test]
+fn a_missing_template_directory_is_read_without_failing() {
+    let built = templates_tree(&["ghost/a.txt"], |_| {});
+    let reader = CountingReader::new();
+    let listing = scan_listing(&Registry::v1(), &paths(&built), &BTreeSet::new(), &reader).unwrap();
+    assert_eq!(reader.read_dirs().len(), 1);
+    assert_eq!(listing.tracked.len(), 1);
+    assert!(listing.tracked[0].live.is_none());
+}
+
+#[test]
+fn backup_names_need_a_stem_and_only_digits() {
+    for name in [
+        "a.bak.1",
+        "waybar.bak.1700000000",
+        "x.y.bak.007",
+        "a.lua.bak.5",
+    ] {
+        assert!(is_backup_name(name), "{name}");
+    }
+    for name in [
+        "a.bak.",
+        "a.bak",
+        ".bak.5",
+        "a.bak.x1",
+        "a.bak.12.old",
+        "a.bak.1 2",
+        "bak.5",
+        "a.bak.\u{661}",
+        "",
+    ] {
+        assert!(!is_backup_name(name), "{name}");
+    }
+}
+
+#[test]
+fn backups_are_grouped_per_directory_and_kept_out_of_the_tree() {
+    let built = templates_tree(&["hypr/a.lua", "waybar/c.jsonc"], |builder| {
+        builder.file("home/.config/hypr/a.lua", MARKER).unwrap();
+        builder
+            .file("home/.config/hypr/a.lua.bak.1700", MARKER)
+            .unwrap();
+        builder
+            .file("home/.config/hypr/a.lua.bak.1800", MARKER)
+            .unwrap();
+        builder
+            .file("home/.config/hypr/notes.bak.9", MARKER)
+            .unwrap();
+        builder
+            .file("home/.config/hypr/keep.bak.x", MARKER)
+            .unwrap();
+        builder
+            .file("home/.config/hypr/odd.bak.12.old", MARKER)
+            .unwrap();
+        builder.file("home/.config/waybar/c.jsonc", MARKER).unwrap();
+        builder
+            .file("home/.config/waybar/c.jsonc.bak.5", MARKER)
+            .unwrap();
+    });
+    let listing = scan_listing(
+        &Registry::v1(),
+        &paths(&built),
+        &BTreeSet::new(),
+        &StdDirReader,
+    )
+    .unwrap();
+    let groups: Vec<(String, Vec<String>)> = listing
+        .backups
+        .iter()
+        .map(|group| {
+            (
+                group.dir.clone(),
+                group
+                    .files
+                    .iter()
+                    .map(|f| f.path().as_str().to_string())
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            (
+                ".config/hypr".to_string(),
+                vec![
+                    ".config/hypr/a.lua.bak.1700".to_string(),
+                    ".config/hypr/a.lua.bak.1800".to_string(),
+                    ".config/hypr/notes.bak.9".to_string()
+                ]
+            ),
+            (
+                ".config/waybar".to_string(),
+                vec![".config/waybar/c.jsonc.bak.5".to_string()]
+            ),
+        ]
+    );
+    assert_eq!(
+        live_paths(&listing.tracked),
+        [
+            ".config/hypr/a.lua",
+            ".config/hypr/keep.bak.x",
+            ".config/hypr/odd.bak.12.old",
+            ".config/waybar/c.jsonc"
+        ]
+    );
+    assert!(listing.ignored.is_empty());
+}
+
+#[test]
+fn a_directory_without_backups_has_no_group() {
+    let built = templates_tree(&["hypr/a.lua"], |builder| {
+        builder.file("home/.config/hypr/a.lua", MARKER).unwrap();
+    });
+    let listing = scan_listing(
+        &Registry::v1(),
+        &paths(&built),
+        &BTreeSet::new(),
+        &StdDirReader,
+    )
+    .unwrap();
+    assert!(listing.backups.is_empty());
+}
+
+#[test]
+fn ignored_paths_move_out_of_the_tree_and_the_backups() {
+    let built = templates_tree(&["hypr/a.lua", "hypr/gone.lua"], |builder| {
+        builder.file("home/.config/hypr/a.lua", MARKER).unwrap();
+        builder.file("home/.config/hypr/mine.lua", MARKER).unwrap();
+        builder.file("home/.config/hypr/other.lua", MARKER).unwrap();
+        builder.file("home/.config/hypr/old.bak.4", MARKER).unwrap();
+        builder
+            .file("home/.config/hypr/old2.bak.5", MARKER)
+            .unwrap();
+    });
+    let ignored: BTreeSet<RelPath> = [
+        rel(".config/hypr/a.lua"),
+        rel(".config/hypr/gone.lua"),
+        rel(".config/hypr/mine.lua"),
+        rel(".config/hypr/old.bak.4"),
+        rel(".config/hypr/never-existed.lua"),
+    ]
+    .into_iter()
+    .collect();
+    let listing = scan_listing(&Registry::v1(), &paths(&built), &ignored, &StdDirReader).unwrap();
+    assert_eq!(live_paths(&listing.tracked), [".config/hypr/other.lua"]);
+    assert_eq!(
+        live_paths(&listing.ignored),
+        [
+            ".config/hypr/a.lua",
+            ".config/hypr/mine.lua",
+            ".config/hypr/old.bak.4"
+        ]
+    );
+    assert_eq!(listing.ignored.len(), 4);
+    assert!(listing
+        .ignored
+        .iter()
+        .any(|item| item.template.is_some() && item.live.is_none()));
+    assert_eq!(listing.backups.len(), 1);
+    assert_eq!(listing.backups[0].files.len(), 1);
+    assert_eq!(
+        listing.backups[0].files[0].path().as_str(),
+        ".config/hypr/old2.bak.5"
+    );
+    let reader = CountingReader::new();
+    let none = scan_listing(&Registry::v1(), &paths(&built), &BTreeSet::new(), &reader).unwrap();
+    assert!(none.ignored.is_empty());
+    assert_eq!(none.tracked.len(), 4);
+}
+
+#[test]
+fn enumerate_still_returns_the_tracked_files_only() {
+    let built = templates_tree(&["hypr/a.lua"], |builder| {
+        builder.file("home/.config/hypr/a.lua", MARKER).unwrap();
+        builder
+            .file("home/.config/hypr/a.lua.bak.3", MARKER)
+            .unwrap();
+        builder.file("home/.config/hypr/mine.lua", MARKER).unwrap();
+    });
+    let tracked = enumerate(&Registry::v1(), &paths(&built)).unwrap();
+    assert_eq!(
+        live_paths(&tracked),
+        [".config/hypr/a.lua", ".config/hypr/mine.lua"]
+    );
+}
+
+struct RotatedReader;
+
+impl DirReader for RotatedReader {
+    fn children(&self, dir: &Path) -> Option<Vec<String>> {
+        let mut names = StdDirReader.children(dir)?;
+        names.sort();
+        names.rotate_left(1);
+        Some(names)
+    }
+}
+
+#[test]
+fn listing_order_does_not_depend_on_the_directory_order() {
+    let built = templates_tree(&["hypr/a.lua"], |builder| {
+        builder.file("home/.config/hypr/a.lua", MARKER).unwrap();
+        builder.file("home/.config/hypr/x.bak.1", MARKER).unwrap();
+        builder.file("home/.config/hypr/y.bak.2", MARKER).unwrap();
+        builder.file("home/.config/hypr/z.bak.3", MARKER).unwrap();
+        builder.file("home/.config/hypr/u1.lua", MARKER).unwrap();
+        builder.file("home/.config/hypr/u2.lua", MARKER).unwrap();
+        builder.file("home/.config/hypr/u3.lua", MARKER).unwrap();
+    });
+    let listing = scan_listing(
+        &Registry::v1(),
+        &paths(&built),
+        &BTreeSet::new(),
+        &RotatedReader,
+    )
+    .unwrap();
+    let backups: Vec<&str> = listing.backups[0]
+        .files
+        .iter()
+        .map(|f| f.path().as_str())
+        .collect();
+    assert_eq!(
+        backups,
+        [
+            ".config/hypr/x.bak.1",
+            ".config/hypr/y.bak.2",
+            ".config/hypr/z.bak.3"
+        ]
+    );
+    assert_eq!(
+        live_paths(&listing.tracked),
+        [
+            ".config/hypr/a.lua",
+            ".config/hypr/u1.lua",
+            ".config/hypr/u2.lua",
+            ".config/hypr/u3.lua"
+        ]
     );
 }

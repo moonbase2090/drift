@@ -2,6 +2,7 @@ mod classify;
 mod config;
 mod error;
 mod file;
+mod merge;
 mod path;
 mod plan;
 mod registry;
@@ -11,6 +12,7 @@ pub use classify::{classify, Base, Classification, MergeOutcome, Versions};
 pub use config::{parse_user_roots, registry_from_user_config, USER_CONFIG_PATH};
 pub use error::{Error, Location};
 pub use file::{LiveFile, LiveState, LiveTreatment, Template, Verification};
+pub use merge::{merge3, Choice, Hunk, HunkKind, Merge, Segment};
 pub use path::RelPath;
 pub use plan::{Action, ObservedFile, Plan, PlannedFile};
 pub use registry::{
