@@ -241,7 +241,9 @@ dependencies = [
 name = "drift-tui"
 version = "0.1.0"
 dependencies = [
+ "drift-apply",
  "drift-core",
+ "drift-fixtures",
  "lunatui",
  "lunatui-core",
  "lunatui-runtime",
@@ -249,6 +251,7 @@ dependencies = [
  "lunatui-test",
  "lunatui-theme",
  "lunatui-widgets",
+ "sha2",
  "terminal_size",
 ]
 
