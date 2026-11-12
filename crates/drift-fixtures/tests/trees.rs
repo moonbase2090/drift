@@ -296,6 +296,9 @@ fn tree_hash_sees_one_byte_mode_and_mtime_changes() {
     let root = tempfile::tempdir().unwrap();
     let file = root.path().join("note.txt");
     fs::write(&file, b"alpha\n").unwrap();
+    let mut baseline = fs::metadata(&file).unwrap().permissions();
+    baseline.set_mode(0o644);
+    fs::set_permissions(&file, baseline).unwrap();
     stamp_tree(root.path(), 1_700_000_000);
     let original = hash_tree(root.path()).unwrap();
 
