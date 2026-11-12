@@ -1,0 +1,40 @@
+{
+  "id": "txn-7",
+  "time": "2026-04-01T00:00:00Z",
+  "package_version": "4.5.0-3",
+  "files": [
+    {
+      "path": "config/hypr/monitors.lua",
+      "action": "take upstream",
+      "sha256_before": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac",
+      "sha256_after": "98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4",
+      "mode": 420,
+      "backup": "backups/txn-7/config/hypr/monitors.lua"
+    },
+    {
+      "path": "config/hypr/looknfeel.lua",
+      "action": "keep mine",
+      "sha256_before": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac",
+      "sha256_after": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac",
+      "mode": 420,
+      "backup": null
+    },
+    {
+      "path": "config/omarchy/shell.json",
+      "action": "merge",
+      "sha256_before": "98ea6e4f216f2fb4b69fff9b3a44842c38686ca685f3f55dc48c5d3fb1107be4",
+      "sha256_after": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "mode": 384,
+      "backup": "backups/txn-7/config/omarchy/shell.json"
+    },
+    {
+      "path": "config/hypr/new.lua",
+      "action": "take upstream",
+      "sha256_before": null,
+      "sha256_after": "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac",
+      "mode": 420,
+      "backup": null
+    }
+  ],
+  "prune": ["txn-1"]
+}
