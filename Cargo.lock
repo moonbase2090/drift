@@ -226,6 +226,7 @@ dependencies = [
  "lunatui-theme",
  "lunatui-widgets",
  "terminal_size",
+ "unicode-width",
 ]
 
 [[package]]

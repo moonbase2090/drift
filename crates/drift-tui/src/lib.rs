@@ -1,5 +1,7 @@
+mod diff;
 mod screen;
 
+pub use diff::DiffScreen;
 pub use screen::{frame_text, keymap, launch, quit_bounds, render_frame, Screen};
 
 pub fn crate_name() -> &'static str {
