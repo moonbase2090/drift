@@ -225,7 +225,7 @@ fn is_safe_relative(path: &str) -> bool {
             .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(64);
