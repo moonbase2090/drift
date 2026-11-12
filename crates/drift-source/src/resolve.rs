@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use drift_core::{BaseProvenance, RelPath};
 
@@ -46,9 +46,37 @@ pub fn resolve_bases(
             None => unknown(),
         })
         .collect();
+    if resolved.iter().all(|item| item.bytes.is_some()) {
+        return Ok(resolved);
+    }
+    let mut versions = Vec::new();
+    if let Some(version) = read_reviewed_version(&paths.state) {
+        if version != installed && version_ok(&version) {
+            versions.push(version);
+        }
+    }
+    take_versions(&mut resolved, paths, files, &versions);
+    if resolved.iter().all(|item| item.bytes.is_some()) {
+        return Ok(resolved);
+    }
     let upgrades = read_log(&paths.log)?;
-    let versions = candidate_versions(read_reviewed_version(&paths.state), &upgrades, installed);
-    for version in &versions {
+    if let Some(previous) = upgrades.iter().rev().find(|item| item.to == installed) {
+        if version_ok(&previous.from) && !versions.iter().any(|version| version == &previous.from) {
+            versions.push(previous.from.clone());
+            let last = versions.len() - 1;
+            take_versions(&mut resolved, paths, files, &versions[last..]);
+        }
+    }
+    Ok(resolved)
+}
+
+fn take_versions(
+    resolved: &mut [ResolvedBase],
+    paths: &ResolvePaths,
+    files: &[BaseQuery<'_>],
+    versions: &[String],
+) {
+    for version in versions {
         let mut wanted = BTreeSet::new();
         for (index, file) in files.iter().enumerate() {
             if resolved[index].bytes.is_some() {
@@ -78,7 +106,6 @@ pub fn resolve_bases(
             }
         }
     }
-    Ok(resolved)
 }
 
 fn known(provenance: BaseProvenance, bytes: Vec<u8>) -> ResolvedBase {
@@ -95,30 +122,12 @@ fn unknown() -> ResolvedBase {
     }
 }
 
-fn candidate_versions(
-    reviewed: Option<String>,
-    upgrades: &[Upgrade],
-    installed: &str,
-) -> Vec<String> {
-    let mut versions = Vec::new();
-    if let Some(version) = reviewed {
-        if version != installed && version_ok(&version) {
-            versions.push(version);
-        }
-    }
-    if let Some(previous) = upgrades.iter().rev().find(|item| item.to == installed) {
-        if version_ok(&previous.from) && !versions.iter().any(|version| version == &previous.from) {
-            versions.push(previous.from.clone());
-        }
-    }
-    versions
-}
-
 fn version_ok(version: &str) -> bool {
-    !version.is_empty()
-        && version
-            .chars()
-            .all(|c| !c.is_whitespace() && c != '/' && c != '\0')
+    let mut components = Path::new(version).components();
+    let Some(Component::Normal(_)) = components.next() else {
+        return false;
+    };
+    components.next().is_none() && version.chars().all(|c| !c.is_whitespace() && c != '\0')
 }
 
 fn read_log(path: &Path) -> Result<Vec<Upgrade>, Error> {
