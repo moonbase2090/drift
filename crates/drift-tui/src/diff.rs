@@ -13,7 +13,9 @@ use lunatui_widgets::{
 use unicode_width::UnicodeWidthChar;
 
 const WIDE: u16 = 160;
+const MEDIUM: u16 = 100;
 const QUIT: &str = "diff.quit";
+const LAYOUT: &str = "diff.layout";
 const NEXT: &str = "diff.next";
 const PREVIOUS: &str = "diff.previous";
 const FOCUS_NEXT: &str = "diff.focus-next";
@@ -23,6 +25,7 @@ const NARROW: &str = "diff.narrow";
 const DOWN: &str = "diff.down";
 const UP: &str = "diff.up";
 const PANES: [&str; 5] = ["hunks", "base", "ours", "theirs", "result"];
+const LAYOUT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('v'), Modifiers::new())];
 const HIGHLIGHT: Color = Color::Rgb(220, 160, 40);
 
 const QUIT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('q'), Modifiers::new())];
@@ -35,6 +38,20 @@ const NARROW_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('['), Modifiers
 const DOWN_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Down, Modifiers::new())];
 const UP_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Up, Modifiers::new())];
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    Four,
+    Two,
+    Stacked,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WidthClass {
+    Wide,
+    Medium,
+    Narrow,
+}
+
 pub struct DiffScreen {
     aligned: Aligned,
     scroll: CodeViewState,
@@ -42,6 +59,9 @@ pub struct DiffScreen {
     drag: SplitDrag,
     focus: usize,
     hunk: usize,
+    pinned: Option<Layout>,
+    class: Option<WidthClass>,
+    two_way: bool,
     keymap: Keymap,
     columns: u16,
     rows: u16,
@@ -101,6 +121,12 @@ impl DiffScreen {
         Self::from_merge(&merge)
     }
 
+    pub fn without_base(ours: &str, theirs: &str) -> Self {
+        let mut screen = Self::from_merge(&merge3(ours, ours, theirs));
+        screen.two_way = true;
+        screen
+    }
+
     pub fn from_merge(merge: &Merge) -> Self {
         let (mut tree, hunks) = SplitTree::new();
         let base = tree
@@ -120,6 +146,9 @@ impl DiffScreen {
             drag: SplitDrag::new(),
             focus: 0,
             hunk: 0,
+            pinned: None,
+            class: None,
+            two_way: false,
             keymap: keymap(),
             columns: 0,
             rows: 0,
@@ -162,7 +191,45 @@ impl DiffScreen {
     }
 
     fn wide(&self) -> bool {
-        self.columns >= WIDE && self.rows > 2
+        self.effective() == Layout::Four
+    }
+
+    fn note_class(&mut self) {
+        let class = width_class(self.columns, self.rows);
+        if self.class.is_some() && self.class != Some(class) {
+            self.pinned = None;
+        }
+        self.class = Some(class);
+    }
+
+    fn effective(&self) -> Layout {
+        let auto = auto_layout(self.class.unwrap_or(WidthClass::Narrow), self.two_way);
+        match self.pinned {
+            Some(Layout::Four) if self.two_way => Layout::Two,
+            Some(layout) => layout,
+            None => auto,
+        }
+    }
+
+    fn cycle_layout(&mut self) {
+        self.revise();
+        self.pinned = Some(next_layout(self.effective(), self.two_way));
+    }
+
+    fn header_text(&self) -> String {
+        if self.two_way {
+            return match self.aligned.hunk_labels.get(self.hunk) {
+                Some(label) => format!("Diff  base unknown  {label}"),
+                None => "Diff  base unknown".to_string(),
+            };
+        }
+        if self.effective() == Layout::Four {
+            return "Diff".to_string();
+        }
+        match self.aligned.hunk_labels.get(self.hunk) {
+            Some(label) => format!("Diff  {label}"),
+            None => "Diff".to_string(),
+        }
     }
 
     fn revise(&mut self) {
@@ -216,6 +283,7 @@ fn keymap() -> Keymap {
     map.register(Command::new(QUIT, "Quit", QUIT_CHORDS));
     map.register(Command::new(NEXT, "Next hunk", NEXT_CHORDS));
     map.register(Command::new(PREVIOUS, "Previous hunk", PREVIOUS_CHORDS));
+    map.register(Command::new(LAYOUT, "Layout", LAYOUT_CHORDS));
     map.register(Command::new(FOCUS_NEXT, "Next pane", FOCUS_NEXT_CHORDS));
     map.register(Command::new(
         FOCUS_PREVIOUS,
@@ -227,6 +295,48 @@ fn keymap() -> Keymap {
     map.register(Command::new(DOWN, "Scroll down", DOWN_CHORDS));
     map.register(Command::new(UP, "Scroll up", UP_CHORDS));
     map
+}
+
+fn width_class(columns: u16, rows: u16) -> WidthClass {
+    if rows <= 2 {
+        return WidthClass::Narrow;
+    }
+    if columns >= WIDE {
+        WidthClass::Wide
+    } else if columns >= MEDIUM {
+        WidthClass::Medium
+    } else {
+        WidthClass::Narrow
+    }
+}
+
+fn auto_layout(class: WidthClass, two_way: bool) -> Layout {
+    if two_way {
+        return if class == WidthClass::Narrow {
+            Layout::Stacked
+        } else {
+            Layout::Two
+        };
+    }
+    match class {
+        WidthClass::Wide => Layout::Four,
+        WidthClass::Medium => Layout::Two,
+        WidthClass::Narrow => Layout::Stacked,
+    }
+}
+
+fn next_layout(current: Layout, two_way: bool) -> Layout {
+    if two_way {
+        return match current {
+            Layout::Stacked => Layout::Two,
+            Layout::Two | Layout::Four => Layout::Stacked,
+        };
+    }
+    match current {
+        Layout::Four => Layout::Two,
+        Layout::Two => Layout::Stacked,
+        Layout::Stacked => Layout::Four,
+    }
 }
 
 fn align(merge: &Merge) -> Aligned {
@@ -433,6 +543,59 @@ fn columns_to_bytes(text: &str, span: Span) -> Option<Range<usize>> {
     None
 }
 
+fn split_strip(body: Rect) -> (Rect, Rect) {
+    let strip_height = if body.height <= 4 {
+        1.min(body.height)
+    } else {
+        (body.height / 3).clamp(3, body.height - 3)
+    };
+    let top_height = body.height.saturating_sub(strip_height);
+    let top = Rect::new(body.x, body.y, body.width, top_height);
+    let strip = Rect::new(
+        body.x,
+        body.y.saturating_add(top_height),
+        body.width,
+        strip_height,
+    );
+    (top, strip)
+}
+
+fn split_pair(area: Rect) -> (Rect, Rect) {
+    if area.width < 3 {
+        return (
+            area,
+            Rect::new(area.x.saturating_add(area.width), area.y, 0, area.height),
+        );
+    }
+    let left_width = (area.width - 1) / 2;
+    let left = Rect::new(area.x, area.y, left_width, area.height);
+    let right = Rect::new(
+        area.x.saturating_add(left_width).saturating_add(1),
+        area.y,
+        area.width - left_width - 1,
+        area.height,
+    );
+    (left, right)
+}
+
+fn stacked_line(aligned: &Aligned, index: usize) -> Option<String> {
+    let base = aligned.base.get(index)?;
+    let ours = aligned
+        .ours
+        .get(index)
+        .filter(|line| line.text != base.text);
+    let theirs = aligned
+        .theirs
+        .get(index)
+        .filter(|line| line.text != base.text);
+    let (prefix, text) = match (ours, theirs) {
+        (Some(line), _) => ("+ ", line.text.as_str()),
+        (None, Some(line)) => ("+ ", line.text.as_str()),
+        (None, None) => ("  ", base.text.as_str()),
+    };
+    Some(format!("{prefix}{text}"))
+}
+
 fn regions(area: Rect) -> (Rect, Rect, Rect) {
     if area.height == 0 {
         let empty = Rect::new(area.x, area.y, area.width, 0);
@@ -500,6 +663,10 @@ impl App for DiffScreen {
                 self.scroll_by(-1);
                 ControlFlow::Continue
             }
+            Some(LAYOUT) => {
+                self.cycle_layout();
+                ControlFlow::Continue
+            }
             _ => ControlFlow::Continue,
         }
     }
@@ -507,6 +674,7 @@ impl App for DiffScreen {
     fn render(&mut self, grid: &mut Grid, area: Rect, clusters: &mut lunatui_core::ClusterTable) {
         self.columns = area.width;
         self.rows = area.height;
+        self.note_class();
         if let Some(painted) = &self.painted {
             if painted.columns == area.width
                 && painted.rows == area.height
@@ -527,23 +695,19 @@ impl App for DiffScreen {
         cx.fill(area, text, ' ');
         let (header, body, hint) = regions(area);
         if header.width > 0 && header.height > 0 {
+            let title = self.header_text();
             cx.put_str(
                 header.x,
                 header.y,
-                clip_display_prefix("Diff", header.width),
+                clip_display_prefix(&title, header.width),
                 accent,
             );
         }
         if body.width > 0 && body.height > 0 {
-            if area.width >= WIDE {
-                self.render_wide(body, &mut cx, accent, text);
-            } else {
-                cx.put_str(
-                    body.x,
-                    body.y,
-                    clip_display_prefix("Four panes need a wider window", body.width),
-                    text,
-                );
+            match self.effective() {
+                Layout::Four => self.render_wide(body, &mut cx, accent, text),
+                Layout::Two => self.render_two(body, &mut cx, accent, text),
+                Layout::Stacked => self.render_stacked(body, &mut cx, accent, text),
             }
         }
         if hint.width > 0 && hint.height > 0 {
@@ -606,6 +770,84 @@ impl DiffScreen {
         }
         let active = self.drag.active().or_else(|| self.focused_divider());
         paint_dividers(&layout, text, accent, active, cx);
+    }
+
+    fn render_two(&mut self, body: Rect, cx: &mut RenderCx<'_>, accent: Style, text: Style) {
+        let (top, strip) = split_strip(body);
+        let scroll = self.prepare_scroll(top.height.saturating_sub(1));
+        let (left, right) = split_pair(top);
+        let ours = if self.focused() == "ours" {
+            accent
+        } else {
+            text
+        };
+        let theirs = if self.focused() == "theirs" {
+            accent
+        } else {
+            text
+        };
+        self.render_code(left, "ours", &self.aligned.ours, ours, scroll, cx);
+        self.render_code(right, "theirs", &self.aligned.theirs, theirs, scroll, cx);
+        if top.width > 2 && top.height > 0 {
+            let x = left.x.saturating_add(left.width);
+            cx.fill(Rect::new(x, top.y, 1, top.height), text, '│');
+        }
+        if self.two_way || strip.height == 0 {
+            return;
+        }
+        let result = if self.focused() == "result" {
+            accent
+        } else {
+            text
+        };
+        self.render_code(strip, "result", &self.aligned.result, result, scroll, cx);
+    }
+
+    fn render_stacked(&mut self, body: Rect, cx: &mut RenderCx<'_>, accent: Style, text: Style) {
+        if self.two_way {
+            let top_height = (body.height / 2).max(1).min(body.height);
+            let top = Rect::new(body.x, body.y, body.width, top_height);
+            let bottom = Rect::new(
+                body.x,
+                body.y.saturating_add(top_height),
+                body.width,
+                body.height.saturating_sub(top_height),
+            );
+            let scroll = self.prepare_scroll(top.height.saturating_sub(1));
+            let ours = if self.focused() == "ours" {
+                accent
+            } else {
+                text
+            };
+            let theirs = if self.focused() == "theirs" {
+                accent
+            } else {
+                text
+            };
+            self.render_code(top, "ours", &self.aligned.ours, ours, scroll, cx);
+            self.render_code(bottom, "theirs", &self.aligned.theirs, theirs, scroll, cx);
+            return;
+        }
+        cx.put_str(
+            body.x,
+            body.y,
+            clip_display_prefix("stacked", body.width),
+            accent,
+        );
+        if body.height <= 1 {
+            return;
+        }
+        let view = Rect::new(body.x, body.y + 1, body.width, body.height - 1);
+        let scroll = self.prepare_scroll(view.height);
+        let top = scroll.top();
+        let rows = usize::from(view.height);
+        for (offset, index) in (top..).take(rows).enumerate() {
+            let Some(shown) = stacked_line(&self.aligned, index) else {
+                break;
+            };
+            let y = view.y.saturating_add(u16::try_from(offset).unwrap_or(0));
+            cx.put_str(view.x, y, clip_display_prefix(&shown, view.width), text);
+        }
     }
 
     fn prepare_scroll(&mut self, rows: u16) -> CodeViewState {
@@ -1156,16 +1398,116 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_window_asks_for_width() {
+    fn snapshots_show_narrower_layouts() {
+        for (columns, rows) in [(80_u16, 24_u16), (100, 30), (120, 36)] {
+            let mut screen = changed();
+            let (grid, clusters) = render_once(&mut screen, columns, rows);
+            let text = grid.display_text(&clusters);
+            assert!(text.lines().next().unwrap().contains("Diff"), "{columns}");
+            match (columns, rows) {
+                (80, 24) => {
+                    assert!(text.contains("stacked"), "{columns}");
+                    assert!(text.contains("hello WORLD"), "{columns}");
+                }
+                (100, 30) | (120, 36) => {
+                    let body = text.lines().nth(1).unwrap();
+                    assert!(
+                        body.contains("ours") && body.contains("theirs"),
+                        "{columns}"
+                    );
+                    assert!(text.contains("result"), "{columns}");
+                    assert!(text.contains("hello WORLD"), "{columns}");
+                }
+                _ => unreachable!(),
+            }
+            let snap = styled_snapshot(&grid, &clusters);
+            let expected = match (columns, rows) {
+                (80, 24) => include_str!("../snapshots/diff-80x24.txt"),
+                (100, 30) => include_str!("../snapshots/diff-100x30.txt"),
+                (120, 36) => include_str!("../snapshots/diff-120x36.txt"),
+                _ => unreachable!(),
+            };
+            assert_eq!(snap, expected, "{columns}x{rows}");
+        }
+    }
+
+    #[test]
+    fn a_narrow_window_stacks_the_change() {
         let mut screen = changed();
         let (grid, clusters) = render_once(&mut screen, 80, 24);
         let text = grid.display_text(&clusters);
-        assert!(text.contains("Four panes need a wider window"));
-        assert!(!text.contains("hello WORLD"));
+        assert!(text.contains("stacked"), "{text}");
+        assert!(text.contains("hello WORLD"), "{text}");
         assert_eq!(
             screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('q')))),
             ControlFlow::Break
         );
+    }
+
+    #[test]
+    fn width_picks_the_layout_and_keeps_the_hunk() {
+        let mut screen = two_hunks();
+        let _ = render_once(&mut screen, 160, 40);
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('n'))));
+        assert_eq!(screen.selected_hunk(), 1);
+        let (grid, clusters) = render_once(&mut screen, 120, 36);
+        let medium = grid.display_text(&clusters);
+        assert_eq!(screen.selected_hunk(), 1);
+        assert!(medium.contains("ours"), "{medium}");
+        assert!(medium.contains("theirs"), "{medium}");
+        assert!(medium.contains("result"), "{medium}");
+        assert!(!medium.lines().nth(1).unwrap_or("").contains("base"));
+        let (grid, clusters) = render_once(&mut screen, 100, 30);
+        let hundred = grid.display_text(&clusters);
+        assert!(hundred.contains("result"), "{hundred}");
+        assert_eq!(screen.selected_hunk(), 1);
+        let (grid, clusters) = render_once(&mut screen, 80, 24);
+        let narrow = grid.display_text(&clusters);
+        assert!(narrow.contains("stacked"), "{narrow}");
+        assert_eq!(screen.selected_hunk(), 1);
+    }
+
+    #[test]
+    fn v_cycles_layouts_until_the_width_class_changes() {
+        let mut screen = changed();
+        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let wide = grid.display_text(&clusters);
+        assert!(wide.contains("hunks"), "{wide}");
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('v'))));
+        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let two = grid.display_text(&clusters);
+        assert!(two.contains("ours") && two.contains("result"), "{two}");
+        assert!(!two.lines().nth(1).unwrap_or("").contains("hunks"));
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('v'))));
+        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        assert!(grid.display_text(&clusters).contains("stacked"));
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('v'))));
+        let (grid, clusters) = render_once(&mut screen, 180, 40);
+        assert!(grid.display_text(&clusters).contains("hunks"));
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('v'))));
+        let (grid, clusters) = render_once(&mut screen, 168, 40);
+        assert!(grid.display_text(&clusters).contains("result"));
+        let (grid, clusters) = render_once(&mut screen, 80, 24);
+        assert!(grid.display_text(&clusters).contains("stacked"));
+    }
+
+    #[test]
+    fn an_unknown_base_shows_two_panes_and_a_note() {
+        let mut screen = DiffScreen::without_base("alpha\nhello\n", "alpha\nHELLO\n");
+        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let text = grid.display_text(&clusters);
+        assert!(text.contains("base unknown"), "{text}");
+        assert!(text.contains("ours"), "{text}");
+        assert!(text.contains("theirs"), "{text}");
+        assert!(text.contains("HELLO"), "{text}");
+        let body = text.lines().nth(1).unwrap_or("");
+        assert!(!body.contains("result"), "{body}");
+        assert!(!body.contains("hunks"), "{body}");
+        let (grid, clusters) = render_once(&mut screen, 80, 24);
+        let narrow = grid.display_text(&clusters);
+        assert!(narrow.contains("base unknown"), "{narrow}");
+        assert!(narrow.contains("ours"), "{narrow}");
+        assert!(narrow.contains("theirs"), "{narrow}");
     }
 
     #[test]

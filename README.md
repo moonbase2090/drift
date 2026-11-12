@@ -18,6 +18,10 @@ A changed file opens in five columns once the window is at least 160 cells wide:
 
 ![Four-pane diff](docs/media/four-pane.gif)
 
+Below 160 columns the same file uses fewer panes. From 100 columns it shows ours and theirs side by side, with the result underneath. Narrower than that, the rows stack in one column and a changed line is marked. `v` cycles those layouts. A resize that crosses a width boundary follows the width again and keeps the selected hunk. A file with no base stays on two panes, and the header says the base is unknown.
+
+![Narrower diff layouts](docs/media/layout-cycle.gif)
+
 ## Plan dialog
 
 Before anything is written, the plan dialog lists every file with its action, the backup location and a diff summary, and the old transactions that will be pruned. Focus starts on Cancel. `d` expands the selected file's diff, Tab moves between the buttons, `y` confirms, `n` or Escape cancels, and the mouse works on the buttons and rows. The capture below is the real program: `cargo run -p drift-tui --example plan_dialog` opens the dialog on a sample plan and writes nothing; here it expands the first diff, the second diff, moves focus to Confirm and confirms.
