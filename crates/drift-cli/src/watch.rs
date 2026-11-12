@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn a_missing_root_does_not_start_a_watch() {
-        let worker = drift_tui::spawn_scan(|| Ok(()));
+        let worker = drift_tui::spawn_scan(|| Err(String::new()));
         let watch = super::arm(&[PathBuf::from("/no/such/drift/root")], worker.changes());
         assert!(watch.is_none());
     }

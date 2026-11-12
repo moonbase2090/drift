@@ -2,6 +2,10 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use drift_core::ScanReport;
+
+use crate::wake::{self, Wake};
+
 pub const DEBOUNCE: Duration = Duration::from_millis(200);
 
 enum Request {
@@ -14,7 +18,7 @@ enum Request {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Note {
     Scanning,
-    Ready,
+    Ready(ScanReport),
     Failed(String),
 }
 
@@ -33,6 +37,7 @@ pub struct WorkerHandle {
     requests: Sender<Request>,
     notes: Receiver<Note>,
     thread: Option<JoinHandle<()>>,
+    wake: Wake,
 }
 
 impl WorkerHandle {
@@ -49,41 +54,51 @@ impl WorkerHandle {
     pub(crate) fn try_recv(&self) -> Option<Note> {
         self.notes.try_recv().ok()
     }
+
+    pub(crate) fn arm_terminal(&self) -> std::io::Result<()> {
+        wake::arm(&self.wake)
+    }
 }
 
 impl Drop for WorkerHandle {
     fn drop(&mut self) {
         let _ = self.requests.send(Request::Stop);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        drop(self.thread.take());
     }
 }
 
 pub(crate) fn launch(
-    mut scan: Box<dyn FnMut() -> Result<(), String> + Send>,
+    mut scan: Box<dyn FnMut() -> Result<ScanReport, String> + Send>,
     debounce: Duration,
 ) -> WorkerHandle {
     let (requests_tx, requests_rx) = mpsc::channel();
     let (notes_tx, notes_rx) = mpsc::channel();
-    let thread = thread::spawn(move || serve(&mut scan, debounce, requests_rx, notes_tx));
+    let wake = Wake::new();
+    let threaded = wake.clone();
+    let thread = thread::spawn(move || serve(&mut scan, debounce, requests_rx, notes_tx, threaded));
     WorkerHandle {
         requests: requests_tx,
         notes: notes_rx,
         thread: Some(thread),
+        wake,
     }
 }
 
 pub fn spawn_scan<F>(scan: F) -> WorkerHandle
 where
-    F: FnMut() -> Result<(), String> + Send + 'static,
+    F: FnMut() -> Result<ScanReport, String> + Send + 'static,
 {
     launch(Box::new(scan), DEBOUNCE)
 }
 
-fn serve<F>(scan: &mut F, debounce: Duration, requests: Receiver<Request>, notes: Sender<Note>)
-where
-    F: FnMut() -> Result<(), String>,
+fn serve<F>(
+    scan: &mut F,
+    debounce: Duration,
+    requests: Receiver<Request>,
+    notes: Sender<Note>,
+    wake: Wake,
+) where
+    F: FnMut() -> Result<ScanReport, String>,
 {
     let mut schedule = Schedule::new(debounce);
     while let Some(message) = next_message(&mut schedule, &requests) {
@@ -96,11 +111,13 @@ where
                     continue;
                 }
                 let _ = notes.send(Note::Scanning);
+                wake.ping();
                 let result = scan();
                 if !absorb(&mut schedule, &requests) {
                     break;
                 }
-                if schedule.finish() == Outcome::Publish && publish(&notes, result).is_err() {
+                if schedule.finish() == Outcome::Publish && publish(&notes, &wake, result).is_err()
+                {
                     break;
                 }
             }
@@ -108,12 +125,18 @@ where
     }
 }
 
-fn publish(notes: &Sender<Note>, result: Result<(), String>) -> Result<(), mpsc::SendError<Note>> {
+fn publish(
+    notes: &Sender<Note>,
+    wake: &Wake,
+    result: Result<ScanReport, String>,
+) -> Result<(), mpsc::SendError<Note>> {
     let note = match result {
-        Ok(()) => Note::Ready,
+        Ok(report) => Note::Ready(report),
         Err(error) => Note::Failed(error),
     };
-    notes.send(note)
+    let sent = notes.send(note);
+    wake.ping();
+    sent
 }
 
 fn absorb(schedule: &mut Schedule, requests: &Receiver<Request>) -> bool {
@@ -293,6 +316,20 @@ mod tests {
         Schedule::new(DEBOUNCE)
     }
 
+    fn empty_report() -> ScanReport {
+        report_named("")
+    }
+
+    fn report_named(version: &str) -> ScanReport {
+        ScanReport {
+            package_version: version.to_string(),
+            reviewed_version: None,
+            entries: Vec::new(),
+            backups: Vec::new(),
+            ignored: 0,
+        }
+    }
+
     #[test]
     fn a_burst_scans_once_when_the_debounce_elapses() {
         let mut schedule = clock();
@@ -363,7 +400,7 @@ mod tests {
         let worker = launch(
             Box::new(move || {
                 counted.fetch_add(1, Ordering::SeqCst);
-                Ok(())
+                Ok(empty_report())
             }),
             Duration::ZERO,
         );
@@ -384,15 +421,16 @@ mod tests {
             serve(
                 &mut || {
                     counted.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
+                    Ok(empty_report())
                 },
                 Duration::ZERO,
                 requests_rx,
                 notes_tx,
+                Wake::new(),
             );
         });
         assert_eq!(notes_rx.recv().unwrap(), Note::Scanning);
-        assert_eq!(notes_rx.recv().unwrap(), Note::Ready);
+        assert!(matches!(notes_rx.recv().unwrap(), Note::Ready(_)));
         assert_eq!(scans.load(Ordering::SeqCst), 1);
         requests_tx.send(Request::Stop).unwrap();
         thread.join().unwrap();
@@ -414,7 +452,7 @@ mod tests {
                 } else {
                     let _ = follow_tx.send(());
                 }
-                Ok(())
+                Ok(empty_report())
             }),
             Duration::ZERO,
         );
@@ -427,5 +465,39 @@ mod tests {
         follow_rx.recv().unwrap();
         assert_eq!(scans.load(Ordering::SeqCst), 2);
         drop(worker);
+    }
+
+    #[test]
+    fn distinct_reports_cross_the_worker() {
+        let (requests_tx, requests_rx) = mpsc::channel();
+        let (notes_tx, notes_rx) = mpsc::channel();
+        let step = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&step);
+        let thread = thread::spawn(move || {
+            serve(
+                &mut || {
+                    let index = count.fetch_add(1, Ordering::SeqCst);
+                    Ok(report_named(if index == 0 { "one" } else { "two" }))
+                },
+                Duration::ZERO,
+                requests_rx,
+                notes_tx,
+                Wake::new(),
+            );
+        });
+        requests_tx.send(Request::Rescan).unwrap();
+        assert_eq!(notes_rx.recv().unwrap(), Note::Scanning);
+        match notes_rx.recv().unwrap() {
+            Note::Ready(report) => assert_eq!(report.package_version, "one"),
+            other => panic!("first report was {other:?}"),
+        }
+        requests_tx.send(Request::Rescan).unwrap();
+        assert_eq!(notes_rx.recv().unwrap(), Note::Scanning);
+        match notes_rx.recv().unwrap() {
+            Note::Ready(report) => assert_eq!(report.package_version, "two"),
+            other => panic!("second report was {other:?}"),
+        }
+        requests_tx.send(Request::Stop).unwrap();
+        thread.join().unwrap();
     }
 }

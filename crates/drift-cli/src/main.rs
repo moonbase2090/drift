@@ -137,9 +137,8 @@ fn open_review() -> std::io::Result<()> {
         return drift_tui::launch();
     }
     let paths = scan::paths_from_env();
-    let Ok(registry) = scan::load_registry(&paths) else {
-        return drift_tui::launch();
-    };
+    let registry = scan::load_registry(&paths)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
     let watched = watch::dirs(
         &registry,
         &paths.source.home,

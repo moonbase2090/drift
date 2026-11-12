@@ -5,6 +5,8 @@ use lunatui_term::{Event, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind
 use lunatui_theme::{Theme, Token, Variant};
 use lunatui_widgets::{KeyHintBar, RenderCx, Tree, TreeItem, TreeState, Widget};
 
+use drift_core::ScanReport;
+
 use crate::worker::{Note, WorkerHandle};
 
 const QUIT: &str = "app.quit";
@@ -23,6 +25,7 @@ pub struct Screen {
     columns: u16,
     rows: u16,
     phase: Phase,
+    report: Option<ScanReport>,
     spin: usize,
     kick: bool,
     worker: Option<WorkerHandle>,
@@ -36,6 +39,7 @@ impl Screen {
             columns: 0,
             rows: 0,
             phase: Phase::Idle,
+            report: None,
             spin: 0,
             kick: false,
             worker: None,
@@ -83,6 +87,7 @@ pub fn launch() -> std::io::Result<()> {
 }
 
 pub fn launch_with(worker: WorkerHandle) -> std::io::Result<()> {
+    worker.arm_terminal()?;
     let (columns, rows) = terminal_size();
     run(
         Screen::attached(worker),
@@ -151,7 +156,10 @@ impl Screen {
     fn apply_note(&mut self, note: Note) {
         self.phase = match note {
             Note::Scanning => Phase::Scanning,
-            Note::Ready => Phase::Idle,
+            Note::Ready(report) => {
+                self.report = Some(report);
+                Phase::Idle
+            }
             Note::Failed(_) => Phase::Failed,
         };
         if !matches!(self.phase, Phase::Scanning) {
@@ -175,6 +183,15 @@ impl Screen {
         worker.rescan();
         self.phase = Phase::Scanning;
         self.refresh_tree();
+    }
+
+    fn title(&self) -> String {
+        match self.report.as_ref() {
+            Some(report) if !report.package_version.is_empty() => {
+                format!("Drift  {}", report.package_version)
+            }
+            _ => "Drift".to_string(),
+        }
     }
 
     fn refresh_tree(&mut self) {
@@ -232,8 +249,9 @@ impl App for Screen {
         cx.fill(area, text, ' ');
         let (header, tree, hint) = regions(area);
         if header.width > 0 && header.height > 0 {
-            let title = clip_display_prefix("Drift", header.width);
-            cx.put_str(header.x, header.y, title, accent);
+            let title = self.title();
+            let shown = clip_display_prefix(&title, header.width);
+            cx.put_str(header.x, header.y, shown, accent);
         }
         if tree.width > 0 && tree.height > 0 {
             Tree::new(&self.tree).render(tree, &mut cx);
@@ -261,6 +279,23 @@ mod tests {
 
     use super::*;
     use crate::worker::Note;
+
+    fn empty_report() -> ScanReport {
+        ScanReport {
+            package_version: String::new(),
+            reviewed_version: None,
+            entries: Vec::new(),
+            backups: Vec::new(),
+            ignored: 0,
+        }
+    }
+
+    fn named_report(version: &str) -> ScanReport {
+        ScanReport {
+            package_version: version.to_string(),
+            ..empty_report()
+        }
+    }
 
     const SIZES: [(u16, u16, &str); 3] =
         [(80, 24, "80x24"), (120, 36, "120x36"), (200, 60, "200x60")];
@@ -366,7 +401,7 @@ mod tests {
             Box::new(move || {
                 let _ = entered_tx.send(Duration::from_secs(2));
                 let _ = release_rx.recv();
-                Ok(())
+                Ok(empty_report())
             }),
             Duration::ZERO,
         );
@@ -390,10 +425,10 @@ mod tests {
 
     #[test]
     fn notes_clear_a_finished_scan_and_show_a_failure() {
-        let worker = crate::worker::launch(Box::new(|| Ok(())), Duration::ZERO);
+        let worker = crate::worker::launch(Box::new(|| Ok(empty_report())), Duration::ZERO);
         let mut screen = Screen::attached(worker);
         screen.kick = false;
-        screen.apply_note(Note::Ready);
+        screen.apply_note(Note::Ready(empty_report()));
         assert!(!screen.needs_animation_frames());
         let (grid, clusters) = render_once(&mut screen, 80, 24);
         let idle = grid.display_text(&clusters);
@@ -412,13 +447,13 @@ mod tests {
         let worker = crate::worker::launch(
             Box::new(move || {
                 let _ = release_rx.recv();
-                Ok(())
+                Ok(empty_report())
             }),
             Duration::from_millis(200),
         );
         let mut screen = Screen::attached(worker);
         screen.kick = false;
-        screen.apply_note(Note::Ready);
+        screen.apply_note(Note::Ready(empty_report()));
         let started = Instant::now();
         let key = Event::Key(KeyEvent::press(KeyCode::Char('r')));
         assert_eq!(screen.update(&key), ControlFlow::Continue);
@@ -429,5 +464,254 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(200));
         drop(unlock);
         drop(screen);
+    }
+
+    #[test]
+    fn quitting_returns_while_the_scan_is_blocked() {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let worker = crate::worker::launch(
+            Box::new(move || {
+                let _ = entered_tx.send(());
+                let _ = release_rx.recv();
+                Ok(empty_report())
+            }),
+            Duration::ZERO,
+        );
+        let mut screen = Screen::attached(worker);
+        let _ = render_once(&mut screen, 80, 24);
+        entered_rx.recv().unwrap();
+        let started = Instant::now();
+        drop(screen);
+        let elapsed = started.elapsed();
+        drop(release_tx);
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "quit waited {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn finished_scans_keep_distinct_reports() {
+        let step = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&step);
+        let worker = crate::worker::launch(
+            Box::new(move || {
+                let index = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(named_report(if index == 0 { "one" } else { "two" }))
+            }),
+            Duration::ZERO,
+        );
+        let mut screen = Screen::attached(worker);
+        screen.kick = false;
+        screen.request_rescan();
+        wait_for_version(&mut screen, "one");
+        screen.request_rescan();
+        wait_for_version(&mut screen, "two");
+    }
+
+    fn wait_for_version(screen: &mut Screen, version: &str) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            screen.apply_notes();
+            if screen
+                .report
+                .as_ref()
+                .is_some_and(|report| report.package_version == version)
+                && !matches!(screen.phase, Phase::Scanning)
+            {
+                return;
+            }
+            assert!(Instant::now() < deadline, "missing {version}");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn a_file_change_wakes_the_idle_screen_without_a_key() {
+        if std::env::var_os("DRIFT_HOST_CHILD").is_some() {
+            host_child();
+            return;
+        }
+        host_parent();
+    }
+
+    fn host_child() {
+        use std::io::Read;
+        use std::os::fd::FromRawFd;
+        let mut trigger = unsafe { std::fs::File::from_raw_fd(3) };
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let step = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&step);
+        let worker = crate::worker::launch(
+            Box::new(move || {
+                let index = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if index == 0 {
+                    let _ = release_rx.recv();
+                    Ok(named_report("report-one"))
+                } else {
+                    Err("unavailable".to_string())
+                }
+            }),
+            Duration::ZERO,
+        );
+        let changes = worker.changes();
+        std::thread::spawn(move || {
+            let mut byte = [0_u8; 1];
+            loop {
+                if trigger.read(&mut byte).ok() != Some(1) {
+                    break;
+                }
+                if byte[0] == b'R' {
+                    let _ = release_tx.send(());
+                } else if byte[0] == b'C' {
+                    changes.changed();
+                }
+            }
+        });
+        let _ = launch_with(worker);
+    }
+
+    fn host_parent() {
+        use std::io::{Read, Write};
+        use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        use std::sync::mpsc;
+
+        let (master, slave) = open_pty();
+        let slave_fd = slave.as_raw_fd();
+        let stdin_fd = unsafe { libc::dup(slave_fd) };
+        let stdout_fd = unsafe { libc::dup(slave_fd) };
+        assert!(stdin_fd >= 0 && stdout_fd >= 0);
+        drop(slave);
+        let mut master_write = master.try_clone().unwrap();
+        let (mut parent_trigger, child_trigger) = std::os::unix::net::UnixStream::pair().unwrap();
+        let trigger_fd = child_trigger.into_raw_fd();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("screen::tests::a_file_change_wakes_the_idle_screen_without_a_key")
+            .arg("--exact")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env("DRIFT_HOST_CHILD", "1")
+            .stdin(unsafe { Stdio::from_raw_fd(stdin_fd) })
+            .stdout(unsafe { Stdio::from_raw_fd(stdout_fd) })
+            .stderr(Stdio::piped());
+        unsafe {
+            command.pre_exec(move || {
+                if trigger_fd != 3 {
+                    let copied = libc::dup2(trigger_fd, 3);
+                    if copied < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    libc::close(trigger_fd);
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        let pid = child.id() as i32;
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let stored = std::sync::Arc::clone(&captured);
+        let (text_tx, text_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut master = master;
+            let mut buffer = [0_u8; 4096];
+            loop {
+                match master.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(size) => {
+                        let mut text = stored.lock().unwrap_or_else(|err| err.into_inner());
+                        text.push_str(&String::from_utf8_lossy(&buffer[..size]));
+                        drop(text);
+                        if text_tx.send(()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let started = wait_text(&captured, &text_rx, "scanning", Duration::from_secs(5));
+        parent_trigger.write_all(b"R").unwrap();
+        parent_trigger.flush().unwrap();
+        let ready = wait_text(&captured, &text_rx, "report-one", Duration::from_secs(5));
+        parent_trigger.write_all(b"C").unwrap();
+        parent_trigger.flush().unwrap();
+        let failed = wait_text(&captured, &text_rx, "scan failed", Duration::from_secs(5));
+        let _ = master_write.write_all(b"q");
+        let _ = master_write.flush();
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = child.wait();
+            let _ = done_tx.send(());
+        });
+        if done_rx.recv_timeout(Duration::from_secs(2)).is_err() {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        assert!(
+            started && ready && failed,
+            "started {started} ready {ready} failed {failed}"
+        );
+    }
+
+    fn wait_text(
+        captured: &std::sync::Mutex<String>,
+        rx: &std::sync::mpsc::Receiver<()>,
+        needle: &str,
+        timeout: Duration,
+    ) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if captured
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .contains(needle)
+            {
+                return true;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            match rx.recv_timeout(remaining) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return false,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return captured
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .contains(needle);
+                }
+            }
+        }
+    }
+
+    fn open_pty() -> (std::fs::File, std::fs::File) {
+        use std::os::fd::FromRawFd;
+        let mut master = -1;
+        let mut slave = -1;
+        let rc = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, 0);
+        let size = libc::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        unsafe {
+            libc::ioctl(master, libc::TIOCSWINSZ, &size);
+        }
+        (unsafe { std::fs::File::from_raw_fd(master) }, unsafe {
+            std::fs::File::from_raw_fd(slave)
+        })
     }
 }

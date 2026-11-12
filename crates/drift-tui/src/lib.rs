@@ -1,5 +1,6 @@
 mod plan_dialog;
 mod screen;
+mod wake;
 mod worker;
 
 pub use plan_dialog::{apply_decision, review_plan, Decision, Focus, PlanDialog};

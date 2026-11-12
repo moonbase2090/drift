@@ -245,6 +245,7 @@ dependencies = [
  "drift-apply",
  "drift-core",
  "drift-fixtures",
+ "libc",
  "lunatui",
  "lunatui-core",
  "lunatui-runtime",
