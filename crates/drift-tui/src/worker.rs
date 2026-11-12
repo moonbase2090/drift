@@ -36,14 +36,6 @@ pub struct WorkerHandle {
 }
 
 impl WorkerHandle {
-    #[inline(never)]
-    pub(crate) fn start<F>(scan: F, debounce: Duration) -> Self
-    where
-        F: FnMut() -> Result<(), String> + Send + 'static,
-    {
-        launch(Box::new(scan), debounce)
-    }
-
     pub(crate) fn rescan(&self) {
         let _ = self.requests.send(Request::Rescan);
     }
@@ -68,7 +60,7 @@ impl Drop for WorkerHandle {
     }
 }
 
-fn launch(
+pub(crate) fn launch(
     mut scan: Box<dyn FnMut() -> Result<(), String> + Send>,
     debounce: Duration,
 ) -> WorkerHandle {
@@ -86,7 +78,7 @@ pub fn spawn_scan<F>(scan: F) -> WorkerHandle
 where
     F: FnMut() -> Result<(), String> + Send + 'static,
 {
-    WorkerHandle::start(scan, DEBOUNCE)
+    launch(Box::new(scan), DEBOUNCE)
 }
 
 fn serve<F>(scan: &mut F, debounce: Duration, requests: Receiver<Request>, notes: Sender<Note>)
@@ -368,11 +360,11 @@ mod tests {
     fn an_idle_worker_never_scans() {
         let scans = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&scans);
-        let worker = WorkerHandle::start(
-            move || {
+        let worker = launch(
+            Box::new(move || {
                 counted.fetch_add(1, Ordering::SeqCst);
                 Ok(())
-            },
+            }),
             Duration::ZERO,
         );
         drop(worker);
@@ -413,8 +405,8 @@ mod tests {
         let (release_tx, release_rx) = mpsc::channel();
         let (follow_tx, follow_rx) = mpsc::channel();
         let counted = Arc::clone(&scans);
-        let worker = WorkerHandle::start(
-            move || {
+        let worker = launch(
+            Box::new(move || {
                 let n = counted.fetch_add(1, Ordering::SeqCst);
                 if n == 0 {
                     let _ = entered_tx.send(Duration::from_secs(2));
@@ -423,7 +415,7 @@ mod tests {
                     let _ = follow_tx.send(());
                 }
                 Ok(())
-            },
+            }),
             Duration::ZERO,
         );
         worker.rescan();

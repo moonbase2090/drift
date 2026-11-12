@@ -362,12 +362,12 @@ mod tests {
         let (entered_tx, entered_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let unlock = Unlock(Some(release_tx));
-        let worker = crate::worker::WorkerHandle::start(
-            move || {
+        let worker = crate::worker::launch(
+            Box::new(move || {
                 let _ = entered_tx.send(Duration::from_secs(2));
                 let _ = release_rx.recv();
                 Ok(())
-            },
+            }),
             Duration::ZERO,
         );
         let mut screen = Screen::attached(worker);
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn notes_clear_a_finished_scan_and_show_a_failure() {
-        let worker = crate::worker::WorkerHandle::start(|| Ok(()), Duration::ZERO);
+        let worker = crate::worker::launch(Box::new(|| Ok(())), Duration::ZERO);
         let mut screen = Screen::attached(worker);
         screen.kick = false;
         screen.apply_note(Note::Ready);
@@ -409,11 +409,11 @@ mod tests {
     fn rescan_marks_scanning_without_waiting_for_the_worker() {
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let unlock = Unlock(Some(release_tx));
-        let worker = crate::worker::WorkerHandle::start(
-            move || {
+        let worker = crate::worker::launch(
+            Box::new(move || {
                 let _ = release_rx.recv();
                 Ok(())
-            },
+            }),
             Duration::from_millis(200),
         );
         let mut screen = Screen::attached(worker);
