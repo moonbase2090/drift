@@ -1,12 +1,41 @@
 use std::fmt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Location {
+    pub line: usize,
+    pub column: usize,
+}
+
+impl Location {
+    pub fn at(text: &str, offset: usize) -> Location {
+        let end = offset.min(text.len());
+        let before = text.get(..end).unwrap_or("");
+        let line = before.matches('\n').count() + 1;
+        let column = before
+            .rsplit('\n')
+            .next()
+            .map_or(0, |last| last.chars().count())
+            + 1;
+        Location { line, column }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    InvalidPath { path: String, reason: &'static str },
+    InvalidPath {
+        path: String,
+        reason: &'static str,
+    },
     InvalidRootId(String),
     DuplicateRoot(String),
-    OverlappingRoots { first: String, second: String },
-    Config(String),
+    OverlappingRoots {
+        first: String,
+        second: String,
+    },
+    Config {
+        message: String,
+        location: Option<Location>,
+    },
 }
 
 impl fmt::Display for Error {
@@ -18,7 +47,18 @@ impl fmt::Display for Error {
             Error::OverlappingRoots { first, second } => {
                 write!(f, "roots {first:?} and {second:?} overlap")
             }
-            Error::Config(message) => write!(f, "invalid configuration: {message}"),
+            Error::Config {
+                message,
+                location: Some(at),
+            } => write!(
+                f,
+                "invalid configuration at line {}, column {}: {message}",
+                at.line, at.column
+            ),
+            Error::Config {
+                message,
+                location: None,
+            } => write!(f, "invalid configuration: {message}"),
         }
     }
 }

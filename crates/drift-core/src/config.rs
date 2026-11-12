@@ -1,72 +1,118 @@
-use crate::error::Error;
+use std::ops::Range;
+
+use toml::de::{DeTable, DeValue};
+use toml::Spanned;
+
+use crate::error::{Error, Location};
 use crate::path::RelPath;
 use crate::registry::{Origin, Registry, Root};
 
 pub const USER_CONFIG_PATH: &str = ".config/drift/config.toml";
 
-fn config_error(message: impl Into<String>) -> Error {
-    Error::Config(message.into())
-}
+type Value<'i> = Spanned<DeValue<'i>>;
 
-fn string_field(table: &toml::Table, key: &str, index: usize) -> Result<String, Error> {
-    match table.get(key) {
-        Some(toml::Value::String(value)) => Ok(value.clone()),
-        Some(_) => Err(config_error(format!(
-            "root #{index}: `{key}` must be a string"
-        ))),
-        None => Err(config_error(format!("root #{index}: missing `{key}`"))),
+fn fail(text: &str, span: Range<usize>, message: impl Into<String>) -> Error {
+    Error::Config {
+        message: message.into(),
+        location: Some(Location::at(text, span.start)),
     }
 }
 
-fn volatile_field(table: &toml::Table, index: usize) -> Result<Vec<RelPath>, Error> {
-    let Some(value) = table.get("volatile") else {
+fn string_field(
+    text: &str,
+    table: &DeTable<'_>,
+    entry_span: &Range<usize>,
+    key: &str,
+) -> Result<(String, Range<usize>), Error> {
+    match table.iter().find(|(k, _)| k.get_ref().as_ref() == key) {
+        Some((_, value)) => match value.get_ref() {
+            DeValue::String(s) => Ok((s.to_string(), value.span())),
+            _ => Err(fail(
+                text,
+                value.span(),
+                format!("`{key}` must be a string"),
+            )),
+        },
+        None => Err(fail(text, entry_span.clone(), format!("missing `{key}`"))),
+    }
+}
+
+fn path_value(text: &str, value: String, span: Range<usize>) -> Result<RelPath, Error> {
+    RelPath::new(&value).map_err(|e| fail(text, span, e.to_string()))
+}
+
+fn volatile_field(text: &str, table: &DeTable<'_>) -> Result<Vec<RelPath>, Error> {
+    let Some((_, value)) = table
+        .iter()
+        .find(|(k, _)| k.get_ref().as_ref() == "volatile")
+    else {
         return Ok(Vec::new());
     };
-    let Some(list) = value.as_array() else {
-        return Err(config_error(format!(
-            "root #{index}: `volatile` must be an array of strings"
-        )));
+    let message = "`volatile` must be an array of strings";
+    let DeValue::Array(items) = value.get_ref() else {
+        return Err(fail(text, value.span(), message));
     };
-    list.iter()
-        .map(|item| match item.as_str() {
-            Some(path) => RelPath::new(path),
-            None => Err(config_error(format!(
-                "root #{index}: `volatile` must be an array of strings"
-            ))),
+    items
+        .iter()
+        .map(|item: &Value<'_>| match item.get_ref() {
+            DeValue::String(s) => path_value(text, s.to_string(), item.span()),
+            _ => Err(fail(text, item.span(), message)),
         })
         .collect()
 }
 
-pub fn parse_user_roots(text: &str) -> Result<Vec<Root>, Error> {
-    let table: toml::Table = text
-        .parse()
-        .map_err(|e: toml::de::Error| config_error(e.message().to_string()))?;
-    if let Some(key) = table.keys().find(|k| *k != "root") {
-        return Err(config_error(format!("unknown key `{key}`")));
-    }
-    let Some(entries) = table.get("root") else {
-        return Ok(Vec::new());
+fn root_from_entry(text: &str, entry: &Value<'_>) -> Result<Root, Error> {
+    let DeValue::Table(table) = entry.get_ref() else {
+        return Err(fail(text, entry.span(), "each `root` must be a table"));
     };
-    let Some(entries) = entries.as_array() else {
-        return Err(config_error("`root` must be an array of tables ([[root]])"));
-    };
-    let mut roots = Vec::new();
-    for (index, entry) in entries.iter().enumerate() {
-        let index = index + 1;
-        let Some(entry) = entry.as_table() else {
-            return Err(config_error(format!("root #{index} must be a table")));
-        };
-        if let Some(key) = entry
-            .keys()
-            .find(|k| !matches!(k.as_str(), "id" | "template" | "live" | "volatile"))
-        {
-            return Err(config_error(format!("root #{index}: unknown key `{key}`")));
+    for (key, _) in table.iter() {
+        if !matches!(
+            key.get_ref().as_ref(),
+            "id" | "template" | "live" | "volatile"
+        ) {
+            return Err(fail(
+                text,
+                key.span(),
+                format!("unknown key `{}`", key.get_ref()),
+            ));
         }
-        let id = string_field(entry, "id", index)?;
-        let template = RelPath::new(&string_field(entry, "template", index)?)?;
-        let live = RelPath::new(&string_field(entry, "live", index)?)?;
-        let volatile = volatile_field(entry, index)?;
-        roots.push(Root::new(&id, template, live, volatile, Origin::User)?);
+    }
+    let span = entry.span();
+    let (id, id_span) = string_field(text, table, &span, "id")?;
+    let (template, template_span) = string_field(text, table, &span, "template")?;
+    let (live, live_span) = string_field(text, table, &span, "live")?;
+    let template = path_value(text, template, template_span)?;
+    let live = path_value(text, live, live_span)?;
+    let volatile = volatile_field(text, table)?;
+    Root::new(&id, template, live, volatile, Origin::User)
+        .map_err(|e| fail(text, id_span, e.to_string()))
+}
+
+pub fn parse_user_roots(text: &str) -> Result<Vec<Root>, Error> {
+    let document = DeTable::parse(text).map_err(|e| Error::Config {
+        message: e.message().to_string(),
+        location: e.span().map(|span| Location::at(text, span.start)),
+    })?;
+    let table = document.get_ref();
+    let mut roots = Vec::new();
+    for (key, value) in table.iter() {
+        if key.get_ref().as_ref() != "root" {
+            return Err(fail(
+                text,
+                key.span(),
+                format!("unknown key `{}`", key.get_ref()),
+            ));
+        }
+        let DeValue::Array(entries) = value.get_ref() else {
+            return Err(fail(
+                text,
+                value.span(),
+                "`root` must be an array of tables ([[root]])",
+            ));
+        };
+        for entry in entries.iter() {
+            roots.push(root_from_entry(text, entry)?);
+        }
     }
     Ok(roots)
 }
@@ -127,54 +173,83 @@ live = ".local/state/omarchy/toggles/hypr"
         assert!(registry.map_template(&rel("config/hypr/a.lua")).is_some());
     }
 
-    #[test]
-    fn malformed_toml_is_a_config_error() {
-        assert!(matches!(parse_user_roots("[[root"), Err(Error::Config(_))));
-    }
-
-    #[test]
-    fn missing_and_mistyped_fields_are_rejected() {
-        for bad in [
-            "[[root]]\ntemplate = \"a\"\nlive = \"b\"\n",
-            "[[root]]\nid = \"a\"\nlive = \"b\"\n",
-            "[[root]]\nid = \"a\"\ntemplate = \"a\"\n",
-            "[[root]]\nid = 3\ntemplate = \"a\"\nlive = \"b\"\n",
-            "[[root]]\nid = \"a\"\ntemplate = \"a\"\nlive = \"b\"\nvolatile = \"x\"\n",
-            "[[root]]\nid = \"a\"\ntemplate = \"a\"\nlive = \"b\"\nvolatile = [1]\n",
-        ] {
-            assert!(
-                matches!(parse_user_roots(bad), Err(Error::Config(_))),
-                "{bad}"
-            );
+    fn located(result: Result<Vec<Root>, Error>) -> (usize, usize, String) {
+        match result {
+            Err(Error::Config {
+                message,
+                location: Some(at),
+            }) => (at.line, at.column, message),
+            other => panic!("expected a located config error, got {other:?}"),
         }
     }
 
     #[test]
-    fn unknown_keys_are_rejected_at_both_levels() {
-        assert!(matches!(
-            parse_user_roots("theme = \"x\"\n"),
-            Err(Error::Config(_))
-        ));
-        let bad = "[[root]]\nid = \"a\"\ntemplate = \"a\"\nlive = \"b\"\ncolor = 1\n";
-        assert!(matches!(parse_user_roots(bad), Err(Error::Config(_))));
-        assert!(matches!(
-            parse_user_roots("root = 3\n"),
-            Err(Error::Config(_))
-        ));
+    fn malformed_toml_names_the_line_and_column() {
+        let text = "[[root]]\nid = \"a\"\ntemplate = \"t\"\nlive = \"l\"\nvolatile = [\"x\"\n";
+        let (line, _, message) = located(parse_user_roots(text));
+        assert_eq!(line, 5, "{message}");
+        let (line, column, _) = located(parse_user_roots("id = \n"));
+        assert_eq!((line, column), (1, 6));
     }
 
     #[test]
-    fn traversal_in_a_configured_path_is_rejected() {
-        let bad = "[[root]]\nid = \"a\"\ntemplate = \"../etc\"\nlive = \"b\"\n";
-        assert!(matches!(
-            parse_user_roots(bad),
-            Err(Error::InvalidPath { .. })
-        ));
-        let bad = "[[root]]\nid = \"a\"\ntemplate = \"a\"\nlive = \"/abs\"\n";
-        assert!(matches!(
-            parse_user_roots(bad),
-            Err(Error::InvalidPath { .. })
-        ));
+    fn syntax_error_in_a_later_root_points_at_that_root() {
+        let text = format!("{VALID}\n[[root]]\nid = \"c\"\ntemplate = \n");
+        let (line, _, _) = located(parse_user_roots(&text));
+        assert_eq!(line, VALID.lines().count() + 4);
+    }
+
+    #[test]
+    fn mistyped_field_points_at_the_value() {
+        let text = "[[root]]\nid = 3\ntemplate = \"a\"\nlive = \"b\"\n";
+        let (line, column, message) = located(parse_user_roots(text));
+        assert_eq!((line, column), (2, 6));
+        assert!(message.contains("`id` must be a string"), "{message}");
+        let text = "[[root]]\nid = \"a\"\ntemplate = \"a\"\nlive = \"b\"\nvolatile = [\"ok\", 1]\n";
+        let (line, column, _) = located(parse_user_roots(text));
+        assert_eq!((line, column), (5, 19));
+    }
+
+    #[test]
+    fn missing_field_points_at_the_root_that_lacks_it() {
+        let text = "[[root]]\nid = \"a\"\ntemplate = \"t\"\nlive = \"l\"\n\n[[root]]\nid = \"b\"\nlive = \"l2\"\n";
+        let (line, _, message) = located(parse_user_roots(text));
+        assert!((6..=7).contains(&line), "line {line}");
+        assert!(message.contains("missing `template`"), "{message}");
+    }
+
+    #[test]
+    fn unknown_keys_point_at_the_key() {
+        let (line, column, message) = located(parse_user_roots("\n\ntheme = \"x\"\n"));
+        assert_eq!((line, column), (3, 1));
+        assert!(message.contains("unknown key `theme`"), "{message}");
+        let text = "[[root]]\nid = \"a\"\ntemplate = \"a\"\nlive = \"b\"\ncolor = 1\n";
+        let (line, column, _) = located(parse_user_roots(text));
+        assert_eq!((line, column), (5, 1));
+        let (line, _, _) = located(parse_user_roots("\nroot = 3\n"));
+        assert_eq!(line, 2);
+    }
+
+    #[test]
+    fn unsafe_paths_and_bad_ids_point_at_their_values() {
+        let text = "[[root]]\nid = \"a\"\ntemplate = \"../etc\"\nlive = \"b\"\n";
+        let (line, column, message) = located(parse_user_roots(text));
+        assert_eq!((line, column), (3, 12));
+        assert!(message.contains("'..'"), "{message}");
+        let text = "[[root]]\nid = \"a\"\ntemplate = \"a\"\nlive = \"/abs\"\n";
+        let (line, _, _) = located(parse_user_roots(text));
+        assert_eq!(line, 4);
+        let text = "[[root]]\nid = \"Bad Id\"\ntemplate = \"a\"\nlive = \"b\"\n";
+        let (line, _, _) = located(parse_user_roots(text));
+        assert_eq!(line, 2);
+    }
+
+    #[test]
+    fn error_text_includes_the_position() {
+        let error = parse_user_roots("\n\ntheme = 1\n").unwrap_err();
+        assert!(error
+            .to_string()
+            .starts_with("invalid configuration at line 3, column 1:"));
     }
 
     #[test]
