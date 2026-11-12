@@ -69,7 +69,11 @@ fn number(value: Option<&str>, flag: &str) -> Result<u16, String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match run(&args) {
+    execute(run(&args))
+}
+
+fn execute(action: Result<Action, String>) -> ExitCode {
+    match action {
         Ok(Action::Text(text)) => {
             println!("{text}");
             ExitCode::SUCCESS
@@ -94,6 +98,8 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use std::io::IsTerminal;
+
     use super::*;
 
     fn args(list: &[&str]) -> Vec<String> {
@@ -116,6 +122,25 @@ mod tests {
     #[test]
     fn unknown_argument_is_an_error() {
         assert!(run(&args(&["bogus"])).is_err());
+    }
+
+    #[test]
+    fn help_and_snapshot_exit_success() {
+        assert_eq!(execute(run(&args(&["--help"]))), ExitCode::SUCCESS);
+        assert_eq!(execute(run(&args(&["--snapshot"]))), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn unknown_argument_exits_two() {
+        assert_eq!(execute(run(&args(&["bogus"]))), ExitCode::from(2));
+    }
+
+    #[test]
+    fn launch_without_a_terminal_exits_one() {
+        if std::io::stdout().is_terminal() {
+            return;
+        }
+        assert_eq!(execute(Ok(Action::Launch)), ExitCode::from(1));
     }
 
     #[test]
