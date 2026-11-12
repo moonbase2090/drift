@@ -179,6 +179,7 @@ dependencies = [
 name = "drift-core"
 version = "0.1.0"
 dependencies = [
+ "drift-fixtures",
  "similar",
  "toml 0.9.12+spec-1.1.0",
 ]

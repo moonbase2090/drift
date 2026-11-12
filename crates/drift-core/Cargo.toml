@@ -11,3 +11,6 @@ publish.workspace = true
 [dependencies]
 similar = { version = "2", default-features = false, features = ["text"] }
 toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
+
+[dev-dependencies]
+drift-fixtures.workspace = true
