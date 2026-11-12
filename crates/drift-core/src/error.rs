@@ -36,11 +36,20 @@ pub enum Error {
         message: String,
         location: Option<Location>,
     },
+    UnresolvedHunk(usize),
+    ChoiceCount {
+        expected: usize,
+        got: usize,
+    },
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Error::UnresolvedHunk(index) => write!(f, "conflict hunk {index} has no choice"),
+            Error::ChoiceCount { expected, got } => {
+                write!(f, "expected {expected} hunk choices, got {got}")
+            }
             Error::InvalidPath { path, reason } => write!(f, "invalid path {path:?}: {reason}"),
             Error::InvalidRootId(id) => write!(f, "invalid root id {id:?}"),
             Error::DuplicateRoot(id) => write!(f, "root {id:?} is defined twice"),
