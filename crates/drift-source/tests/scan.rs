@@ -654,3 +654,112 @@ fn a_fifo_in_the_skel_copy_is_never_opened() {
     let report = report_within(world, 20);
     assert_eq!(status_of(&report, ".config/hypr/a.lua"), "local override");
 }
+
+#[test]
+fn file_diffs_agree_with_every_fixture_status_and_write_nothing() {
+    for directory in case_dirs().unwrap() {
+        let setup = setup(&directory);
+        let paths = paths(&setup);
+        let before = hash_tree(setup.case.trees.home()).unwrap();
+        let scanned = report(&setup);
+        for entry in &scanned.entries {
+            let path = drift_core::RelPath::new(&entry.path).unwrap();
+            let diff =
+                drift_source::build_file_diff(&Registry::v1(), &paths, &BTreeSet::new(), &path)
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(diff.status, entry.status, "{}", entry.path);
+            assert_eq!(
+                diff.exit_code(),
+                u8::from(drift_core::counts_as_drift(entry.status))
+            );
+            assert!(diff.plain_text().contains(&entry.path));
+            assert!(diff.to_json().contains(&entry.path));
+        }
+        assert_eq!(hash_tree(setup.case.trees.home()).unwrap(), before);
+        assert!(drift_source::build_file_diff(
+            &Registry::v1(),
+            &paths,
+            &BTreeSet::new(),
+            &drift_core::RelPath::new(".config/not-tracked").unwrap()
+        )
+        .unwrap()
+        .is_none());
+    }
+}
+
+#[test]
+fn a_file_diff_reads_the_base_even_when_ours_equals_theirs() {
+    let world = WorldBuilder::new()
+        .template("hypr/a.lua", b"same\n")
+        .live("hypr/a.lua", b"same\n")
+        .base("hypr/a.lua", b"old\n")
+        .build("2");
+    let diff = drift_source::build_file_diff(
+        &Registry::v1(),
+        &world.paths(),
+        &BTreeSet::new(),
+        &drift_core::RelPath::new(".config/hypr/a.lua").unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(diff.provenance, drift_core::BaseProvenance::Reviewed);
+    assert!(matches!(diff.base,drift_core::DiffContent::Text{ref text,..} if text=="old\n"));
+    assert_eq!(diff.status, drift_core::Status::Unchanged);
+}
+
+#[test]
+fn a_file_diff_never_merges_an_oversize_or_binary_base() {
+    for bytes in [
+        vec![b'x'; drift_core::MAX_DIFF_BYTES as usize + 1],
+        vec![0xff, 0xfe],
+    ] {
+        let world = WorldBuilder::new()
+            .template("hypr/a.lua", b"theirs\n")
+            .live("hypr/a.lua", b"ours\n")
+            .base("hypr/a.lua", &bytes)
+            .build("2");
+        let diff = drift_source::build_file_diff(
+            &Registry::v1(),
+            &world.paths(),
+            &BTreeSet::new(),
+            &drift_core::RelPath::new(".config/hypr/a.lua").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            diff.base,
+            drift_core::DiffContent::HashOnly { .. }
+        ));
+        assert!(diff.to_json().contains("\"merge_available\": false"));
+    }
+}
+
+#[test]
+fn binary_and_oversize_file_diffs_remain_hash_only_on_all_sides() {
+    for bytes in [
+        vec![0xff, 0xfe],
+        vec![b'x'; drift_core::MAX_DIFF_BYTES as usize + 1],
+    ] {
+        let world = WorldBuilder::new()
+            .template("hypr/a.lua", &bytes)
+            .live("hypr/a.lua", &bytes)
+            .base("hypr/a.lua", &bytes)
+            .build("2");
+        let diff = drift_source::build_file_diff(
+            &Registry::v1(),
+            &world.paths(),
+            &BTreeSet::new(),
+            &drift_core::RelPath::new(".config/hypr/a.lua").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        for side in [&diff.base, &diff.ours, &diff.theirs] {
+            assert!(
+                matches!(side,drift_core::DiffContent::HashOnly{len,..} if *len==bytes.len() as u64)
+            );
+        }
+        assert_eq!(diff.status, drift_core::Status::Unchanged);
+        assert!(diff.to_json().contains("\"merge_available\": false"));
+    }
+}

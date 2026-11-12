@@ -100,10 +100,7 @@ impl FileDiff {
     }
 
     pub fn exit_code(&self) -> u8 {
-        u8::from(matches!(
-            self.status,
-            Status::UpstreamChanged | Status::Conflict | Status::Missing
-        ))
+        u8::from(crate::counts_as_drift(self.status))
     }
 
     pub fn to_json(&self) -> String {

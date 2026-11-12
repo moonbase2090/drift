@@ -19,7 +19,7 @@ pub use installed::{
     read_package, Check, InstalledPackage, ReadPaths, Template, Upgrade, DEFAULT_OMARCHY_PATH,
     PACKAGE_NAME,
 };
-pub use report::{build_report, ScanPaths};
+pub use report::{build_file_diff, build_report, ScanPaths};
 pub use resolve::{resolve_bases, BaseQuery, ResolvePaths, ResolvedBase};
 
 pub fn crate_name() -> &'static str {
