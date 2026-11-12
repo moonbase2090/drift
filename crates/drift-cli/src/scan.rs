@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-use drift_core::{registry_from_user_config, Registry, USER_CONFIG_PATH};
+use drift_core::{registry_from_user_config, Registry, ScanReport, USER_CONFIG_PATH};
 use drift_source::{build_report, drift_share, drift_state, ResolvePaths, ScanPaths, SourcePaths};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +55,14 @@ pub fn paths_from(source: SourcePaths, lookup: &dyn Fn(&str) -> Option<OsString>
         },
         source,
     }
+}
+
+pub(crate) fn load_registry(paths: &ScanPaths) -> Result<Registry, String> {
+    registry(paths)
+}
+
+pub(crate) fn scan_report(paths: &ScanPaths, registry: &Registry) -> Result<ScanReport, String> {
+    build_report(registry, paths, &BTreeSet::new()).map_err(|error| error.to_string())
 }
 
 pub(crate) fn registry(paths: &ScanPaths) -> Result<Registry, String> {
