@@ -12,6 +12,8 @@ publish.workspace = true
 drift-core.workspace = true
 flate2 = "1"
 sha2 = "0.10"
+tar = "0.4"
+zstd = "0.13.4"
 
 [dev-dependencies]
 drift-fixtures.workspace = true

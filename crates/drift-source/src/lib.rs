@@ -3,6 +3,7 @@ mod catalog;
 mod error;
 mod installed;
 mod parse;
+mod resolve;
 
 pub use bases::{
     base_path, drift_share, drift_state, read_base, read_reviewed_version, reviewed_version_path,
@@ -17,6 +18,7 @@ pub use installed::{
     read_package, Check, InstalledPackage, ReadPaths, Template, Upgrade, DEFAULT_OMARCHY_PATH,
     PACKAGE_NAME,
 };
+pub use resolve::{resolve_bases, BaseQuery, ResolvePaths, ResolvedBase};
 
 pub fn crate_name() -> &'static str {
     env!("CARGO_PKG_NAME")
