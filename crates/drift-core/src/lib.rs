@@ -1,3 +1,4 @@
+mod classify;
 mod config;
 mod error;
 mod file;
@@ -5,6 +6,7 @@ mod path;
 mod registry;
 mod status;
 
+pub use classify::{classify, Base, Classification, MergeOutcome, Versions};
 pub use config::{parse_user_roots, registry_from_user_config, USER_CONFIG_PATH};
 pub use error::{Error, Location};
 pub use file::{LiveFile, LiveState, LiveTreatment, Template, Verification};
