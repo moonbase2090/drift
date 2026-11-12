@@ -1,4 +1,5 @@
 mod apply;
+mod edit;
 mod seed;
 
 pub use apply::{
@@ -7,6 +8,7 @@ pub use apply::{
     HyprlandStatus, IntegrateMode, IntegrateOutcome, Payload, Request, Roots, Unapplied, UndoItem,
     UndoOutcome, UndoRequest, UndoStatus, WriteFollowup,
 };
+pub use edit::edit_text;
 pub use seed::{scan, Scan, StoreRoots};
 
 pub fn crate_name() -> &'static str {
