@@ -1,0 +1,7 @@
+  1|  1|  1   a [crlf]
+  2|   |    - b [crlf]
+              ~
+   |  2|    + B [crlf]
+              ~
+  3|   |    - last [no eol]
+   |   |  3 + last
