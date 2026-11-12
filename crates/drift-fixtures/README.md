@@ -7,7 +7,7 @@ Test-only helper for Drift. It builds temporary home and package trees, and it h
 drift-fixtures.workspace = true
 ```
 
-`ours/` is the live config and is written to `$HOME/.config/`. `base/` is the reviewed base and is written to `$HOME/.local/share/drift/bases/`. `theirs/` is the installed package templates and is written to `$OMARCHY_PATH/config/`.
+`ours/` is the live config and is written to `$HOME/.config/`. `base/` is the reviewed base and is written to `$HOME/.local/share/drift/bases/config/`. `theirs/` is the installed package templates and is written to `$OMARCHY_PATH/config/`.
 
 Materialize copies bytes, permission bits, and symlink targets. It does not copy mtimes. It creates missing parents one directory at a time and refuses to follow a symlink, so a link cannot redirect a write outside the temporary tree. `hash_tree` notices a one-byte edit, a mode change, an mtime change, or a rename, including a name that is not UTF-8.
 
