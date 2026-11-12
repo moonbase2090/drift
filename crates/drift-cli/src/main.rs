@@ -38,29 +38,30 @@ enum Action {
     Resolve(resolve::ResolveArgs),
 }
 
-fn run(args: &[String]) -> Result<Action, String> {
-    match args.first().map(String::as_str) {
-        Some("diff") => {
-            return diff::parse(&args[1..])
-                .map(Action::Diff)
-                .map_err(|error| format!("drift: {error}"))
-        }
-        Some("resolve") => {
-            return resolve::parse(&args[1..])
-                .map(Action::Resolve)
-                .map_err(|error| format!("drift: {error}"))
-        }
-        Some("scan") if args.len() == 1 => return Ok(Action::Scan(scan::View::Scan)),
-        Some("scan") => return Err(format!("drift: scan takes no arguments\n{USAGE}")),
-        Some("status") => {
-            return scan::view_from(&args[1..])
+fn prefixed<T>(result: Result<T, String>) -> Result<T, String> {
+    result.map_err(|error| format!("drift: {error}"))
+}
+
+fn subcommand(args: &[String]) -> Option<Result<Action, String>> {
+    let rest = args.get(1..).unwrap_or_default();
+    match args.first().map(String::as_str)? {
+        "diff" => Some(prefixed(diff::parse(rest)).map(Action::Diff)),
+        "resolve" => Some(prefixed(resolve::parse(rest)).map(Action::Resolve)),
+        "scan" if rest.is_empty() => Some(Ok(Action::Scan(scan::View::Scan))),
+        "scan" => Some(Err(format!("drift: scan takes no arguments\n{USAGE}"))),
+        "status" => Some(
+            scan::view_from(rest)
                 .map(Action::Scan)
-                .map_err(|message| format!("drift: {message}\n{USAGE}"));
-        }
-        _ => {}
+                .map_err(|message| format!("drift: {message}\n{USAGE}")),
+        ),
+        "integrate" => Some(integrate_mode(rest).map(Action::Integrate)),
+        _ => None,
     }
-    if args.first().map(String::as_str) == Some("integrate") {
-        return integrate_mode(&args[1..]).map(Action::Integrate);
+}
+
+fn run(args: &[String]) -> Result<Action, String> {
+    if let Some(found) = subcommand(args) {
+        return found;
     }
     let mut snapshot = false;
     let mut width = None;
@@ -192,6 +193,16 @@ fn launch_screen() -> std::io::Result<()> {
     }
 }
 
+fn finish(result: Result<u8, String>) -> ExitCode {
+    match result {
+        Ok(code) => ExitCode::from(code),
+        Err(error) => {
+            eprintln!("drift: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 fn execute(action: Result<Action, String>) -> ExitCode {
     match action {
         Ok(Action::Text(text)) => {
@@ -202,39 +213,18 @@ fn execute(action: Result<Action, String>) -> ExitCode {
             println!("{}", drift_tui::frame_text(width, height));
             ExitCode::SUCCESS
         }
-        Ok(Action::Integrate(mode)) => match integrate_now(mode) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("drift: {error}");
-                ExitCode::from(2)
-            }
-        },
-        Ok(Action::Resolve(args)) => match resolve_now(&args) {
-            Ok(code) => ExitCode::from(code),
-            Err(error) => {
-                eprintln!("drift: {error}");
-                ExitCode::from(2)
-            }
-        },
-        Ok(Action::Diff(args)) => {
-            match diff::run(&scan::paths_from_env(), &args, &mut std::io::stdout()) {
-                Ok(code) => ExitCode::from(code),
-                Err(error) => {
-                    eprintln!("drift: {error}");
-                    ExitCode::from(2)
-                }
-            }
-        }
-        Ok(Action::Scan(view)) => {
-            let paths = scan::paths_from_env();
-            match scan::run(&paths, view, &mut std::io::stdout()) {
-                Ok(code) => ExitCode::from(code),
-                Err(error) => {
-                    eprintln!("drift: {error}");
-                    ExitCode::from(2)
-                }
-            }
-        }
+        Ok(Action::Integrate(mode)) => finish(integrate_now(mode).map(|()| 0)),
+        Ok(Action::Resolve(args)) => finish(resolve_now(&args)),
+        Ok(Action::Diff(args)) => finish(diff::run(
+            &scan::paths_from_env(),
+            &args,
+            &mut std::io::stdout(),
+        )),
+        Ok(Action::Scan(view)) => finish(scan::run(
+            &scan::paths_from_env(),
+            view,
+            &mut std::io::stdout(),
+        )),
         Ok(Action::Launch) => match launch_screen() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

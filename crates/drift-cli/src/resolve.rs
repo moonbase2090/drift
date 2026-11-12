@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use drift_apply::{execute, pending_prune, HyprlandCheck, Roots};
-use drift_core::{prepare, Action, PlanView, RelPath};
+use drift_core::{prepare, Action, PlanView, Prepared, RelPath};
 use drift_source::{load_resolve_inputs, ScanPaths};
 
 use crate::diff::live_path;
@@ -95,22 +95,24 @@ pub fn roots_for(paths: &ScanPaths, runtime: PathBuf) -> Roots {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn run(
+fn say(writer: &mut dyn Write, text: &str) -> Result<(), String> {
+    writer
+        .write_all(text.as_bytes())
+        .and_then(|()| writer.flush())
+        .map_err(|error| error.to_string())
+}
+
+fn confirmed(input: &mut dyn BufRead, interactive: bool) -> bool {
+    let mut line = String::new();
+    interactive && input.read_line(&mut line).is_ok() && matches!(line.trim(), "y" | "Y" | "yes")
+}
+
+fn prepare_for(
     env: &Environment<'_>,
     args: &ResolveArgs,
     elapsed: Duration,
-    interactive: bool,
-    input: &mut dyn BufRead,
-    out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<u8, String> {
-    let say = |writer: &mut dyn Write, text: &str| -> Result<(), String> {
-        writer
-            .write_all(text.as_bytes())
-            .and_then(|()| writer.flush())
-            .map_err(|error| error.to_string())
-    };
+) -> Result<(Prepared, String), String> {
     let mut targets: Vec<RelPath> = Vec::new();
     for given in &args.paths {
         targets.push(live_path(env.paths, given)?);
@@ -142,6 +144,19 @@ pub fn run(
             &format!("skipped {}: {}\n", skip.path, skip.reason.label()),
         )?;
     }
+    Ok((prepared, id))
+}
+
+pub fn run(
+    env: &Environment<'_>,
+    args: &ResolveArgs,
+    elapsed: Duration,
+    interactive: bool,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<u8, String> {
+    let (prepared, id) = prepare_for(env, args, elapsed, err)?;
     let Some(plan) = prepared.plan.as_ref() else {
         return Err("nothing to do".to_string());
     };
@@ -154,11 +169,7 @@ pub fn run(
         Mode::Confirm => {
             say(out, &view.render_body())?;
             say(out, "\nApply this plan? [y/N] ")?;
-            let mut line = String::new();
-            let yes = interactive
-                && input.read_line(&mut line).is_ok()
-                && matches!(line.trim(), "y" | "Y" | "yes");
-            if !yes {
+            if !confirmed(input, interactive) {
                 say(out, "Nothing was written.\n")?;
                 if !interactive {
                     say(
@@ -408,6 +419,7 @@ mod tests {
             "{}",
             ran.out
         );
+        assert!(ran.out.contains("package 4.5.0-3\n"), "{}", ran.out);
         assert!(
             ran.out.ends_with("Dry run: nothing was written.\n"),
             "{}",
