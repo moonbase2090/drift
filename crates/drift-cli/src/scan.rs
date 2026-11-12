@@ -68,10 +68,13 @@ fn registry(paths: &ScanPaths) -> Result<Registry, String> {
     }
 }
 
-pub fn run(paths: &ScanPaths, view: View, out: &mut dyn Write) -> Result<u8, String> {
+pub fn build(paths: &ScanPaths) -> Result<drift_core::ScanReport, String> {
     let registry = registry(paths)?;
-    let report =
-        build_report(&registry, paths, &BTreeSet::new()).map_err(|error| error.to_string())?;
+    build_report(&registry, paths, &BTreeSet::new()).map_err(|error| error.to_string())
+}
+
+pub fn run(paths: &ScanPaths, view: View, out: &mut dyn Write) -> Result<u8, String> {
+    let report = build(paths)?;
     let text = match view {
         View::Scan => report.scan_text(),
         View::Status => report.status_text(),

@@ -10,6 +10,7 @@ mod registry;
 mod report;
 mod rows;
 mod status;
+mod tree_view;
 
 pub use classify::{classify, Base, Classification, MergeOutcome, Versions};
 pub use config::{parse_user_roots, registry_from_user_config, USER_CONFIG_PATH};
@@ -31,3 +32,4 @@ pub use rows::{
 pub use status::{
     content_treatment, Badge, BaseProvenance, HashOnlyReason, Status, Treatment, MAX_DIFF_BYTES,
 };
+pub use tree_view::{RowKind, TreeRow, TreeView};

@@ -136,6 +136,14 @@ fn main() -> ExitCode {
     execute(run(&args))
 }
 
+fn launch_screen() -> std::io::Result<()> {
+    let paths = scan::paths_from_env();
+    match scan::build(&paths) {
+        Ok(report) => drift_tui::launch_with(&report),
+        Err(message) => drift_tui::launch_failed(&message),
+    }
+}
+
 fn execute(action: Result<Action, String>) -> ExitCode {
     match action {
         Ok(Action::Text(text)) => {
@@ -163,7 +171,7 @@ fn execute(action: Result<Action, String>) -> ExitCode {
                 }
             }
         }
-        Ok(Action::Launch) => match drift_tui::launch() {
+        Ok(Action::Launch) => match launch_screen() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("drift: {error}");

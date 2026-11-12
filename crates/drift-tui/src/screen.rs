@@ -5,9 +5,14 @@ use lunatui_term::{Event, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind
 use lunatui_theme::{Theme, Token, Variant};
 use lunatui_widgets::{KeyHintBar, RenderCx, Tree, TreeState, Widget};
 
+use crate::tree_screen::{Action, TreeScreen};
+use drift_core::ScanReport;
+
 const QUIT: &str = "app.quit";
 
 pub struct Screen {
+    review: Option<TreeScreen>,
+    action: Option<Action>,
     keymap: Keymap,
     tree: TreeState,
     columns: u16,
@@ -17,11 +22,35 @@ pub struct Screen {
 impl Screen {
     pub fn new() -> Self {
         Self {
+            review: None,
+            action: None,
             keymap: keymap(),
             tree: TreeState::new(Vec::new()),
             columns: 0,
             rows: 0,
         }
+    }
+}
+
+impl Screen {
+    pub fn with_report(report: &ScanReport) -> Self {
+        let mut screen = Self::new();
+        screen.review = Some(TreeScreen::new(report));
+        screen
+    }
+
+    pub fn failed(message: &str) -> Self {
+        let mut screen = Self::new();
+        screen.review = Some(TreeScreen::failed(message));
+        screen
+    }
+
+    pub fn take_action(&mut self) -> Option<Action> {
+        self.action.take()
+    }
+
+    pub fn review(&self) -> Option<&TreeScreen> {
+        self.review.as_ref()
     }
 }
 
@@ -50,8 +79,20 @@ pub fn frame_text(width: u16, height: u16) -> String {
 }
 
 pub fn launch() -> std::io::Result<()> {
+    launch_screen(Screen::new())
+}
+
+pub fn launch_with(report: &ScanReport) -> std::io::Result<()> {
+    launch_screen(Screen::with_report(report))
+}
+
+pub fn launch_failed(message: &str) -> std::io::Result<()> {
+    launch_screen(Screen::failed(message))
+}
+
+fn launch_screen(screen: Screen) -> std::io::Result<()> {
     let (columns, rows) = terminal_size();
-    run(Screen::new(), RunOptions::new(columns, rows).pixels(false))
+    run(screen, RunOptions::new(columns, rows).pixels(false))
 }
 
 pub fn quit_bounds(columns: u16, rows: u16) -> Option<Rect> {
@@ -103,6 +144,16 @@ fn contains(area: Rect, column: u16, row: u16) -> bool {
 
 impl App for Screen {
     fn update(&mut self, event: &Event) -> ControlFlow {
+        if let Some(review) = self.review.as_mut() {
+            return match review.handle(event) {
+                Some(Action::Quit) => ControlFlow::Break,
+                Some(other) => {
+                    self.action = Some(other);
+                    ControlFlow::Continue
+                }
+                None => ControlFlow::Continue,
+            };
+        }
         if let Event::Mouse(mouse) = event {
             if mouse_quits(self.columns, self.rows, mouse) {
                 return ControlFlow::Break;
@@ -115,6 +166,10 @@ impl App for Screen {
     }
 
     fn render(&mut self, grid: &mut Grid, area: Rect, clusters: &mut ClusterTable) {
+        if let Some(review) = self.review.as_mut() {
+            review.render(grid, area, clusters);
+            return;
+        }
         self.columns = area.width;
         self.rows = area.height;
         let theme = Theme::builtin(Variant::Dark);
