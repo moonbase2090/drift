@@ -3,6 +3,7 @@ mod config;
 mod error;
 mod file;
 mod file_diff;
+mod history_view;
 mod integrate;
 mod merge;
 mod path;
@@ -20,6 +21,7 @@ pub use config::{parse_user_roots, registry_from_user_config, USER_CONFIG_PATH};
 pub use error::{Error, Location};
 pub use file::{LiveFile, LiveState, LiveTreatment, Template, Verification};
 pub use file_diff::{DiffContent, FileDiff};
+pub use history_view::{HistoryRow, HistoryView, UndoKind, UndoLine, UndoPreview};
 pub use integrate::{
     add_menu_row, hook_content, unified_diff, HOOK_MODE, HOOK_PATH, MENU_ID, MENU_PATH,
 };

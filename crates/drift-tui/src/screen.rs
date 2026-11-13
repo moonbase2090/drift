@@ -9,6 +9,8 @@ use drift_core::{Action as ResolveAction, ScanReport};
 
 use crate::diff::DiffScreen;
 use crate::differ::Differ;
+use crate::historian::{Historian, UndoProposal};
+use crate::history_screen::{HistoryAction, HistoryScreen};
 use crate::plan_dialog::{Decision, PlanDialog};
 use crate::resolver::{Proposal, Resolver};
 use crate::tree_screen::{Action, TreeScreen};
@@ -24,15 +26,22 @@ enum Phase {
     Failed,
 }
 
+enum Pending {
+    Resolve(Proposal),
+    Undo(UndoProposal),
+}
+
 struct Modal {
     dialog: PlanDialog,
-    proposal: Proposal,
+    pending: Pending,
 }
 
 pub struct Screen {
     resolver: Option<Box<dyn Resolver>>,
+    historian: Option<Box<dyn Historian>>,
     differ: Option<Box<dyn Differ>>,
     diff: Option<DiffScreen>,
+    history: Option<HistoryScreen>,
     modal: Option<Modal>,
     notice: Option<String>,
     review: Option<TreeScreen>,
@@ -52,8 +61,10 @@ impl Screen {
     pub fn new() -> Self {
         Self {
             resolver: None,
+            historian: None,
             differ: None,
             diff: None,
+            history: None,
             modal: None,
             notice: None,
             review: None,
@@ -92,6 +103,15 @@ impl Screen {
 
     pub fn diff(&self) -> Option<&DiffScreen> {
         self.diff.as_ref()
+    }
+
+    pub fn with_historian(mut self, historian: Box<dyn Historian>) -> Self {
+        self.historian = Some(historian);
+        self
+    }
+
+    pub fn history(&self) -> Option<&HistoryScreen> {
+        self.history.as_ref()
     }
 
     pub fn with_report(report: &ScanReport) -> Self {
@@ -165,11 +185,13 @@ pub fn launch_worker(worker: WorkerHandle) -> std::io::Result<()> {
 pub fn launch_worker_with(
     worker: WorkerHandle,
     resolver: Box<dyn Resolver>,
+    historian: Box<dyn Historian>,
     differ: Box<dyn Differ>,
 ) -> std::io::Result<()> {
     launch_attached(
         Screen::attached(worker)
             .with_resolver(resolver)
+            .with_historian(historian)
             .with_differ(differ),
     )
 }
@@ -273,6 +295,10 @@ impl Screen {
             Action::Keep(paths) => (ResolveAction::KeepMine, paths),
             Action::Take(paths) => (ResolveAction::TakeUpstream, paths),
             Action::Merge(paths) => (ResolveAction::Merge, paths),
+            Action::History => {
+                self.open_history();
+                return;
+            }
             Action::Open(path) => {
                 self.open_diff(path);
                 return;
@@ -297,7 +323,7 @@ impl Screen {
                 }
                 self.modal = Some(Modal {
                     dialog: PlanDialog::new(proposal.view.clone()),
-                    proposal,
+                    pending: Pending::Resolve(proposal),
                 });
             }
             Ok(proposal) => self.show(&format!("Nothing to do: {}", proposal.skipped.join("; "))),
@@ -334,9 +360,84 @@ impl Screen {
     }
 
     fn show(&mut self, text: &str) {
+        if let Some(history) = self.history.as_mut() {
+            history.set_notice(text);
+            return;
+        }
         match self.review.as_mut() {
             Some(review) => review.set_notice(text),
             None => self.notice = Some(text.to_string()),
+        }
+    }
+
+    fn open_history(&mut self) {
+        let Some(historian) = self.historian.as_mut() else {
+            self.action = Some(Action::History);
+            return;
+        };
+        match historian.rows() {
+            Ok(view) => self.history = Some(HistoryScreen::new(view)),
+            Err(message) => self.show(&message),
+        }
+    }
+
+    fn refresh_history(&mut self) {
+        let Some(historian) = self.historian.as_mut() else {
+            return;
+        };
+        match historian.rows() {
+            Ok(view) => {
+                if let Some(history) = self.history.as_mut() {
+                    history.replace(view);
+                }
+            }
+            Err(message) => self.show(&message),
+        }
+    }
+
+    fn update_history(&mut self, event: &Event) {
+        let Some(action) = self
+            .history
+            .as_mut()
+            .and_then(|history| history.handle(event))
+        else {
+            return;
+        };
+        match action {
+            HistoryAction::Back => self.history = None,
+            HistoryAction::Refresh => self.refresh_history(),
+            HistoryAction::Undo { target, force } => self.propose_undo(&target, force),
+        }
+    }
+
+    fn propose_undo(&mut self, target: &str, force: bool) {
+        let Some(historian) = self.historian.as_mut() else {
+            return;
+        };
+        match historian.propose(target, force) {
+            Ok(proposal) if !proposal.view.files.is_empty() => {
+                let diverged = proposal.preview.diverged().len();
+                if diverged > 0 && !force {
+                    self.show(&format!(
+                        "{diverged} file(s) changed since and stay as they are; U restores them too"
+                    ));
+                }
+                self.modal = Some(Modal {
+                    dialog: PlanDialog::new(proposal.view.clone()),
+                    pending: Pending::Undo(proposal),
+                });
+            }
+            Ok(proposal) => {
+                let diverged = proposal.preview.diverged().len();
+                if diverged > 0 {
+                    self.show(&format!(
+                        "{diverged} file(s) changed since; U restores them anyway"
+                    ));
+                } else {
+                    self.show("Nothing to undo in that transaction.");
+                }
+            }
+            Err(message) => self.show(&message),
         }
     }
 
@@ -353,11 +454,17 @@ impl Screen {
         };
         match decision {
             Decision::Cancel => self.show("Cancelled. Nothing was written."),
-            Decision::Confirm => {
+            Decision::Confirm => self.confirm(modal.pending),
+        }
+    }
+
+    fn confirm(&mut self, pending: Pending) {
+        match pending {
+            Pending::Resolve(proposal) => {
                 let outcome = self
                     .resolver
                     .as_mut()
-                    .map(|resolver| resolver.apply(&modal.proposal));
+                    .map(|resolver| resolver.apply(&proposal));
                 match outcome {
                     Some(Ok(message)) => {
                         if self.worker.is_some() {
@@ -368,6 +475,24 @@ impl Screen {
                     }
                     Some(Err(message)) => self.show(&message),
                     None => self.show("No resolver is attached."),
+                }
+            }
+            Pending::Undo(proposal) => {
+                let outcome = self
+                    .historian
+                    .as_mut()
+                    .map(|historian| historian.apply(&proposal));
+                match outcome {
+                    Some(Ok(message)) => {
+                        self.refresh_history();
+                        self.show(&message);
+                        self.request_rescan();
+                    }
+                    Some(Err(message)) => {
+                        self.refresh_history();
+                        self.show(&message);
+                    }
+                    None => self.show("No history is attached."),
                 }
             }
         }
@@ -391,7 +516,7 @@ impl Screen {
     }
 
     fn drop_modal(&mut self) {
-        if self.modal.take().is_some() {
+        if self.history.is_none() && self.modal.take().is_some() {
             self.notice =
                 Some("A rescan started; the plan was cancelled. Nothing was written.".to_string());
         }
@@ -434,6 +559,10 @@ impl App for Screen {
             self.update_diff(event);
             return ControlFlow::Continue;
         }
+        if self.history.is_some() {
+            self.update_history(event);
+            return ControlFlow::Continue;
+        }
         if !matches!(self.phase, Phase::Scanning) && self.review.is_some() {
             let action = self.review.as_mut().and_then(|review| review.handle(event));
             return match action {
@@ -469,6 +598,13 @@ impl App for Screen {
         self.kick_scan();
         if let Some(diff) = self.diff.as_mut() {
             diff.render(grid, area, clusters);
+            return;
+        }
+        if let Some(history) = self.history.as_mut() {
+            history.render(grid, area, clusters);
+            if let Some(modal) = self.modal.as_mut() {
+                modal.dialog.render(grid, area, clusters);
+            }
             return;
         }
         if matches!(self.phase, Phase::Scanning) {
@@ -1373,6 +1509,368 @@ mod tests {
         assert!(!shown(&mut screen).contains("Apply plan"));
     }
 
+    use drift_core::{HistoryRow, HistoryView, UndoKind, UndoLine, UndoPreview};
+
+    #[derive(Default)]
+    struct HistoryLog {
+        listed: usize,
+        proposed: Vec<(String, bool)>,
+        applied: Vec<(String, Vec<String>)>,
+    }
+
+    struct FakeHistory {
+        log: Rc<RefCell<HistoryLog>>,
+        fail_rows: bool,
+        fail_apply: bool,
+        diverged: bool,
+        empty_undo: bool,
+    }
+
+    fn history_row(id: &str) -> HistoryRow {
+        HistoryRow {
+            id: id.to_string(),
+            time: "2026-11-12T10:30:00Z".to_string(),
+            package_version: "4.5.0-3".to_string(),
+            files: 1,
+            actions: "1 take upstream".to_string(),
+        }
+    }
+
+    impl Historian for FakeHistory {
+        fn rows(&mut self) -> Result<HistoryView, String> {
+            self.log.borrow_mut().listed += 1;
+            if self.fail_rows {
+                return Err("the state directory is unreadable".to_string());
+            }
+            Ok(HistoryView {
+                rows: vec![history_row("resolve-2"), history_row("resolve-1")],
+                unreadable: Vec::new(),
+            })
+        }
+
+        fn propose(&mut self, target: &str, force: bool) -> Result<UndoProposal, String> {
+            self.log
+                .borrow_mut()
+                .proposed
+                .push((target.to_string(), force));
+            let line = |path: &str, kind| UndoLine {
+                path: path.to_string(),
+                kind,
+            };
+            let mut lines = Vec::new();
+            if !self.empty_undo {
+                lines.push(line(".config/a.conf", UndoKind::Restore));
+            }
+            if self.diverged {
+                lines.push(line(
+                    ".config/b.conf",
+                    UndoKind::Diverged {
+                        expected: Some("aa".repeat(32)),
+                        found: None,
+                    },
+                ));
+            }
+            let preview = UndoPreview {
+                target: target.to_string(),
+                id: "undo-9".to_string(),
+                time: "2026-11-12T11:00:00Z".to_string(),
+                package_version: "4.5.0-3".to_string(),
+                lines,
+                bases: Vec::new(),
+                prune: Vec::new(),
+            };
+            let forced: Vec<String> = if force {
+                preview.diverged().into_iter().map(str::to_string).collect()
+            } else {
+                Vec::new()
+            };
+            let view = preview.plan_view("STATE", &forced);
+            Ok(UndoProposal {
+                preview,
+                view,
+                forced,
+            })
+        }
+
+        fn apply(&mut self, proposal: &UndoProposal) -> Result<String, String> {
+            self.log
+                .borrow_mut()
+                .applied
+                .push((proposal.preview.target.clone(), proposal.forced.clone()));
+            if self.fail_apply {
+                return Err("changed since; nothing was written".to_string());
+            }
+            Ok(format!("Undid {}.", proposal.preview.target))
+        }
+    }
+
+    fn historian(
+        fail_rows: bool,
+        fail_apply: bool,
+        diverged: bool,
+        empty_undo: bool,
+    ) -> (FakeHistory, Rc<RefCell<HistoryLog>>) {
+        let log = Rc::new(RefCell::new(HistoryLog::default()));
+        (
+            FakeHistory {
+                log: Rc::clone(&log),
+                fail_rows,
+                fail_apply,
+                diverged,
+                empty_undo,
+            },
+            log,
+        )
+    }
+
+    fn with_history(fake: FakeHistory) -> Screen {
+        let report = ScanReport {
+            package_version: "4.5.0-3".to_string(),
+            reviewed_version: None,
+            entries: vec![entry(".config/a.conf", Status::Conflict)],
+            backups: Vec::new(),
+            ignored: 0,
+        };
+        Screen::with_report(&report).with_historian(Box::new(fake))
+    }
+
+    fn history_notice(screen: &Screen) -> String {
+        screen
+            .history()
+            .and_then(|history| history.notice().map(str::to_string))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn capital_h_opens_the_history_and_q_goes_back_to_the_tree_not_out_of_the_program() {
+        let (fake, log) = historian(false, false, false, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "H");
+        assert_eq!(log.borrow().listed, 1);
+        let text = shown(&mut screen);
+        assert!(text.contains("History  2 transactions"), "{text}");
+        assert!(text.contains("resolve-2"), "{text}");
+        assert_eq!(
+            screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('q')))),
+            ControlFlow::Continue
+        );
+        assert!(screen.history().is_none());
+        assert!(shown(&mut screen).contains("a.conf"));
+        assert_eq!(
+            screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('q')))),
+            ControlFlow::Break
+        );
+    }
+
+    #[test]
+    fn without_a_historian_the_key_only_reports_the_action() {
+        let report = ScanReport {
+            package_version: "4.5.0-3".to_string(),
+            reviewed_version: None,
+            entries: vec![entry(".config/a.conf", Status::Conflict)],
+            backups: Vec::new(),
+            ignored: 0,
+        };
+        let mut screen = Screen::with_report(&report);
+        let _ = shown(&mut screen);
+        press(&mut screen, "H");
+        assert_eq!(screen.take_action(), Some(Action::History));
+        assert!(screen.history().is_none());
+    }
+
+    #[test]
+    fn a_history_that_cannot_be_read_is_reported_on_the_tree() {
+        let (fake, _) = historian(true, false, false, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "H");
+        assert!(screen.history().is_none());
+        assert_eq!(notice(&screen), "the state directory is unreadable");
+    }
+
+    #[test]
+    fn enter_opens_the_undo_dialog_and_nothing_is_written_until_it_is_confirmed() {
+        let (fake, log) = historian(false, false, false, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "H");
+        let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)));
+        assert_eq!(log.borrow().proposed, [("resolve-2".to_string(), false)]);
+        assert!(log.borrow().applied.is_empty());
+        let text = shown(&mut screen);
+        assert!(text.contains("Apply plan undo-9"), "{text}");
+        assert!(text.contains("[+] undo          .config/a.conf"), "{text}");
+        assert!(text.contains("restore the saved original"), "{text}");
+        assert!(text.contains("[>Cancel<]"), "{text}");
+    }
+
+    #[test]
+    fn cancelling_the_undo_dialog_writes_nothing_and_keeps_the_history_open() {
+        for keys in ["n", "q"] {
+            let (fake, log) = historian(false, false, false, false);
+            let mut screen = with_history(fake);
+            let _ = shown(&mut screen);
+            press(&mut screen, "H");
+            let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)));
+            press(&mut screen, keys);
+            assert!(log.borrow().applied.is_empty(), "{keys}");
+            assert!(screen.history().is_some(), "{keys}");
+            assert_eq!(history_notice(&screen), "Cancelled. Nothing was written.");
+            assert!(!shown(&mut screen).contains("Apply plan"));
+        }
+    }
+
+    #[test]
+    fn confirming_undoes_once_refreshes_the_table_and_rescans_the_tree() {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let unlock = Unlock(Some(release_tx));
+        let worker = crate::worker::launch(
+            Box::new(move || {
+                let _ = release_rx.recv();
+                Ok(empty_report())
+            }),
+            Duration::from_millis(200),
+        );
+        let (fake, log) = historian(false, false, false, false);
+        let report = ScanReport {
+            package_version: "4.5.0-3".to_string(),
+            reviewed_version: None,
+            entries: vec![entry(".config/a.conf", Status::Conflict)],
+            backups: Vec::new(),
+            ignored: 0,
+        };
+        let mut screen = Screen::attached(worker).with_historian(Box::new(fake));
+        screen.kick = false;
+        screen.apply_note(Note::Ready(report));
+        let _ = shown(&mut screen);
+        press(&mut screen, "H");
+        let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)));
+        press(&mut screen, "y");
+        assert_eq!(
+            log.borrow().applied,
+            [("resolve-2".to_string(), Vec::new())]
+        );
+        assert_eq!(log.borrow().listed, 2);
+        assert_eq!(history_notice(&screen), "Undid resolve-2.");
+        assert!(screen.needs_animation_frames());
+        assert!(screen.history().is_some());
+        drop(unlock);
+        drop(screen);
+    }
+
+    #[test]
+    fn a_failed_undo_is_shown_on_the_history_and_the_table_is_reloaded() {
+        let (fake, log) = historian(false, true, false, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "H");
+        let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)));
+        press(&mut screen, "y");
+        assert_eq!(log.borrow().applied.len(), 1);
+        assert_eq!(log.borrow().listed, 2);
+        assert_eq!(
+            history_notice(&screen),
+            "changed since; nothing was written"
+        );
+        assert!(screen.history().is_some());
+    }
+
+    #[test]
+    fn a_file_changed_since_stays_out_of_the_plan_until_u_forces_it() {
+        let (fake, log) = historian(false, false, true, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "H");
+        let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)));
+        let text = shown(&mut screen);
+        assert!(text.contains("1 of 1 files will be written"), "{text}");
+        assert!(!text.contains("b.conf"), "{text}");
+        assert_eq!(
+            history_notice(&screen),
+            "1 file(s) changed since and stay as they are; U restores them too"
+        );
+        press(&mut screen, "n");
+
+        press(&mut screen, "U");
+        assert_eq!(
+            log.borrow().proposed,
+            [
+                ("resolve-2".to_string(), false),
+                ("resolve-2".to_string(), true)
+            ]
+        );
+        let text = shown(&mut screen);
+        assert!(text.contains("2 of 2 files will be written"), "{text}");
+        assert!(text.contains("b.conf"), "{text}");
+        press(&mut screen, "y");
+        assert_eq!(
+            log.borrow().applied,
+            [("resolve-2".to_string(), vec![".config/b.conf".to_string()])]
+        );
+    }
+
+    #[test]
+    fn an_undo_with_nothing_to_restore_says_why_and_opens_no_dialog() {
+        let (fake, log) = historian(false, false, false, true);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "H");
+        let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)));
+        assert_eq!(
+            history_notice(&screen),
+            "Nothing to undo in that transaction."
+        );
+        assert!(!shown(&mut screen).contains("Apply plan"));
+        assert!(log.borrow().applied.is_empty());
+
+        let (fake, _) = historian(false, false, true, true);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "H");
+        let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)));
+        assert_eq!(
+            history_notice(&screen),
+            "1 file(s) changed since; U restores them anyway"
+        );
+    }
+
+    #[test]
+    fn a_scan_that_starts_under_the_history_does_not_cancel_the_undo_dialog() {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let unlock = Unlock(Some(release_tx));
+        let worker = crate::worker::launch(
+            Box::new(move || {
+                let _ = release_rx.recv();
+                Ok(empty_report())
+            }),
+            Duration::from_millis(200),
+        );
+        let (fake, log) = historian(false, false, false, false);
+        let mut screen = Screen::attached(worker).with_historian(Box::new(fake));
+        screen.kick = false;
+        screen.apply_note(Note::Ready(empty_report()));
+        let _ = shown(&mut screen);
+        press(&mut screen, "H");
+        let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)));
+        screen.apply_note(Note::Scanning);
+        assert!(shown(&mut screen).contains("Apply plan undo-9"));
+        press(&mut screen, "y");
+        assert_eq!(log.borrow().applied.len(), 1);
+        drop(unlock);
+        drop(screen);
+    }
+
+    #[test]
+    fn r_reloads_the_history() {
+        let (fake, log) = historian(false, false, false, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "H");
+        press(&mut screen, "r");
+        assert_eq!(log.borrow().listed, 2);
+    }
+
     use drift_core::{DiffContent, FileDiff};
 
     struct FakeDiffer {
@@ -1576,5 +2074,25 @@ mod tests {
         screen.apply_note(Note::Ready(empty_report()));
         assert!(screen.diff().is_some());
         assert!(wide(&mut screen).contains("hunks"));
+    }
+
+    #[test]
+    fn the_diff_and_the_history_open_from_the_same_tree_one_after_the_other() {
+        let (differ, _) = differing(false, false);
+        let (fake, _) = historian(false, false, false, false);
+        let mut screen = differ.with_historian(Box::new(fake));
+        let _ = wide(&mut screen);
+        press(&mut screen, "j");
+        enter(&mut screen);
+        assert!(screen.diff().is_some());
+        press(&mut screen, "H");
+        assert!(screen.history().is_none());
+        escape(&mut screen);
+        press(&mut screen, "H");
+        assert!(screen.history().is_some() && screen.diff().is_none());
+        press(&mut screen, "q");
+        press(&mut screen, "j");
+        enter(&mut screen);
+        assert!(screen.diff().is_some() && screen.history().is_none());
     }
 }

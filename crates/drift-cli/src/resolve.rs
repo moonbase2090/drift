@@ -321,7 +321,7 @@ pub(crate) mod tests {
 
     use super::*;
 
-    fn args(list: &[&str]) -> Vec<String> {
+    pub(crate) fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|item| item.to_string()).collect()
     }
 
@@ -396,7 +396,7 @@ pub(crate) mod tests {
         }
     }
 
-    struct Checker(HyprlandStatus);
+    pub(crate) struct Checker(pub(crate) HyprlandStatus);
 
     impl HyprlandCheck for Checker {
         fn config_errors(&self) -> HyprlandStatus {
@@ -404,13 +404,13 @@ pub(crate) mod tests {
         }
     }
 
-    struct Run {
-        result: Result<u8, String>,
-        out: String,
-        err: String,
+    pub(crate) struct Run {
+        pub(crate) result: Result<u8, String>,
+        pub(crate) out: String,
+        pub(crate) err: String,
     }
 
-    fn go(
+    pub(crate) fn go(
         root: &MaterializedRoot,
         list: &[&str],
         interactive: bool,
@@ -420,7 +420,7 @@ pub(crate) mod tests {
         go_at(root, list, interactive, typed, checker, 1_800_000_000_123)
     }
 
-    fn go_at(
+    pub(crate) fn go_at(
         root: &MaterializedRoot,
         list: &[&str],
         interactive: bool,
@@ -454,15 +454,15 @@ pub(crate) mod tests {
         }
     }
 
-    fn clean() -> Checker {
+    pub(crate) fn clean() -> Checker {
         Checker(HyprlandStatus::Clean)
     }
 
-    fn read(root: &MaterializedRoot, rel: &str) -> String {
+    pub(crate) fn read(root: &MaterializedRoot, rel: &str) -> String {
         fs::read_to_string(root.path().join(rel)).unwrap()
     }
 
-    fn transactions(root: &MaterializedRoot) -> usize {
+    pub(crate) fn transactions(root: &MaterializedRoot) -> usize {
         fs::read_dir(root.path().join("state/backups"))
             .map(|dir| dir.count())
             .unwrap_or(0)

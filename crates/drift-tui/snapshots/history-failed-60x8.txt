@@ -1,0 +1,8 @@
+ Drift  history failed: state directory is unreadable       
+ Newest first. Undo restores files and reviewed bases.      
+                                                            
+ Nothing was loaded.                                        
+                                                            
+                                                            
+                                                            
+[Q] Back  [Enter] Undo  [U] Undo and force  [r] Refresh     
