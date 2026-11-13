@@ -204,6 +204,110 @@ pub fn run(
     Ok(0)
 }
 
+pub struct LiveResolver {
+    paths: ScanPaths,
+    roots: Roots,
+    checker: Box<dyn HyprlandCheck>,
+    registry: drift_core::Registry,
+}
+
+impl LiveResolver {
+    pub fn new(
+        paths: ScanPaths,
+        roots: Roots,
+        checker: Box<dyn HyprlandCheck>,
+        registry: drift_core::Registry,
+    ) -> Self {
+        Self {
+            paths,
+            roots,
+            checker,
+            registry,
+        }
+    }
+}
+
+fn now_millis() -> Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}
+
+impl drift_tui::Resolver for LiveResolver {
+    fn propose(&mut self, action: Action, paths: &[String]) -> Result<drift_tui::Proposal, String> {
+        let mut targets: Vec<RelPath> = Vec::new();
+        for given in paths {
+            targets.push(live_path(&self.paths, given)?);
+        }
+        let loaded = load_resolve_inputs(&self.registry, &self.paths, &BTreeSet::new(), &targets)
+            .map_err(|error| error.to_string())?;
+        if let Some(path) = loaded.unknown.first() {
+            return Err(format!("unknown tracked path '{path}'"));
+        }
+        let elapsed = now_millis();
+        let id = format!("resolve-{}", elapsed.as_millis());
+        let prune = pending_prune(&self.roots.state).map_err(|error| error.to_string())?;
+        let prune_refs: Vec<&str> = prune.iter().map(String::as_str).collect();
+        let prepared = prepare(
+            action,
+            &loaded.inputs,
+            &id,
+            &utc_timestamp(elapsed.as_secs()),
+            &loaded.package_version,
+            &prune_refs,
+        )
+        .map_err(|error| error.to_string())?;
+        let skipped = prepared
+            .skipped
+            .iter()
+            .map(|skip| format!("{} {}", skip.path, skip.reason.label()))
+            .collect();
+        let state = self.roots.state.display().to_string();
+        let view = match prepared.plan.as_ref() {
+            Some(plan) => PlanView::build(plan, &state, &prepared.contents),
+            None => PlanView {
+                id,
+                time: String::new(),
+                package_version: loaded.package_version,
+                files: Vec::new(),
+                prune: Vec::new(),
+            },
+        };
+        Ok(drift_tui::Proposal {
+            prepared,
+            view,
+            skipped,
+        })
+    }
+
+    fn apply(&mut self, proposal: &drift_tui::Proposal) -> Result<String, String> {
+        let done = execute(
+            &self.roots,
+            &self.paths.resolve.share,
+            &proposal.prepared,
+            self.checker.as_ref(),
+        )
+        .map_err(|error| error.to_string())?;
+        let mut message = format!(
+            "Applied {} file(s) as transaction {}; {} reviewed base(s) recorded.",
+            done.checked.report.applied.len(),
+            proposal.view.id,
+            done.recorded.len()
+        );
+        if !done.unrecorded.is_empty() {
+            message.push_str(&format!(
+                " Could not record: {}.",
+                done.unrecorded.join(", ")
+            ));
+        }
+        if let Some(alert) = done.checked.followup.alert() {
+            message.push(' ');
+            message.push_str(&alert.replace('\n', " "));
+        }
+        Ok(message)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -686,5 +790,91 @@ mod tests {
         );
         assert!(result.unwrap_err().contains("omarchy update lock"));
         assert_eq!(read(&root, "home/.config/hypr/a.lua"), "mine\n");
+    }
+
+    fn live(root: &MaterializedRoot, status: HyprlandStatus) -> LiveResolver {
+        let paths = scan_paths(root);
+        let roots = roots_for(&paths, root.path().join("runtime"));
+        LiveResolver::new(
+            paths,
+            roots,
+            Box::new(Checker(status)),
+            drift_core::Registry::v1(),
+        )
+    }
+
+    #[test]
+    fn the_review_screen_resolver_proposes_applies_and_reports_in_one_transaction() {
+        use drift_tui::Resolver as _;
+        let root = world(&[
+            ("hypr/a.lua", "new\n", Some("mine\n"), Some("old\n")),
+            ("hypr/b.lua", "new b\n", Some("mine b\n"), Some("old b\n")),
+        ]);
+        let mut resolver = live(&root, HyprlandStatus::Clean);
+        let before = hash_tree(root.path()).unwrap();
+        let proposal = resolver
+            .propose(
+                Action::TakeUpstream,
+                &[
+                    ".config/hypr/a.lua".to_string(),
+                    ".config/hypr/b.lua".to_string(),
+                ],
+            )
+            .unwrap();
+        assert_eq!(proposal.view.files.len(), 2);
+        assert!(proposal.skipped.is_empty());
+        assert_eq!(hash_tree(root.path()).unwrap(), before);
+        let message = resolver.apply(&proposal).unwrap();
+        assert!(
+            message.starts_with("Applied 2 file(s) as transaction resolve-"),
+            "{message}"
+        );
+        assert!(
+            message.contains("2 reviewed base(s) recorded."),
+            "{message}"
+        );
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "new\n");
+        assert_eq!(read(&root, "home/.config/hypr/b.lua"), "new b\n");
+        assert_eq!(transactions(&root), 1);
+    }
+
+    #[test]
+    fn the_resolver_names_skipped_files_unknown_paths_and_nothing_to_do() {
+        use drift_tui::Resolver as _;
+        let root = world(&[("hypr/a.lua", "same\n", Some("same\n"), None)]);
+        let mut resolver = live(&root, HyprlandStatus::Clean);
+        let proposal = resolver
+            .propose(Action::TakeUpstream, &[".config/hypr/a.lua".to_string()])
+            .unwrap();
+        assert!(proposal.prepared.plan.is_none());
+        assert_eq!(proposal.skipped, [".config/hypr/a.lua nothing to do"]);
+        assert!(proposal.view.files.is_empty());
+        let error = resolver
+            .propose(Action::KeepMine, &[".config/hypr/none.lua".to_string()])
+            .unwrap_err();
+        assert!(error.contains("unknown tracked path"), "{error}");
+        let error = resolver
+            .propose(Action::KeepMine, &["/etc/passwd".to_string()])
+            .unwrap_err();
+        assert!(error.contains("outside the home directory"), "{error}");
+        assert!(resolver.apply(&proposal).is_err());
+        assert_eq!(transactions(&root), 0);
+    }
+
+    #[test]
+    fn the_resolver_message_carries_the_hyprland_undo_offer() {
+        use drift_tui::Resolver as _;
+        let root = world(&[("hypr/a.lua", "new\n", Some("mine\n"), Some("old\n"))]);
+        let mut resolver = live(&root, HyprlandStatus::Errors("line 3: bad".to_string()));
+        let proposal = resolver
+            .propose(Action::TakeUpstream, &[".config/hypr/a.lua".to_string()])
+            .unwrap();
+        let message = resolver.apply(&proposal).unwrap();
+        assert!(
+            message.contains("Hyprland reported config errors after transaction resolve-"),
+            "{message}"
+        );
+        assert!(message.contains("line 3: bad"), "{message}");
+        assert!(!message.contains('\n'), "{message}");
     }
 }

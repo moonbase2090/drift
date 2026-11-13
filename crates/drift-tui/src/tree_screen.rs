@@ -65,6 +65,7 @@ pub struct TreeScreen {
     package_version: String,
     pending: Option<(String, String)>,
     error: Option<String>,
+    notice: Option<String>,
     mode: Mode,
     scroll: usize,
     follow: bool,
@@ -97,6 +98,7 @@ impl TreeScreen {
                 )
             }),
             error: None,
+            notice: None,
             mode: Mode::Normal,
             scroll: 0,
             follow: true,
@@ -117,6 +119,14 @@ impl TreeScreen {
         screen
     }
 
+    pub fn set_notice(&mut self, text: &str) {
+        self.notice = Some(text.to_string());
+    }
+
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+
     pub fn view(&self) -> &TreeView {
         &self.view
     }
@@ -130,6 +140,9 @@ impl TreeScreen {
     }
 
     pub fn handle_at(&mut self, event: &Event, now: Instant) -> Option<Action> {
+        if matches!(event, Event::Key(key) if key.kind == KeyKind::Press) {
+            self.notice = None;
+        }
         match event {
             Event::Key(key) if key.kind == KeyKind::Press => self.key(key.code),
             Event::Mouse(mouse) => self.mouse(mouse.kind, mouse.column, mouse.row, now),
@@ -519,6 +532,9 @@ impl TreeScreen {
 
     fn info_text(&self) -> String {
         let mut parts = Vec::new();
+        if let Some(notice) = &self.notice {
+            parts.push(notice.clone());
+        }
         if self.mode == Mode::Search {
             parts.push(format!("search: {}_", self.view.query()));
         } else if !self.view.query().is_empty() {
@@ -1582,5 +1598,19 @@ mod tests {
         let mut failed = Screen::failed("boom");
         let (grid, clusters) = render_once(&mut failed, 80, 24);
         assert!(grid.display_text(&clusters).contains("scan failed: boom"));
+    }
+
+    #[test]
+    fn a_notice_is_shown_on_the_info_line_and_cleared_by_the_next_key() {
+        let mut screen = opened();
+        screen.set_notice("Applied 2 file(s).");
+        assert_eq!(screen.notice(), Some("Applied 2 file(s)."));
+        assert!(text(&mut screen, 120, 36).contains("Applied 2 file(s).  |  8 of 8 files"));
+        let wheel = Event::Mouse(MouseEvent::new(MouseKind::Scroll(Scroll::Down), 5, 5));
+        screen.handle(&wheel);
+        assert_eq!(screen.notice(), Some("Applied 2 file(s)."));
+        press(&mut screen, "j");
+        assert_eq!(screen.notice(), None);
+        assert!(!text(&mut screen, 120, 36).contains("Applied 2 file(s)."));
     }
 }
