@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 
 use drift_apply::{
@@ -11,7 +12,7 @@ use drift_apply::{
 use drift_core::{prepare, Action, Prepared, Registry, RelPath, ScanReport, Status};
 use drift_fixtures::{hash_tree, MaterializedRoot, RootBuilder};
 use drift_source::{
-    build_report, load_resolve_inputs, ReadPaths, ResolvePaths, ScanPaths, SourcePaths,
+    build_report, drift_share, load_resolve_inputs, ReadPaths, ResolvePaths, ScanPaths, SourcePaths,
 };
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -270,6 +271,62 @@ fn keep_mine_on_a_deleted_file_keeps_it_deleted_and_acknowledged() {
         read(&world, "home/.local/share/drift/bases/config/hypr/a.lua"),
         "upstream new\n"
     );
+}
+
+#[test]
+fn keep_mine_records_the_reviewed_base_when_the_data_directory_is_missing() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "upstream new\n", Some("mine\n"), None);
+    let world = builder.build();
+    fs::remove_dir_all(world.path("home/.local")).unwrap();
+    let share = drift_share(&world.path("home/.local/share"));
+    let (prepared, unknown) = world.prepared(Action::KeepMine, "txn-1", &[".config/hypr/a.lua"]);
+    assert!(unknown.is_empty());
+    let done = execute(&world.roots(), &share, &prepared, &Quiet).unwrap();
+    assert_eq!(done.recorded, ["config/hypr/a.lua"]);
+    assert!(done.unrecorded.is_empty());
+    assert_eq!(read(&world, "home/.config/hypr/a.lua"), "mine\n");
+    assert_eq!(
+        read(&world, "home/.local/share/drift/bases/config/hypr/a.lua"),
+        "upstream new\n"
+    );
+}
+
+#[test]
+fn keep_mine_records_the_reviewed_base_under_a_missing_xdg_data_home() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "upstream new\n", Some("mine\n"), None);
+    let world = builder.build();
+    let share = drift_share(&world.path("home/custom-data"));
+    assert!(!world.path("home/custom-data").exists());
+    let (prepared, unknown) = world.prepared(Action::KeepMine, "txn-1", &[".config/hypr/a.lua"]);
+    assert!(unknown.is_empty());
+    let done = execute(&world.roots(), &share, &prepared, &Quiet).unwrap();
+    assert_eq!(done.recorded, ["config/hypr/a.lua"]);
+    assert!(done.unrecorded.is_empty());
+    assert_eq!(read(&world, "home/.config/hypr/a.lua"), "mine\n");
+    assert_eq!(
+        fs::read_to_string(share.join("bases/config/hypr/a.lua")).unwrap(),
+        "upstream new\n"
+    );
+}
+
+#[test]
+fn keep_mine_does_not_record_a_reviewed_base_through_a_symlinked_data_directory() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "upstream new\n", Some("mine\n"), None);
+    let world = builder.build();
+    let outside = world.path("outside-data");
+    fs::create_dir(&outside).unwrap();
+    fs::remove_dir_all(world.path("home/.local")).unwrap();
+    symlink(&outside, world.path("home/.local")).unwrap();
+    let share = drift_share(&world.path("home/.local/share"));
+    let (prepared, _) = world.prepared(Action::KeepMine, "txn-1", &[".config/hypr/a.lua"]);
+    let done = execute(&world.roots(), &share, &prepared, &Quiet).unwrap();
+    assert!(done.recorded.is_empty());
+    assert_eq!(done.unrecorded, ["config/hypr/a.lua"]);
+    assert_eq!(read(&world, "home/.config/hypr/a.lua"), "mine\n");
+    assert!(fs::read_dir(&outside).unwrap().next().is_none());
 }
 
 #[test]
