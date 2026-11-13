@@ -330,6 +330,20 @@ fn finish(result: Result<u8, String>) -> ExitCode {
     }
 }
 
+fn finish_misc(action: Action) -> ExitCode {
+    match action {
+        Action::Scan(view) => finish(scan::run(
+            &scan::paths_from_env(),
+            view,
+            &mut std::io::stdout(),
+        )),
+        Action::PreSnapshot => finish(snapshot::run().map(|()| 0)),
+        Action::Notify(request) => finish(notify_now(request)),
+        Action::Widget(args) => finish(widget::run_now(&args)),
+        _ => ExitCode::from(2),
+    }
+}
+
 fn execute(action: Result<Action, String>) -> ExitCode {
     match action {
         Ok(Action::Text(text)) => {
@@ -340,6 +354,10 @@ fn execute(action: Result<Action, String>) -> ExitCode {
             println!("{}", drift_tui::frame_text(width, height));
             ExitCode::SUCCESS
         }
+        Ok(
+            action
+            @ (Action::Scan(_) | Action::PreSnapshot | Action::Notify(_) | Action::Widget(_)),
+        ) => finish_misc(action),
         Ok(Action::Integrate(mode)) => finish(integrate_now(mode).map(|()| 0)),
         Ok(Action::Resolve(args)) => finish(resolve_now(&args)),
         Ok(Action::History(args)) => finish(history_now(&args)),
@@ -349,14 +367,6 @@ fn execute(action: Result<Action, String>) -> ExitCode {
             &args,
             &mut std::io::stdout(),
         )),
-        Ok(Action::Scan(view)) => finish(scan::run(
-            &scan::paths_from_env(),
-            view,
-            &mut std::io::stdout(),
-        )),
-        Ok(Action::PreSnapshot) => finish(snapshot::run().map(|()| 0)),
-        Ok(Action::Notify(request)) => finish(notify_now(request)),
-        Ok(Action::Widget(args)) => finish(widget::run_now(&args)),
         Ok(Action::Launch) => match open_review() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

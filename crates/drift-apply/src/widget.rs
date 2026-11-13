@@ -360,6 +360,70 @@ pub fn widget_sync(
     refresh(paths, omarchy, options, stamp, out, ask, false)
 }
 
+fn refresh_steps(id: &str, enable: bool, place: bool) -> Vec<Vec<String>> {
+    let mut steps = vec![cmd(&["omarchy-shell", "shell", "rescanPlugins"])];
+    if enable {
+        steps.push(cmd(&["omarchy", "plugin", "enable", id]));
+    }
+    if enable && place {
+        steps.push(cmd(&["omarchy", "bar", "put", id]));
+    }
+    steps
+}
+
+fn dry_run(
+    out: &mut dyn Write,
+    steps: &[Vec<String>],
+    what: &str,
+) -> Result<WidgetOutcome, String> {
+    for step in steps {
+        say(out, &format!("would run  {}\n", step.join(" ")))?;
+    }
+    say(out, &format!("Dry run: nothing was {what}.\n"))?;
+    Ok(WidgetOutcome::DryRun)
+}
+
+fn guard_edits(
+    options: WidgetOptions,
+    edited: usize,
+    out: &mut dyn Write,
+    ask: &mut dyn FnMut() -> bool,
+) -> Result<Option<WidgetOutcome>, String> {
+    if edited == 0 || options.force {
+        return Ok(None);
+    }
+    say(
+        out,
+        &format!("{edited} file(s) differ from the shipped copy because you edited them.\n"),
+    )?;
+    if options.mode == WidgetMode::Confirm && ask() {
+        return Ok(None);
+    }
+    if options.mode == WidgetMode::Yes {
+        say(
+            out,
+            "Not overwriting your edits; pass --force to replace them (a backup is kept).\n",
+        )?;
+        return Ok(Some(WidgetOutcome::Refused));
+    }
+    say(out, "Not overwriting your edits. Nothing was written.\n")?;
+    Ok(Some(WidgetOutcome::Declined))
+}
+
+fn apply_plan(plan: &[Entry], dest_dir: &Path) -> Result<(), String> {
+    for entry in plan {
+        let path = dest_dir.join(&entry.rel);
+        match (&entry.step, &entry.source) {
+            (Step::Add | Step::Update | Step::Edited, Some(bytes)) => write_atomic(&path, bytes)?,
+            (Step::Delete, _) => {
+                fs::remove_file(&path).map_err(|error| format!("{}: {error}", path.display()))?
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn refresh(
     paths: &WidgetPaths,
     omarchy: &mut dyn OmarchyShell,
@@ -384,39 +448,12 @@ fn refresh(
             Step::Add | Step::Update | Step::Edited | Step::Delete
         )
     });
-    let mut steps = vec![cmd(&["omarchy-shell", "shell", "rescanPlugins"])];
-    if enable {
-        steps.push(cmd(&["omarchy", "plugin", "enable", &id]));
-        if options.place {
-            steps.push(cmd(&["omarchy", "bar", "put", &id]));
-        }
-    }
+    let steps = refresh_steps(&id, enable, options.place);
     if options.mode == WidgetMode::DryRun {
-        for step in &steps {
-            say(out, &format!("would run  {}\n", step.join(" ")))?;
-        }
-        say(out, "Dry run: nothing was written.\n")?;
-        return Ok(WidgetOutcome::DryRun);
+        return dry_run(out, &steps, "written");
     }
-    if edited > 0 && !options.force {
-        say(
-            out,
-            &format!("{edited} file(s) differ from the shipped copy because you edited them.\n"),
-        )?;
-        let agreed = options.mode == WidgetMode::Confirm && ask();
-        if !agreed {
-            let note = if options.mode == WidgetMode::Yes {
-                "Not overwriting your edits; pass --force to replace them (a backup is kept).\n"
-            } else {
-                "Not overwriting your edits. Nothing was written.\n"
-            };
-            say(out, note)?;
-            return Ok(if options.mode == WidgetMode::Yes {
-                WidgetOutcome::Refused
-            } else {
-                WidgetOutcome::Declined
-            });
-        }
+    if let Some(stopped) = guard_edits(options, edited, out, ask)? {
+        return Ok(stopped);
     }
     if !changes && was_installed {
         say(out, "The widget is already up to date.\n")?;
@@ -432,20 +469,7 @@ fn refresh(
             &format!("Your edited copy is kept at {}\n", backup.display()),
         )?;
     }
-    for entry in &plan {
-        let path = dest_dir.join(&entry.rel);
-        match entry.step {
-            Step::Add | Step::Update | Step::Edited => {
-                if let Some(bytes) = &entry.source {
-                    write_atomic(&path, bytes)?;
-                }
-            }
-            Step::Delete => {
-                fs::remove_file(&path).map_err(|error| format!("{}: {error}", path.display()))?
-            }
-            Step::Same | Step::Keep => {}
-        }
-    }
+    apply_plan(&plan, &dest_dir)?;
     fs::create_dir_all(&dest_dir).map_err(|error| format!("{}: {error}", dest_dir.display()))?;
     write_record(&paths.state, &source)?;
     say(
@@ -497,11 +521,7 @@ pub fn widget_remove(
         cmd(&["omarchy-shell", "shell", "rescanPlugins"]),
     ];
     if options.mode == WidgetMode::DryRun {
-        for step in &steps {
-            say(out, &format!("would run  {}\n", step.join(" ")))?;
-        }
-        say(out, "Dry run: nothing was removed.\n")?;
-        return Ok(WidgetOutcome::DryRun);
+        return dry_run(out, &steps, "removed");
     }
     if options.mode == WidgetMode::Confirm && !ask() {
         say(out, "Nothing was removed.\n")?;
