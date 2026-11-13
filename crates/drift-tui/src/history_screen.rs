@@ -132,10 +132,11 @@ impl HistoryScreen {
         self.follow = true;
         let event = press(code);
         if let Some(id) = self.globals.dispatch(&event) {
-            return match GlobalCommand::from_id(id)? {
-                GlobalCommand::Help => Some(HistoryAction::Help),
-                GlobalCommand::Palette => Some(HistoryAction::Palette),
-            };
+            match GlobalCommand::from_id(id)? {
+                GlobalCommand::Help => return Some(HistoryAction::Help),
+                GlobalCommand::Palette => return Some(HistoryAction::Palette),
+                GlobalCommand::UndoLast => return self.run(HistoryCommand::Undo),
+            }
         }
         let id = self.keymap.dispatch(&event)?;
         self.run(HistoryCommand::from_id(id)?)

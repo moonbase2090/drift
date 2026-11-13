@@ -52,11 +52,7 @@ pub(crate) const PLAN: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
-pub(crate) const PRD_GAPS: &[(&str, &str, &str)] = &[
-    ("Global", "u", "undo the last transaction from anywhere"),
-    ("Diff", "N", "jump to the next unresolved conflict"),
-    ("Diff", "P", "jump to the previous unresolved conflict"),
-];
+pub(crate) const PRD_GAPS: &[(&str, &str, &str)] = &[];
 
 fn hints_of(context: &str) -> &'static [(&'static str, KeyCode)] {
     match context {
@@ -219,6 +215,10 @@ pub fn input_map() -> String {
             "| {title} | `{id}` | `{}` | {mouse} |\n",
             keys.replace(", ", "`, `")
         ));
+    }
+    if PRD_GAPS.is_empty() {
+        out.push_str("\nEvery key the PRD lists in section 6.2 is built.\n");
+        return out;
     }
     out.push_str(
         "\n## Keys the PRD lists that are not built yet\n\n| Context | Key | Action |\n|---|---|---|\n",

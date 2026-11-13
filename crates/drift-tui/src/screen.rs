@@ -308,6 +308,10 @@ impl Screen {
                 self.open_history();
                 return;
             }
+            Action::UndoLast => {
+                self.undo_last();
+                return;
+            }
             Action::Open(path) => {
                 self.open_diff(path);
                 return;
@@ -433,6 +437,11 @@ impl Screen {
                 match key.code {
                     KeyCode::Char('?') => return self.open_help(),
                     KeyCode::Char(':') => return self.open_palette(),
+                    KeyCode::Char('u')
+                        if self.diff.as_ref().is_some_and(|diff| !diff.plan_open()) =>
+                    {
+                        return self.undo_last();
+                    }
                     _ => {}
                 }
             }
@@ -451,6 +460,10 @@ impl Screen {
     }
 
     fn show(&mut self, text: &str) {
+        if let Some(diff) = self.diff.as_mut() {
+            diff.set_notice(text);
+            return;
+        }
         if let Some(history) = self.history.as_mut() {
             history.set_notice(text);
             return;
@@ -500,6 +513,20 @@ impl Screen {
             HistoryAction::Undo { target, force } => self.propose_undo(&target, force),
             HistoryAction::Help => self.open_help(),
             HistoryAction::Palette => self.open_palette(),
+        }
+    }
+
+    fn undo_last(&mut self) {
+        let Some(historian) = self.historian.as_mut() else {
+            self.action = Some(Action::UndoLast);
+            return;
+        };
+        match historian.rows() {
+            Ok(view) => match view.rows.first().map(|row| row.id.clone()) {
+                Some(id) => self.propose_undo(&id, false),
+                None => self.show("Nothing to undo: no transaction has been written yet."),
+            },
+            Err(message) => self.show(&message),
         }
     }
 
@@ -709,6 +736,9 @@ impl Screen {
         self.kick_scan();
         if let Some(diff) = self.diff.as_mut() {
             diff.render(grid, area, clusters);
+            if let Some(modal) = self.modal.as_mut() {
+                modal.dialog.render(grid, area, clusters);
+            }
             return;
         }
         if let Some(history) = self.history.as_mut() {
@@ -1817,6 +1847,92 @@ mod tests {
     }
 
     #[test]
+    fn u_on_the_tree_proposes_undoing_the_newest_transaction_and_writes_nothing() {
+        let (fake, log) = historian(false, false, false, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "u");
+        assert_eq!(log.borrow().proposed, [("resolve-2".to_string(), false)]);
+        assert!(log.borrow().applied.is_empty());
+        assert!(screen.history().is_none());
+        let text = shown(&mut screen);
+        assert!(text.contains("Apply plan undo-9"), "{text}");
+        press(&mut screen, "y");
+        assert_eq!(log.borrow().applied.len(), 1);
+    }
+
+    fn watched(context: Context) -> (Screen, Rc<RefCell<HistoryLog>>) {
+        let (screen, _) = differing(false, false);
+        let (fake, log) = historian(false, false, false, false);
+        let mut screen = screen.with_historian(Box::new(fake));
+        let _ = shown(&mut screen);
+        match context {
+            Context::Tree => {}
+            Context::History => press(&mut screen, "H"),
+            Context::Diff => {
+                press(&mut screen, "j");
+                enter(&mut screen);
+            }
+        }
+        let _ = shown(&mut screen);
+        (screen, log)
+    }
+
+    #[test]
+    fn every_global_key_acts_on_every_screen() {
+        for context in [Context::Tree, Context::History, Context::Diff] {
+            for command in crate::commands::GLOBAL_COMMANDS {
+                let (mut screen, log) = watched(context);
+                let chord = command.chords()[0];
+                let _ = screen.update(&Event::Key(
+                    KeyEvent::press(chord.code()).modifiers(chord.modifiers()),
+                ));
+                let acted = match command {
+                    GlobalCommand::Help => screen.help().is_some(),
+                    GlobalCommand::Palette => screen.palette().is_some(),
+                    GlobalCommand::UndoLast => {
+                        log.borrow().proposed == [("resolve-2".to_string(), false)]
+                    }
+                };
+                assert!(acted, "{context:?} {}", command.id());
+            }
+        }
+    }
+
+    #[test]
+    fn u_in_the_diff_opens_the_undo_dialog_and_is_ignored_while_a_plan_is_open() {
+        let (mut screen, log) = watched(Context::Diff);
+        press(&mut screen, "u");
+        assert_eq!(log.borrow().proposed.len(), 1);
+        assert!(shown(&mut screen).contains("Apply plan undo-9"));
+        press(&mut screen, "n");
+        assert!(screen.diff().is_some());
+        press(&mut screen, "o");
+        press(&mut screen, "w");
+        assert!(screen.diff().is_some_and(|diff| diff.plan_open()));
+        let before = log.borrow().proposed.len();
+        press(&mut screen, "u");
+        assert_eq!(log.borrow().proposed.len(), before);
+    }
+
+    #[test]
+    fn the_diff_palette_lists_undo_and_running_it_proposes_the_undo() {
+        let (mut screen, log) = watched(Context::Diff);
+        let _ = through_palette(&mut screen, "Undo the last transaction");
+        assert_eq!(log.borrow().proposed, [("resolve-2".to_string(), false)]);
+    }
+
+    #[test]
+    fn u_without_a_historian_or_with_a_failing_one_says_so() {
+        let (fake, _) = historian(true, false, false, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "u");
+        assert_eq!(notice(&screen), "the state directory is unreadable");
+        assert!(!shown(&mut screen).contains("Apply plan"));
+    }
+
+    #[test]
     fn cancelling_the_undo_dialog_writes_nothing_and_keeps_the_history_open() {
         for keys in ["n", "q"] {
             let (fake, log) = historian(false, false, false, false);
@@ -2208,7 +2324,8 @@ mod tests {
     }
 
     use crate::commands::{
-        keymap_of, Context, HistoryCommand, TreeCommand, HISTORY_COMMANDS, TREE_COMMANDS,
+        keymap_of, Context, GlobalCommand, HistoryCommand, TreeCommand, HISTORY_COMMANDS,
+        TREE_COMMANDS,
     };
 
     fn everything() -> Screen {
