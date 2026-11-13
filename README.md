@@ -58,6 +58,14 @@ Before anything is written, the plan dialog lists every file with its action, th
 
 ![Help and palette](docs/media/help-palette.gif)
 
+## Keys and the mouse
+
+Every action has a key, and every action can be reached with the mouse. [docs/input-map.md](docs/input-map.md) lists each action with its keys and its mouse target, and a test regenerates that file from the keymaps and fails when it is out of date. The hint bar on every screen is clickable. The diff screen's bar offers Quit, Help, Palette, Write, Next hunk and Previous hunk, and the diff now answers the mouse in the stacked and two-pane layouts as well as the four-pane one. An action without a direct target is one click away in the command palette, which each screen opens from its hint bar. Tests click every cell of the tree, history and diff screens and fail if a click can ask for something no key can. The capture below is the real `drift` binary at 80×24 on a scratch home directory; the ring marks the hint that is clicked: Next hunk, then Write, which opens the plan, then Cancel.
+
+![Clickable diff hint bar](docs/media/diff-hints.gif)
+
+Text and status colours are checked for contrast against the dark Lunatui theme Drift runs in. Lunatui's light theme falls short on its accent and status colours, and Drift does not use it. The diff row tints and gutter marks are checked at 4.5:1 against the built-in hues and four Omarchy themes (dark, light, rose and grey) on both Lunatui themes; a gutter mark whose theme colour would vanish on its row is lightened or darkened until it reads.
+
 ## Empty and error states
 
 Each screen says what is going on when there is nothing to list, and offers only the keys that can do something.

@@ -6,13 +6,13 @@ use drift_core::{
     Merge, Plan, PlanView, PlannedFile, Row, Span,
 };
 use lunatui::{App, ControlFlow};
-use lunatui_core::{clip_display_prefix, Attrs, Color, Grid, Rect, Style, CLUSTER_TAG};
+use lunatui_core::{clip_display_prefix, width, Attrs, Color, Grid, Rect, Style, CLUSTER_TAG};
 use lunatui_runtime::keymap::{Command, KeyChord, Keymap};
 use lunatui_term::{Event, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind, Scroll};
 use lunatui_theme::{Theme, Token, Variant};
 use lunatui_widgets::{
-    CodeHighlight, CodeMark, CodeView, CodeViewState, DividerId, KeyHintBar, RenderCx, SplitAxis,
-    SplitDrag, SplitLayout, SplitTree, Widget, WidgetState,
+    CodeHighlight, CodeMark, CodeView, CodeViewState, DividerId, RenderCx, SplitAxis, SplitDrag,
+    SplitLayout, SplitTree, Widget, WidgetState,
 };
 use unicode_width::UnicodeWidthChar;
 
@@ -54,7 +54,7 @@ const BOTH_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('b'), Modifiers::
 const EDIT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('e'), Modifiers::new())];
 const WRITE_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('w'), Modifiers::new())];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Layout {
     Four,
     Two,
@@ -94,6 +94,44 @@ pub struct DiffScreen {
     palette: DiffPalette,
     force_redraw: AtomicBool,
     redraw_phase: AtomicBool,
+}
+
+pub(crate) const HINTS: &[(&str, KeyCode)] = &[
+    ("[Q] Quit", KeyCode::Char('q')),
+    ("[?] Help", KeyCode::Char('?')),
+    ("[:] Palette", KeyCode::Char(':')),
+    ("[W] Write", KeyCode::Char('w')),
+    ("[N] Next hunk", KeyCode::Char('n')),
+    ("[P] Prev hunk", KeyCode::Char('p')),
+    ("[V] Layout", KeyCode::Char('v')),
+    ("[Tab] Pane", KeyCode::Tab),
+];
+
+fn hint_cells(area: Rect) -> Vec<(Rect, usize)> {
+    let end = area.x.saturating_add(area.width);
+    let mut cells = Vec::new();
+    let mut x = area.x;
+    for (index, (label, _)) in HINTS.iter().enumerate() {
+        let span = u16::try_from(width(label)).unwrap_or(u16::MAX);
+        if x.saturating_add(span) > end {
+            break;
+        }
+        cells.push((Rect::new(x, area.y, span, 1), index));
+        x = x.saturating_add(span).saturating_add(2);
+    }
+    cells
+}
+
+fn render_hints(area: Rect, cx: &mut RenderCx<'_>) {
+    let key = Style::new().fg(cx.token(Token::Accent));
+    let title = Style::new().fg(cx.token(Token::TextPrimary));
+    for (rect, index) in hint_cells(area) {
+        let label = HINTS[index].0;
+        let split = label.find(']').map_or(0, |at| at + 1);
+        cx.put_str(rect.x, rect.y, &label[..split], key);
+        let keys = u16::try_from(width(&label[..split])).unwrap_or(0);
+        cx.put_str(rect.x + keys, rect.y, &label[split..], title);
+    }
 }
 
 struct Chip {
@@ -1075,9 +1113,10 @@ impl App for DiffScreen {
             if mouse_quits(self.columns, self.rows, mouse) {
                 return ControlFlow::Break;
             }
-            if self.wide() {
-                self.pointer(mouse);
+            if let Some(press) = self.hint_press(mouse) {
+                return self.update(&press);
             }
+            self.pointer(mouse);
             return ControlFlow::Continue;
         }
         match self.keymap.dispatch(event) {
@@ -1131,7 +1170,7 @@ impl App for DiffScreen {
             }
         }
         if hint.width > 0 && hint.height > 0 {
-            KeyHintBar::new(&self.keymap).render(hint, &mut cx);
+            render_hints(hint, &mut cx);
         }
         if inline_only(grid) {
             self.painted = Some(Painted {
@@ -1223,28 +1262,46 @@ impl DiffScreen {
 }
 
 impl DiffScreen {
+    pub(crate) fn hint_press(&self, mouse: &MouseEvent) -> Option<Event> {
+        if self.plan.is_some() || !matches!(mouse.kind, MouseKind::Down(MouseButton::Left)) {
+            return None;
+        }
+        let hint = regions(Rect::new(0, 0, self.columns, self.rows)).2;
+        if hint.height == 0 || mouse.row != hint.y {
+            return None;
+        }
+        hint_cells(hint)
+            .into_iter()
+            .find(|(rect, _)| contains(*rect, mouse.column, mouse.row))
+            .map(|(_, index)| crate::commands::press(HINTS[index].1))
+    }
+
     fn pointer(&mut self, mouse: &MouseEvent) {
+        let wide = self.wide();
         let body = self.body();
         let layout = self.tree.layout(body);
         match mouse.kind {
             MouseKind::Down(MouseButton::Left) => {
                 self.revise();
+                if self.apply_chip(mouse.column, mouse.row) || !wide {
+                    return;
+                }
                 let pane = layout.panes.first().map(|pane| pane.rect);
                 let divider = self
                     .drag
                     .press(&self.tree, &layout, mouse.column, mouse.row);
-                if divider || self.apply_chip(mouse.column, mouse.row) {
+                if divider {
                     return;
                 }
                 if let Some(area) = pane {
                     self.select_hunk_at(area, mouse.column, mouse.row);
                 }
             }
-            MouseKind::Drag(MouseButton::Left) => {
+            MouseKind::Drag(MouseButton::Left) if wide => {
                 self.revise();
                 self.drag.drag(&mut self.tree, mouse.column, mouse.row);
             }
-            MouseKind::Up(MouseButton::Left) => {
+            MouseKind::Up(MouseButton::Left) if wide => {
                 self.revise();
                 self.drag.release();
             }
@@ -2840,6 +2897,142 @@ mod tests {
 
     fn press(screen: &mut DiffScreen, key: char) {
         screen.update(&Event::Key(KeyEvent::press(KeyCode::Char(key))));
+    }
+
+    fn click(screen: &mut DiffScreen, column: u16, row: u16) -> ControlFlow {
+        screen.update(&Event::Mouse(MouseEvent::new(
+            MouseKind::Down(MouseButton::Left),
+            column,
+            row,
+        )))
+    }
+
+    fn state(screen: &DiffScreen, flow: ControlFlow) -> (bool, usize, usize, u8, bool, String) {
+        let layout = match screen.effective() {
+            Layout::Four => 4,
+            Layout::Two => 2,
+            Layout::Stacked => 1,
+        };
+        (
+            flow == ControlFlow::Break,
+            screen.hunk,
+            screen.focus,
+            layout,
+            screen.plan.is_some(),
+            format!("{:?}", screen.choices),
+        )
+    }
+
+    #[test]
+    fn nothing_a_click_can_ask_for_is_missing_from_the_keys() {
+        for (columns, rows, step) in [(80_u16, 24_u16, 1_u16), (120, 36, 1), (170, 40, 2)] {
+            let mut keys = std::collections::BTreeSet::new();
+            let mut start = two_hunks();
+            let _ = render_once(&mut start, columns, rows);
+            keys.insert(state(&start, ControlFlow::Continue));
+            for command in diff_keymap().commands() {
+                for chord in command.chords() {
+                    let mut screen = two_hunks();
+                    let _ = render_once(&mut screen, columns, rows);
+                    let event =
+                        Event::Key(KeyEvent::press(chord.code()).modifiers(chord.modifiers()));
+                    let flow = screen.update(&event);
+                    keys.insert(state(&screen, flow));
+                }
+            }
+            let mut moved = std::collections::BTreeSet::new();
+            for row in 0..rows {
+                for column in (0..columns).step_by(usize::from(step)) {
+                    let mut screen = two_hunks();
+                    let _ = render_once(&mut screen, columns, rows);
+                    let flow = click(&mut screen, column, row);
+                    moved.insert(state(&screen, flow));
+                }
+            }
+            assert!(moved.len() >= 3, "{columns}: {moved:?}");
+            let only_mouse: Vec<_> = moved.difference(&keys).collect();
+            assert!(
+                only_mouse.is_empty(),
+                "{columns}: mouse-only {only_mouse:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_hint_has_a_key_the_keymap_or_the_screen_answers() {
+        let keymap = diff_keymap();
+        for (label, code) in HINTS {
+            let global = matches!(code, KeyCode::Char('?' | ':'));
+            let bound = keymap.dispatch(&crate::commands::press(*code)).is_some();
+            assert!(global || bound, "{label}");
+            let shown = format!("{}", KeyChord::new(*code, Modifiers::new()));
+            assert!(label.starts_with(&format!("[{shown}]")), "{label}");
+        }
+    }
+
+    #[test]
+    fn clicking_a_hint_does_what_its_key_does_at_every_width() {
+        for (columns, rows) in [(80_u16, 24_u16), (120, 36), (200, 40)] {
+            let mut seen = 0;
+            for (index, (label, code)) in HINTS.iter().enumerate() {
+                if matches!(code, KeyCode::Char('?' | ':')) {
+                    continue;
+                }
+                let mut clicked = two_hunks();
+                let _ = render_once(&mut clicked, columns, rows);
+                let hint = regions(Rect::new(0, 0, columns, rows)).2;
+                let Some((rect, _)) = hint_cells(hint).into_iter().find(|(_, at)| *at == index)
+                else {
+                    continue;
+                };
+                seen += 1;
+                let flow = click(&mut clicked, rect.x + rect.width / 2, rect.y);
+                let by_click = state(&clicked, flow);
+                let mut typed = two_hunks();
+                let _ = render_once(&mut typed, columns, rows);
+                let flow = typed.update(&crate::commands::press(*code));
+                assert_eq!(by_click, state(&typed, flow), "{label} at {columns}");
+            }
+            assert!(seen >= 4, "{columns}: {seen}");
+        }
+    }
+
+    #[test]
+    fn the_hint_bar_shows_write_and_a_click_on_it_opens_the_plan() {
+        let mut screen = changed();
+        let (grid, clusters) = render_once(&mut screen, 80, 24);
+        let text = grid.display_text(&clusters);
+        let bar = text.lines().last().unwrap();
+        assert!(bar.contains("[W] Write"), "{bar}");
+        let column = u16::try_from(bar.find("[W]").unwrap()).unwrap();
+        assert!(screen.plan.is_none());
+        click(&mut screen, column + 2, 23);
+        assert!(screen.plan.is_some());
+    }
+
+    #[test]
+    fn the_pointer_works_in_the_stacked_and_two_pane_layouts() {
+        for (columns, rows) in [(80_u16, 24_u16), (120, 36)] {
+            let mut screen = long_file();
+            let _ = render_once(&mut screen, columns, rows);
+            assert_ne!(screen.effective(), Layout::Four);
+            assert_eq!(screen.scroll_top(), 0);
+            screen.update(&Event::Mouse(MouseEvent::new(
+                MouseKind::Scroll(Scroll::Down),
+                10,
+                5,
+            )));
+            assert!(screen.scroll_top() > 0, "{columns}");
+            let chip = screen
+                .chips
+                .iter()
+                .find(|chip| chip.command == MINE)
+                .unwrap();
+            let (x, y) = (chip.x, chip.y);
+            assert!(screen.choices.iter().all(Option::is_none));
+            click(&mut screen, x + 1, y);
+            assert!(screen.choices.iter().any(Option::is_some), "{columns}");
+        }
     }
 
     fn conflict_files() -> (&'static str, &'static str, &'static str) {

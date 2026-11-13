@@ -108,7 +108,7 @@ const NO_MATCH_HINTS: &[(&str, KeyCode)] = &[
     ("[H] History", KeyCode::Char('H')),
 ];
 
-const HINTS: &[(&str, KeyCode)] = &[
+pub(crate) const HINTS: &[(&str, KeyCode)] = &[
     ("[Q] Quit", KeyCode::Char('q')),
     ("[?] Help", KeyCode::Char('?')),
     ("[:] Palette", KeyCode::Char(':')),
@@ -1655,6 +1655,51 @@ mod tests {
         assert!(shown.contains("filter: conflict"), "{shown}");
         screen.handle_at(&click_event(column + 2, row), Instant::now());
         assert_eq!(screen.view().status_filter(), None);
+    }
+
+    fn variant(action: &Option<Action>) -> Option<String> {
+        action.as_ref().map(|found| {
+            let text = format!("{found:?}");
+            text.split(['(', ' '])
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+    }
+
+    #[test]
+    fn nothing_a_click_can_ask_for_is_missing_from_the_keys() {
+        let mut by_mouse = std::collections::BTreeSet::new();
+        for (columns, rows) in [(80_u16, 24_u16), (120, 36)] {
+            for row in 0..rows {
+                for column in 0..columns {
+                    let mut screen = TreeScreen::new(&sample_report());
+                    let _ = text(&mut screen, columns, rows);
+                    let found = screen.handle_at(&click_event(column, row), Instant::now());
+                    by_mouse.extend(variant(&found));
+                }
+            }
+        }
+        let mut by_key = std::collections::BTreeSet::new();
+        for command in crate::commands::TREE_COMMANDS {
+            for chord in command.chords() {
+                for steps in 0..8 {
+                    let mut screen = opened();
+                    press(&mut screen, &"j".repeat(steps));
+                    let found = key(&mut screen, chord.code());
+                    by_key.extend(variant(&found));
+                }
+            }
+        }
+        for command in crate::commands::GLOBAL_COMMANDS {
+            for chord in command.chords() {
+                let mut screen = opened();
+                by_key.extend(variant(&key(&mut screen, chord.code())));
+            }
+        }
+        assert!(by_mouse.len() >= 4, "{by_mouse:?}");
+        let only_mouse: Vec<_> = by_mouse.difference(&by_key).collect();
+        assert!(only_mouse.is_empty(), "mouse-only actions: {only_mouse:?}");
     }
 
     #[test]

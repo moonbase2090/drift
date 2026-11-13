@@ -5,8 +5,9 @@ use lunatui_core::Color;
 
 const FALLBACK_BACKGROUND: [u8; 3] = [24, 24, 32];
 const ROW_PERCENT: u16 = 20;
-const WORD_PERCENT: u16 = 46;
+const WORD_PERCENT: u16 = 36;
 const FILLER_PERCENT: u16 = 7;
+const MARK_CONTRAST: u32 = 450;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DiffPalette {
@@ -103,7 +104,8 @@ impl Tints {
             RowKind::Changed => '~',
             RowKind::Plain | RowKind::Filler => return None,
         };
-        let [red, green, blue] = self.hue(kind);
+        let ground = self.blend(self.hue(kind), ROW_PERCENT);
+        let [red, green, blue] = legible(self.hue(kind), ground, MARK_CONTRAST);
         Some((glyph, Color::Rgb(red, green, blue)))
     }
 
@@ -116,17 +118,57 @@ impl Tints {
         }
     }
 
-    fn mixed(&self, hue: [u8; 3], percent: u16) -> Color {
-        let channel = |from: u8, to: u8| {
-            let blended = u16::from(from) * (100 - percent) + u16::from(to) * percent;
-            u8::try_from(blended / 100).unwrap_or(u8::MAX)
-        };
-        Color::Rgb(
-            channel(self.background[0], hue[0]),
-            channel(self.background[1], hue[1]),
-            channel(self.background[2], hue[2]),
-        )
+    fn blend(&self, hue: [u8; 3], percent: u16) -> [u8; 3] {
+        mix(self.background, hue, percent)
     }
+
+    fn mixed(&self, hue: [u8; 3], percent: u16) -> Color {
+        let [red, green, blue] = self.blend(hue, percent);
+        Color::Rgb(red, green, blue)
+    }
+}
+
+fn mix(from: [u8; 3], to: [u8; 3], percent: u16) -> [u8; 3] {
+    let channel = |from: u8, to: u8| {
+        let blended = u16::from(from) * (100 - percent) + u16::from(to) * percent;
+        u8::try_from(blended / 100).unwrap_or(u8::MAX)
+    };
+    [
+        channel(from[0], to[0]),
+        channel(from[1], to[1]),
+        channel(from[2], to[2]),
+    ]
+}
+
+fn luminance(color: [u8; 3]) -> f64 {
+    let linear = |value: u8| {
+        let scaled = f64::from(value) / 255.0;
+        if scaled <= 0.03928 {
+            scaled / 12.92
+        } else {
+            ((scaled + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(color[0]) + 0.7152 * linear(color[1]) + 0.0722 * linear(color[2])
+}
+
+fn contrast_hundredths(first: [u8; 3], second: [u8; 3]) -> u32 {
+    let (one, two) = (luminance(first), luminance(second));
+    let (light, dark) = if one >= two { (one, two) } else { (two, one) };
+    let ratio = (light + 0.05) / (dark + 0.05) * 100.0;
+    if ratio >= f64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        ratio as u32
+    }
+}
+
+fn legible(hue: [u8; 3], ground: [u8; 3], wanted: u32) -> [u8; 3] {
+    let toward = if luminance(ground) < 0.5 { 255 } else { 0 };
+    (0..=20_u16)
+        .map(|step| mix(hue, [toward; 3], step * 5))
+        .find(|candidate| contrast_hundredths(*candidate, ground) >= wanted)
+        .unwrap_or([toward; 3])
 }
 
 fn parse_hex(value: &str) -> Option<[u8; 3]> {
@@ -212,6 +254,20 @@ mod tests {
             };
             assert!(gap(word) > gap(row), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_marker_that_would_vanish_on_its_row_is_lifted_and_a_good_one_is_kept() {
+        let dark = Color::Rgb(30, 30, 46);
+        let rose = DiffPalette::from_colors("green = \"#286983\"").tints(dark);
+        let (_, lifted) = rose.mark(RowKind::Added).expect("mark");
+        let lifted = rgb(Some(lifted));
+        assert_ne!(lifted, [0x28, 0x69, 0x83]);
+        let row = rgb(rose.row(RowKind::Added));
+        assert!(contrast_hundredths(lifted, row) >= MARK_CONTRAST);
+        let fallback = DiffPalette::fallback().tints(dark);
+        let (_, kept) = fallback.mark(RowKind::Added).expect("mark");
+        assert_eq!(rgb(Some(kept)), DiffPalette::fallback().green);
     }
 
     #[test]
