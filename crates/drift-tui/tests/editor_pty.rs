@@ -14,13 +14,18 @@ fn main() {
         diff_host();
         return;
     }
+    if args.first().map(String::as_str) == Some("--screen-host") {
+        screen_host();
+        return;
+    }
     if let Some(path) = args.first() {
         if path.contains("drift-edit-") {
             edit_probe(path);
             return;
         }
     }
-    parent();
+    parent("--diff-host", false);
+    parent("--screen-host", true);
 }
 
 fn diff_host() {
@@ -29,6 +34,89 @@ fn diff_host() {
     }
     let screen = drift_tui::DiffScreen::new("same\n", "left\n", "right\n");
     lunatui::run(screen, lunatui::RunOptions::new(160, 40).pixels(false)).unwrap();
+}
+
+struct NoResolver;
+
+impl drift_tui::Resolver for NoResolver {
+    fn propose(
+        &mut self,
+        _: drift_core::Action,
+        _: &[String],
+    ) -> Result<drift_tui::Proposal, String> {
+        Err("not used".to_string())
+    }
+
+    fn apply(&mut self, _: &drift_tui::Proposal) -> Result<String, String> {
+        Err("not used".to_string())
+    }
+}
+
+struct NoHistory;
+
+impl drift_tui::Historian for NoHistory {
+    fn rows(&mut self) -> Result<drift_core::HistoryView, String> {
+        Err("not used".to_string())
+    }
+
+    fn propose(&mut self, _: &str, _: bool) -> Result<drift_tui::UndoProposal, String> {
+        Err("not used".to_string())
+    }
+
+    fn apply(&mut self, _: &drift_tui::UndoProposal) -> Result<String, String> {
+        Err("not used".to_string())
+    }
+}
+
+struct SameDiff;
+
+impl drift_tui::Differ for SameDiff {
+    fn diff(&mut self, path: &str) -> Result<drift_core::FileDiff, String> {
+        let text = |text: &str| drift_core::DiffContent::Text {
+            sha256: "ab".repeat(32),
+            text: text.to_string(),
+        };
+        Ok(drift_core::FileDiff {
+            path: path.to_string(),
+            status: drift_core::Status::Conflict,
+            badge: None,
+            provenance: drift_core::BaseProvenance::Reviewed,
+            note: String::new(),
+            base: text("same\n"),
+            ours: text("left\n"),
+            theirs: text("right\n"),
+        })
+    }
+}
+
+fn screen_host() {
+    unsafe {
+        libc::umask(0o022);
+    }
+    let worker = drift_tui::spawn_scan(|| {
+        Ok(drift_core::ScanReport {
+            package_version: "4.5.0-3".to_string(),
+            reviewed_version: None,
+            entries: vec![drift_core::ScanEntry {
+                path: "a.conf".to_string(),
+                template: Some("config/a.conf".to_string()),
+                status: drift_core::Status::Conflict,
+                badge: None,
+                base: drift_core::BaseProvenance::Reviewed,
+                volatile: false,
+                note: String::new(),
+            }],
+            backups: Vec::new(),
+            ignored: 0,
+        })
+    });
+    drift_tui::launch_worker_with(
+        worker,
+        Box::new(NoResolver),
+        Box::new(NoHistory),
+        Box::new(SameDiff),
+    )
+    .unwrap();
 }
 
 fn edit_probe(path: &str) {
@@ -110,7 +198,7 @@ fn local_flags() -> (u8, u8) {
     (icanon, echo)
 }
 
-fn parent() {
+fn parent(host: &str, through_tree: bool) {
     let (master, slave) = open_pty();
     let slave_fd = slave.as_raw_fd();
     let stdin_fd = unsafe { libc::dup(slave_fd) };
@@ -121,7 +209,7 @@ fn parent() {
     let exe = env::current_exe().unwrap();
     let mut command = Command::new(&exe);
     command
-        .arg("--diff-host")
+        .arg(host)
         .env("EDITOR", &exe)
         .stdin(unsafe { Stdio::from_raw_fd(stdin_fd) })
         .stdout(unsafe { Stdio::from_raw_fd(stdout_fd) })
@@ -149,7 +237,14 @@ fn parent() {
             }
         }
     });
-    let saw_conflict = wait_text(&captured, &text_rx, "conflict", Duration::from_secs(5));
+    let saw_conflict = if through_tree {
+        let saw_tree = wait_text(&captured, &text_rx, "a.conf", Duration::from_secs(5));
+        let _ = master_write.write_all(b"\r");
+        let _ = master_write.flush();
+        saw_tree && wait_text(&captured, &text_rx, "Diff  a.conf", Duration::from_secs(5))
+    } else {
+        wait_text(&captured, &text_rx, "conflict", Duration::from_secs(5))
+    };
     let _ = master_write.write_all(b"e");
     let _ = master_write.flush();
     let saw_ready = wait_text(&captured, &text_rx, "probe ready", Duration::from_secs(5));
@@ -166,6 +261,18 @@ fn parent() {
         &text_rx,
         "probe byte=Z",
         "kept-Z",
+        Duration::from_secs(5),
+    ) && wait_after(
+        &captured,
+        &text_rx,
+        "probe byte=Z",
+        if through_tree { "Diff  a.conf" } else { "Diff" },
+        Duration::from_secs(5),
+    ) && wait_after(
+        &captured,
+        &text_rx,
+        "probe byte=Z",
+        "Quit",
         Duration::from_secs(5),
     );
     let _ = master_write.write_all(b"e");
@@ -195,6 +302,17 @@ fn parent() {
     );
     let _ = master_write.write_all(b"q");
     let _ = master_write.flush();
+    if through_tree {
+        let _ = wait_after(
+            &captured,
+            &text_rx,
+            "probe byte=Y",
+            "omarchy-settings",
+            Duration::from_secs(5),
+        );
+        let _ = master_write.write_all(b"q");
+        let _ = master_write.flush();
+    }
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let status = child.wait();
@@ -221,7 +339,7 @@ fn parent() {
             && saw_second
             && saw_second_redraw
             && exit_ok,
-        "conflict {saw_conflict} ready {saw_ready} byte {saw_byte} redraw {saw_redraw} second_ready {saw_second_ready} second {saw_second} second_redraw {saw_second_redraw} exit {exit_ok} finished {finished:?} err {err} tail {tail}"
+        "host {host} conflict {saw_conflict} ready {saw_ready} byte {saw_byte} redraw {saw_redraw} second_ready {saw_second_ready} second {saw_second} second_redraw {saw_second_redraw} exit {exit_ok} finished {finished:?} err {err} tail {tail}"
     );
 }
 
