@@ -3,6 +3,7 @@ mod edit;
 mod notify;
 mod seed;
 mod snapshot;
+mod widget;
 
 pub use apply::{
     apply, apply_checked, execute, history, inspect_undo, integrate, pending_prune, recorded_bases,
@@ -19,6 +20,10 @@ pub use notify::{
 };
 pub use seed::{record_bases, scan, Recorded, Scan, StoreRoots};
 pub use snapshot::{snapshot_templates, SnapshotError, SnapshotReport};
+pub use widget::{
+    widget_install, widget_remove, widget_sync, OmarchyShell, SystemOmarchy, WidgetMode,
+    WidgetOptions, WidgetOutcome, WidgetPaths, RECORD_FILE,
+};
 
 pub fn crate_name() -> &'static str {
     env!("CARGO_PKG_NAME")

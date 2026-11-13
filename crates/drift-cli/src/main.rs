@@ -6,6 +6,7 @@ mod resolve;
 mod scan;
 mod snapshot;
 mod watch;
+mod widget;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -24,6 +25,7 @@ Usage: drift [--snapshot [--width N] [--height N]] [--version] [--help]
        drift snapshot --pre
        drift status [--json | --bar]
        drift notify [on | off]
+       drift widget install | sync | remove [--yes | --dry-run] [--force] [--no-place]
 
 With no arguments, drift opens the review screen.
 --snapshot prints one frame and does not take the terminal.
@@ -47,6 +49,11 @@ checks the pacman lock. An Omarchy lock file left behind does not block a later
 notify. Pacman removes its database lock when the transaction ends.
 Notifications start on. drift notify on turns them back on.
 notify exits 0 when it sends or skips, and 2 when the scan or the notifier fails.
+widget copies the bar widget from the packaged plugin folder into your Omarchy plugins
+folder, enables it with omarchy and puts it on the bar (--no-place skips that). sync
+refreshes the copy and install repeats it. A file you edited is never overwritten
+without asking: --yes does not allow it, and --force or answering y does, after a
+backup. remove disables the widget and deletes your copy, keeping a backup of edits.
 Exit codes for the other commands: 0 no drift, 1 drift, 2 error.
 ";
 
@@ -62,6 +69,7 @@ enum Action {
     Undo(history::UndoArgs),
     PreSnapshot,
     Notify(notify::Request),
+    Widget(widget::WidgetArgs),
 }
 
 fn prefixed<T>(result: Result<T, String>) -> Result<T, String> {
@@ -85,6 +93,7 @@ fn subcommand(args: &[String]) -> Option<Result<Action, String>> {
         "integrate" => Some(integrate_mode(rest).map(Action::Integrate)),
         "snapshot" => Some(prefixed(snapshot::parse(rest)).map(|()| Action::PreSnapshot)),
         "notify" => Some(prefixed(notify::parse(rest)).map(Action::Notify)),
+        "widget" => Some(prefixed(widget::parse(rest)).map(Action::Widget)),
         _ => None,
     }
 }
@@ -347,6 +356,7 @@ fn execute(action: Result<Action, String>) -> ExitCode {
         )),
         Ok(Action::PreSnapshot) => finish(snapshot::run().map(|()| 0)),
         Ok(Action::Notify(request)) => finish(notify_now(request)),
+        Ok(Action::Widget(args)) => finish(widget::run_now(&args)),
         Ok(Action::Launch) => match open_review() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
