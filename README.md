@@ -59,6 +59,8 @@ Undoing a resolution restores the file and the reviewed base it replaced, so an 
 
 Launch Drift from the Omarchy menu, or as a floating Hyprland window, through the [Omarchy shell-plugin](https://github.com/basecamp/omarchy/blob/quattro/manual/32-shell-plugins.md) mechanism. It is built for Omarchy 4.5 (Quattro). Package templates are read from `/usr/share/omarchy`.
 
+`drift notify` scans and, when configuration has drifted, sends a notification through `omarchy-notification-send`. One drifted file reads `1 config drifted`; more than one reads `N configs drifted`. The urgency is normal, and clicking the notification runs `omarchy-launch-or-focus-tui --app-id=TUI.float drift`, which opens Drift or focuses the existing window. Nothing is sent when the count is zero, while an update lock is held, or after `drift notify off`. Notifications are on until turned off. `drift notify on` turns them back on, and that choice is kept in Drift's state.
+
 The interface is a path tree plus the per-file diff. Classification uses the installed package file list and, when available, a cache of the previous package version, so "matches template," "local override," and "conflicts with a new upstream change" stay distinct.
 
 ## Read-only commands
