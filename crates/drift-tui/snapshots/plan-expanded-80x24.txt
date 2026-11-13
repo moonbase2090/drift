@@ -1,5 +1,5 @@
 +- Apply plan txn-42 ----------------------------------------------------------+
-| 2026-06-01T09:30:00Z - package 4.5.0-3 - 2 of 3 files will be written        |
+| 2026-06-01 09:30:00 +0000 - package 4.5.0-3 - 2 of 3 files will be written   |
 |                                                                              |
 |   [-] merge         config/hypr/looknfeel.lua  (+3 -2)                       |
 |         backup: ...ocal/state/drift/backups/txn-42/config/hypr/looknfeel.lua |

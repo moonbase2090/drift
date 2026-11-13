@@ -1122,6 +1122,25 @@ mod tests {
         screen
     }
 
+    fn expand_all(screen: &mut TreeScreen) {
+        while let Some(row) = screen.view().rows().iter().position(|row| {
+            matches!(
+                row.kind,
+                RowKind::Dir {
+                    expanded: false,
+                    ..
+                }
+            )
+        }) {
+            key(screen, KeyCode::Home);
+            for _ in 0..row {
+                key(screen, KeyCode::Down);
+            }
+            key(screen, KeyCode::Right);
+        }
+        key(screen, KeyCode::Home);
+    }
+
     fn key(screen: &mut TreeScreen, code: KeyCode) -> Option<Action> {
         screen.handle(&Event::Key(KeyEvent::press(code)))
     }
@@ -1190,13 +1209,14 @@ mod tests {
         let mut screen = TreeScreen::new(&sample_report());
         let _ = text(&mut screen, 120, 36);
         press(&mut screen, "/wa");
-        assert_eq!(text(&mut screen, 120, 36), snapshot("tree-search-120x36"));
+        let shown = text(&mut screen, 120, 36);
+        assert_eq!(shown, snapshot("tree-search-120x36"));
 
         let mut screen = TreeScreen::new(&sample_report());
         let _ = text(&mut screen, 80, 24);
-        press(&mut screen, "jjlhh");
-        press(&mut screen, "h");
-        assert_eq!(text(&mut screen, 80, 24), snapshot("tree-collapsed-80x24"));
+        press(&mut screen, "jh");
+        let shown = text(&mut screen, 80, 24);
+        assert_eq!(shown, snapshot("tree-collapsed-80x24"));
     }
 
     #[test]
@@ -1208,6 +1228,7 @@ mod tests {
             seen.push(glyph(status));
         }
         let mut screen = TreeScreen::new(&sample_report());
+        expand_all(&mut screen);
         let shown = text(&mut screen, 120, 36);
         for entry in sample_report().entries {
             let name = entry.path.rsplit('/').next().unwrap().to_string();
@@ -1426,6 +1447,7 @@ mod tests {
     #[test]
     fn a_directory_checkbox_shows_partial_marks() {
         let mut screen = opened();
+        expand_all(&mut screen);
         press(&mut screen, "jjjjjjj");
         assert_eq!(selected_path(&screen), ".config/hypr/input.lua");
         press(&mut screen, " ");
@@ -1447,6 +1469,7 @@ mod tests {
     #[test]
     fn per_file_actions_act_on_the_selection_or_the_marks_and_i_asks_to_ignore() {
         let mut screen = opened();
+        expand_all(&mut screen);
         press(&mut screen, "jjjjjjj");
         assert_eq!(selected_path(&screen), ".config/hypr/input.lua");
         assert_eq!(
@@ -1499,6 +1522,7 @@ mod tests {
     #[test]
     fn clicking_a_row_selects_it_and_a_quick_second_click_opens_it() {
         let mut screen = opened();
+        expand_all(&mut screen);
         let shown = text(&mut screen, 120, 36);
         let row = row_of(&shown, "input.lua");
         let t0 = Instant::now();
@@ -1517,6 +1541,7 @@ mod tests {
     #[test]
     fn slow_or_split_clicks_are_not_a_double_click() {
         let mut screen = opened();
+        expand_all(&mut screen);
         let shown = text(&mut screen, 120, 36);
         let (first, second) = (row_of(&shown, "input.lua"), row_of(&shown, "looknfeel.lua"));
         let t0 = Instant::now();
@@ -1569,6 +1594,7 @@ mod tests {
     fn the_same_file_clicked_twice_quickly_still_opens_after_a_rebuild_in_between() {
         let t0 = Instant::now();
         let mut screen = opened();
+        expand_all(&mut screen);
         let shown = text(&mut screen, 120, 36);
         let row = row_of(&shown, "[ ] ✗ conflict");
         screen.handle_at(&click_event(40, row), t0);
@@ -1584,6 +1610,7 @@ mod tests {
     #[test]
     fn the_caret_toggles_the_directory_and_the_checkbox_marks() {
         let mut screen = opened();
+        expand_all(&mut screen);
         let shown = text(&mut screen, 120, 36);
         let hypr = row_of(&shown, "hypr/");
         let rows = screen.view().rows().len();
@@ -1821,6 +1848,7 @@ mod tests {
     #[test]
     fn the_summary_describes_the_selection() {
         let mut screen = opened();
+        expand_all(&mut screen);
         let shown = text(&mut screen, 200, 60);
         assert!(
             shown.contains("2 files") || shown.contains("✗ conflict 1"),

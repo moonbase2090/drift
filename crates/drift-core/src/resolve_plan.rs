@@ -205,10 +205,15 @@ pub fn prepare(
             None,
             None,
         )?);
+        let shown = if replaces {
+            Some(after.clone())
+        } else {
+            input.theirs.clone().or_else(|| input.ours.clone())
+        };
         contents.push(FileContents {
             path: input.path.clone(),
             before: input.ours.clone(),
-            after: Some(after.clone()),
+            after: shown,
         });
         writes.push(Write {
             path: input.path.clone(),
@@ -394,6 +399,25 @@ mod tests {
         );
         assert!(prepared.plan.is_none());
         assert_eq!(prepared.skipped[0].reason, SkipReason::NothingToDo);
+    }
+
+    #[test]
+    fn keep_mine_hands_the_upstream_text_to_the_plan_view_and_writes_nothing() {
+        let prepared = run(
+            Action::KeepMine,
+            &[input(
+                "a.conf",
+                Some("b\n"),
+                Some("mine\n"),
+                Some("theirs\n"),
+            )],
+        );
+        assert_eq!(prepared.contents[0].before.as_deref(), Some(&b"mine\n"[..]));
+        assert_eq!(
+            prepared.contents[0].after.as_deref(),
+            Some(&b"theirs\n"[..])
+        );
+        assert_eq!(prepared.writes[0].bytes, b"mine\n");
     }
 
     #[test]

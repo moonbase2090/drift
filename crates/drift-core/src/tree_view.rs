@@ -77,6 +77,7 @@ impl TreeView {
             view.counts[status_index(entry.status)] += 1;
             view.drifted += usize::from(counts_as_drift(entry.status));
         }
+        view.collapsed = initial_collapsed(&view.nodes, &view.entries);
         view.rebuild(None);
         view
     }
@@ -332,6 +333,19 @@ impl TreeView {
     }
 
     fn rebuild(&mut self, keep: Option<usize>) {
+        let opening = self.query_lower.is_empty() && self.status_filter.is_none();
+        if opening {
+            if let Some(node) = keep {
+                let show = self
+                    .nodes
+                    .get(node)
+                    .and_then(|item| item.entry)
+                    .is_none_or(|index| self.matches(index));
+                if show {
+                    self.reveal_if_buried(node);
+                }
+            }
+        }
         let query = self.query_lower.clone();
         let mut visible = vec![false; self.nodes.len()];
         let mut files = vec![0usize; self.nodes.len()];
@@ -404,6 +418,26 @@ impl TreeView {
         let at = keep.and_then(|node| self.rows.iter().position(|row| row.node == node));
         self.selected = at.unwrap_or_else(|| self.selected.min(self.rows.len().saturating_sub(1)));
     }
+
+    fn reveal_if_buried(&mut self, node: usize) {
+        let mut buried = false;
+        let mut current = self.nodes.get(node).and_then(|item| item.parent);
+        while let Some(id) = current {
+            if self.collapsed.contains(&id) {
+                buried = true;
+                break;
+            }
+            current = self.nodes[id].parent;
+        }
+        if !buried {
+            return;
+        }
+        current = self.nodes.get(node).and_then(|item| item.parent);
+        while let Some(id) = current {
+            self.collapsed.remove(&id);
+            current = self.nodes[id].parent;
+        }
+    }
 }
 
 fn descendants_of(nodes: &[Node]) -> Vec<Vec<usize>> {
@@ -422,6 +456,41 @@ fn descendants_of(nodes: &[Node]) -> Vec<Vec<usize>> {
         out[node] = all;
     }
     out
+}
+
+fn opens_on_start(status: Status) -> bool {
+    counts_as_drift(status) || status == Status::LocalOverride
+}
+
+fn initial_collapsed(nodes: &[Node], entries: &[ScanEntry]) -> HashSet<usize> {
+    let mut collapsed = HashSet::new();
+    for (id, node) in nodes.iter().enumerate() {
+        if id != 0 && node.entry.is_none() {
+            collapsed.insert(id);
+        }
+    }
+    let mut stack: Vec<usize> = nodes
+        .first()
+        .map(|root| root.children.iter().rev().copied().collect())
+        .unwrap_or_default();
+    let mut target = None;
+    while let Some(node) = stack.pop() {
+        let item = &nodes[node];
+        if let Some(index) = item.entry {
+            if opens_on_start(entries[index].status) {
+                target = Some(node);
+                break;
+            }
+        } else {
+            stack.extend(item.children.iter().rev().copied());
+        }
+    }
+    let mut node = target.unwrap_or(0);
+    while let Some(parent) = nodes[node].parent {
+        collapsed.remove(&parent);
+        node = parent;
+    }
+    collapsed
 }
 
 fn status_index(status: Status) -> usize {
@@ -527,9 +596,24 @@ mod tests {
             .collect()
     }
 
+    fn expand_all(view: &mut TreeView) {
+        while let Some(row) = view.rows().iter().position(|row| {
+            matches!(
+                row.kind,
+                RowKind::Dir {
+                    expanded: false,
+                    ..
+                }
+            )
+        }) {
+            view.toggle(row);
+        }
+    }
+
     #[test]
     fn paths_become_a_sorted_tree_with_directories_first() {
-        let view = sample();
+        let mut view = sample();
+        expand_all(&mut view);
         assert_eq!(
             names(&view),
             [
@@ -573,6 +657,7 @@ mod tests {
     #[test]
     fn collapse_and_expand_hide_and_show_children() {
         let mut view = sample();
+        expand_all(&mut view);
         view.select(3);
         view.collapse_or_parent();
         assert_eq!(view.rows().len(), 8);
@@ -609,6 +694,7 @@ mod tests {
     #[test]
     fn toggling_by_row_works_for_directories_only() {
         let mut view = sample();
+        expand_all(&mut view);
         view.toggle(2);
         assert_eq!(view.rows().len(), 11);
         view.toggle(1);
@@ -638,7 +724,17 @@ mod tests {
         view.set_status_filter(Some(Status::Missing));
         assert_eq!(names(&view), [".config", " btop", "  btop.conf"]);
         view.set_status_filter(None);
-        assert_eq!(view.rows().len(), 11);
+        assert_eq!(
+            names(&view),
+            [
+                ".config",
+                " btop",
+                "  btop.conf",
+                " hypr",
+                " waybar",
+                " alacritty.toml",
+            ]
+        );
     }
 
     #[test]
@@ -688,8 +784,18 @@ mod tests {
         view.set_query("zzz");
         assert!(view.rows().is_empty());
         view.set_query("");
-        assert_eq!(view.rows().len(), 11);
         assert_eq!(view.query(), "");
+        assert_eq!(
+            names(&view),
+            [
+                ".config",
+                " btop",
+                "  btop.conf",
+                " hypr",
+                " waybar",
+                " alacritty.toml",
+            ]
+        );
     }
 
     #[test]
@@ -705,6 +811,7 @@ mod tests {
     #[test]
     fn the_selected_row_follows_its_node_across_filters() {
         let mut view = sample();
+        expand_all(&mut view);
         view.select(9);
         assert_eq!(
             view.selected_entry().unwrap().path,
@@ -758,6 +865,8 @@ mod tests {
     #[test]
     fn movement_clamps_and_jumps() {
         let mut view = sample();
+        expand_all(&mut view);
+        view.select(0);
         view.move_by(-5);
         assert_eq!(view.selected(), 0);
         view.move_by(3);
@@ -775,6 +884,7 @@ mod tests {
     #[test]
     fn marks_toggle_per_file_and_per_directory_within_the_view() {
         let mut view = sample();
+        expand_all(&mut view);
         view.toggle_mark(4);
         assert!(view.is_marked(2));
         assert_eq!(view.marked_count(), 1);
@@ -828,7 +938,7 @@ mod tests {
             })
             .collect();
         let mut view = TreeView::new(entries);
-        assert_eq!(view.rows().len(), 5000 + 101);
+        assert!(view.rows().len() < 500, "{}", view.rows().len());
         let took = cpu_cost(|| {
             view.set_query("file4");
             view.set_status_filter(Some(Status::Conflict));
@@ -838,5 +948,60 @@ mod tests {
         });
         assert!(took < std::time::Duration::from_millis(500), "{took:?}");
         assert_eq!(view.marked_count(), 5000);
+    }
+
+    #[test]
+    fn the_tree_opens_only_as_far_as_the_first_drifted_or_overridden_file() {
+        let view = TreeView::new(vec![
+            entry(".config/chromium/Default/Bookmarks", Status::UserOnly),
+            entry(".config/chromium/Default/Preferences", Status::UserOnly),
+            entry(".config/chromium/Default/Cache/data", Status::UserOnly),
+            entry(".config/hypr/monitors.lua", Status::Conflict),
+            entry(".config/waybar/style.css", Status::LocalOverride),
+            entry(".config/alacritty.toml", Status::Unchanged),
+        ]);
+        assert_eq!(
+            names(&view),
+            [
+                ".config",
+                " chromium",
+                " hypr",
+                "  monitors.lua",
+                " waybar",
+                " alacritty.toml",
+            ]
+        );
+        assert!(matches!(
+            view.rows()[1].kind,
+            RowKind::Dir {
+                expanded: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            view.rows()[2].kind,
+            RowKind::Dir { expanded: true, .. }
+        ));
+        let quiet = TreeView::new(vec![
+            entry(".config/chromium/Default/Preferences", Status::UserOnly),
+            entry(".config/hypr/input.lua", Status::Unchanged),
+        ]);
+        assert_eq!(names(&quiet), [".config"]);
+        assert!(matches!(
+            quiet.rows()[0].kind,
+            RowKind::Dir {
+                expanded: false,
+                ..
+            }
+        ));
+        let earlier = TreeView::new(vec![
+            entry(".config/btop/btop.conf", Status::LocalOverride),
+            entry(".config/chromium/Default/Preferences", Status::UserOnly),
+            entry(".config/hypr/monitors.lua", Status::Conflict),
+        ]);
+        assert_eq!(
+            names(&earlier),
+            [".config", " btop", "  btop.conf", " chromium", " hypr"]
+        );
     }
 }
