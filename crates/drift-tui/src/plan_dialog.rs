@@ -7,7 +7,7 @@ use lunatui_term::{Event, KeyCode, KeyKind, MouseButton, MouseKind, Scroll};
 use lunatui_theme::{Theme, Token, Variant};
 use lunatui_widgets::RenderCx;
 
-use drift_core::PlanView;
+use drift_core::{Action, PlanView};
 
 const MAX_WIDTH: u16 = 100;
 const MAX_HEIGHT: u16 = 36;
@@ -208,6 +208,13 @@ impl PlanDialog {
                 text: format!("        backup: {}", file.backup),
             });
             if self.is_expanded(index) {
+                if file.action == Action::KeepMine && !file.diff.is_empty() {
+                    out.push(Line {
+                        file: index,
+                        kind: Kind::Diff,
+                        text: "        your file is kept; upstream differs like this:".to_string(),
+                    });
+                }
                 for line in &file.diff {
                     out.push(Line {
                         file: index,
@@ -885,6 +892,39 @@ mod tests {
         dialog.handle(&character('d'));
         let shown = text(&mut dialog, 120, 36);
         assert!(shown.contains("(not written)"), "{shown}");
+    }
+
+    #[test]
+    fn expanding_a_keep_mine_file_shows_how_upstream_differs() {
+        let file = PlannedFile::new(
+            "config/hypr/monitors.lua",
+            Action::KeepMine,
+            Some(&sha(b"scale = 2\n")),
+            Some(&sha(b"scale = 2\n")),
+            None,
+            None,
+        )
+        .unwrap();
+        let plan = Plan::new("txn-1", "2026-06-01T09:30:00Z", "4.5.0-3", vec![file], &[]).unwrap();
+        let contents = [FileContents {
+            path: "config/hypr/monitors.lua".to_string(),
+            before: Some(b"scale = 2\n".to_vec()),
+            after: Some(b"scale = 3\n".to_vec()),
+        }];
+        let mut dialog = PlanDialog::new(PlanView::build(&plan, STATE, &contents));
+        let _ = text(&mut dialog, 120, 36);
+        let before = text(&mut dialog, 120, 36);
+        assert!(!before.contains("scale = 3"), "{before}");
+        dialog.handle(&character('d'));
+        let shown = text(&mut dialog, 120, 36);
+        assert!(shown.contains("-scale = 2"), "{shown}");
+        assert!(shown.contains("+scale = 3"), "{shown}");
+        assert!(shown.contains("your file is kept"), "{shown}");
+        assert!(shown.contains("(not written)"), "{shown}");
+        assert!(
+            shown.contains("backup: none (nothing is written)"),
+            "{shown}"
+        );
     }
 
     #[test]
