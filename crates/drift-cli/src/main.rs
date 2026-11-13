@@ -152,6 +152,23 @@ fn number(value: Option<&str>, flag: &str) -> Result<u16, String> {
     Ok(parsed)
 }
 
+fn live_resolver(registry: &drift_core::Registry) -> resolve::LiveResolver {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .map_or_else(
+            || std::path::PathBuf::from("/run"),
+            std::path::PathBuf::from,
+        );
+    let fresh = scan::paths_from_env();
+    let roots = resolve::roots_for(&fresh, runtime);
+    resolve::LiveResolver::new(
+        fresh,
+        roots,
+        Box::new(drift_apply::Hyprctl::new()),
+        registry.clone(),
+    )
+}
+
 fn open_review() -> std::io::Result<()> {
     if !std::io::stdout().is_terminal() {
         return drift_tui::launch();
@@ -164,9 +181,10 @@ fn open_review() -> std::io::Result<()> {
         &paths.source.home,
         &paths.source.package.omarchy_path,
     );
+    let resolver = live_resolver(&registry);
     let worker = drift_tui::spawn_scan(move || scan::scan_report(&paths, &registry));
     let watcher = watch::arm(&watched, worker.changes());
-    let result = drift_tui::launch_worker(worker);
+    let result = drift_tui::launch_worker_with(worker, Box::new(resolver));
     drop(watcher);
     result
 }

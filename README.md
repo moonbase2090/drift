@@ -36,6 +36,14 @@ Before anything is written, the plan dialog lists every file with its action, th
 
 ![Tree screen](docs/media/tree-screen.gif)
 
+## Acting on files from the tree
+
+On the tree screen, `o` (keep mine), `t` (take upstream) and `m` (merge) act on the marked files, or on the selected file or directory when nothing is marked (`Space` marks, `a` marks everything in the filter). The action opens the plan dialog; nothing is written until you confirm, all the files in one go go into one transaction, and the screen rescans afterwards. Files that cannot be acted on are named in the notice line. The capture below is the real review screen running `cargo run -p drift-tui --example tree_actions` on a sample report; its resolver only reports what it would write. It marks two files, takes upstream, expands a diff, moves focus to Confirm and confirms.
+
+![Tree actions](docs/media/tree-actions.gif)
+
+Undoing a resolution restores the file and the reviewed base it replaced, so an undone take upstream reads as upstream changed again.
+
 ## Safety model
 
 - The first view is always a **read-only preview**. Opening Drift never writes configuration.

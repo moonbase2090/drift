@@ -5,8 +5,10 @@ use lunatui_term::{Event, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind
 use lunatui_theme::{Theme, Token, Variant};
 use lunatui_widgets::{KeyHintBar, RenderCx, Tree, TreeItem, TreeState, Widget};
 
-use drift_core::ScanReport;
+use drift_core::{Action as ResolveAction, ScanReport};
 
+use crate::plan_dialog::{Decision, PlanDialog};
+use crate::resolver::{Proposal, Resolver};
 use crate::tree_screen::{Action, TreeScreen};
 use crate::worker::{Note, WorkerHandle};
 
@@ -20,7 +22,15 @@ enum Phase {
     Failed,
 }
 
+struct Modal {
+    dialog: PlanDialog,
+    proposal: Proposal,
+}
+
 pub struct Screen {
+    resolver: Option<Box<dyn Resolver>>,
+    modal: Option<Modal>,
+    notice: Option<String>,
     review: Option<TreeScreen>,
     action: Option<Action>,
     keymap: Keymap,
@@ -37,6 +47,9 @@ pub struct Screen {
 impl Screen {
     pub fn new() -> Self {
         Self {
+            resolver: None,
+            modal: None,
+            notice: None,
             review: None,
             action: None,
             keymap: keymap(),
@@ -61,6 +74,11 @@ impl Screen {
 }
 
 impl Screen {
+    pub fn with_resolver(mut self, resolver: Box<dyn Resolver>) -> Self {
+        self.resolver = Some(resolver);
+        self
+    }
+
     pub fn with_report(report: &ScanReport) -> Self {
         let mut screen = Self::new();
         screen.review = Some(TreeScreen::new(report));
@@ -126,12 +144,22 @@ fn launch_screen(screen: Screen) -> std::io::Result<()> {
 }
 
 pub fn launch_worker(worker: WorkerHandle) -> std::io::Result<()> {
-    worker.arm_terminal()?;
+    launch_attached(Screen::attached(worker))
+}
+
+pub fn launch_worker_with(
+    worker: WorkerHandle,
+    resolver: Box<dyn Resolver>,
+) -> std::io::Result<()> {
+    launch_attached(Screen::attached(worker).with_resolver(resolver))
+}
+
+fn launch_attached(screen: Screen) -> std::io::Result<()> {
+    if let Some(worker) = screen.worker.as_ref() {
+        worker.arm_terminal()?;
+    }
     let (columns, rows) = terminal_size();
-    run(
-        Screen::attached(worker),
-        RunOptions::new(columns, rows).pixels(false),
-    )
+    run(screen, RunOptions::new(columns, rows).pixels(false))
 }
 
 pub fn quit_bounds(columns: u16, rows: u16) -> Option<Rect> {
@@ -196,7 +224,11 @@ impl Screen {
         self.phase = match note {
             Note::Scanning => Phase::Scanning,
             Note::Ready(report) => {
-                self.review = Some(TreeScreen::new(&report));
+                let mut review = TreeScreen::new(&report);
+                if let Some(notice) = self.notice.take() {
+                    review.set_notice(&notice);
+                }
+                self.review = Some(review);
                 self.report = Some(report);
                 Phase::Idle
             }
@@ -208,8 +240,84 @@ impl Screen {
         if !matches!(self.phase, Phase::Scanning) {
             self.spin = 0;
         }
+        if matches!(self.phase, Phase::Scanning | Phase::Failed) {
+            self.drop_modal();
+        }
         if matches!(self.phase, Phase::Scanning) {
             self.refresh_tree();
+        }
+    }
+
+    fn dispatch(&mut self, action: Action) {
+        let (resolve, paths) = match action {
+            Action::Keep(paths) => (ResolveAction::KeepMine, paths),
+            Action::Take(paths) => (ResolveAction::TakeUpstream, paths),
+            Action::Merge(paths) => (ResolveAction::Merge, paths),
+            other => {
+                self.action = Some(other);
+                return;
+            }
+        };
+        let Some(resolver) = self.resolver.as_mut() else {
+            self.action = Some(match resolve {
+                ResolveAction::KeepMine => Action::Keep(paths),
+                ResolveAction::TakeUpstream => Action::Take(paths),
+                _ => Action::Merge(paths),
+            });
+            return;
+        };
+        match resolver.propose(resolve, &paths) {
+            Ok(proposal) if proposal.prepared.plan.is_some() => {
+                if !proposal.skipped.is_empty() {
+                    self.show(&format!("{} skipped", proposal.skipped.len()));
+                }
+                self.modal = Some(Modal {
+                    dialog: PlanDialog::new(proposal.view.clone()),
+                    proposal,
+                });
+            }
+            Ok(proposal) => self.show(&format!("Nothing to do: {}", proposal.skipped.join("; "))),
+            Err(message) => self.show(&message),
+        }
+    }
+
+    fn show(&mut self, text: &str) {
+        match self.review.as_mut() {
+            Some(review) => review.set_notice(text),
+            None => self.notice = Some(text.to_string()),
+        }
+    }
+
+    fn update_modal(&mut self, event: &Event) {
+        let Some(decision) = self
+            .modal
+            .as_mut()
+            .and_then(|modal| modal.dialog.handle(event))
+        else {
+            return;
+        };
+        let Some(modal) = self.modal.take() else {
+            return;
+        };
+        match decision {
+            Decision::Cancel => self.show("Cancelled. Nothing was written."),
+            Decision::Confirm => {
+                let outcome = self
+                    .resolver
+                    .as_mut()
+                    .map(|resolver| resolver.apply(&modal.proposal));
+                match outcome {
+                    Some(Ok(message)) => {
+                        if self.worker.is_some() {
+                            self.notice = Some(message.clone());
+                        }
+                        self.show(&message);
+                        self.request_rescan();
+                    }
+                    Some(Err(message)) => self.show(&message),
+                    None => self.show("No resolver is attached."),
+                }
+            }
         }
     }
 
@@ -228,6 +336,13 @@ impl Screen {
         worker.rescan();
         self.phase = Phase::Scanning;
         self.refresh_tree();
+    }
+
+    fn drop_modal(&mut self) {
+        if self.modal.take().is_some() {
+            self.notice =
+                Some("A rescan started; the plan was cancelled. Nothing was written.".to_string());
+        }
     }
 
     fn title(&self) -> String {
@@ -259,6 +374,10 @@ impl App for Screen {
 
     fn update(&mut self, event: &Event) -> ControlFlow {
         self.apply_notes();
+        if self.modal.is_some() {
+            self.update_modal(event);
+            return ControlFlow::Continue;
+        }
         if !matches!(self.phase, Phase::Scanning) && self.review.is_some() {
             let action = self.review.as_mut().and_then(|review| review.handle(event));
             return match action {
@@ -268,7 +387,7 @@ impl App for Screen {
                     ControlFlow::Continue
                 }
                 Some(other) => {
-                    self.action = Some(other);
+                    self.dispatch(other);
                     ControlFlow::Continue
                 }
                 None => ControlFlow::Continue,
@@ -297,6 +416,9 @@ impl App for Screen {
             self.refresh_tree();
         } else if let Some(review) = self.review.as_mut() {
             review.render(grid, area, clusters);
+            if let Some(modal) = self.modal.as_mut() {
+                modal.dialog.render(grid, area, clusters);
+            }
             return;
         }
         self.columns = area.width;
@@ -777,5 +899,417 @@ mod tests {
         (unsafe { std::fs::File::from_raw_fd(master) }, unsafe {
             std::fs::File::from_raw_fd(slave)
         })
+    }
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use drift_core::{
+        prepare, Action as ResolveAction, BaseProvenance, PlanView, RelPath, ResolveInput,
+        ScanEntry, Status,
+    };
+
+    #[derive(Default)]
+    struct Log {
+        proposed: Vec<(ResolveAction, Vec<String>)>,
+        applied: Vec<String>,
+    }
+
+    struct Fake {
+        log: Rc<RefCell<Log>>,
+        fail_propose: bool,
+        fail_apply: bool,
+    }
+
+    fn input(path: &str, ours: &str, theirs: &str) -> ResolveInput {
+        ResolveInput {
+            path: path.to_string(),
+            root: "config".to_string(),
+            rel: RelPath::new(path.trim_start_matches(".config/")).unwrap(),
+            volatile: false,
+            link: false,
+            unreadable: false,
+            base: Some(b"old\n".to_vec()),
+            ours: Some(ours.as_bytes().to_vec()),
+            theirs: Some(theirs.as_bytes().to_vec()),
+        }
+    }
+
+    impl Resolver for Fake {
+        fn propose(&mut self, action: ResolveAction, paths: &[String]) -> Result<Proposal, String> {
+            self.log
+                .borrow_mut()
+                .proposed
+                .push((action, paths.to_vec()));
+            if self.fail_propose {
+                return Err("cannot load the files".to_string());
+            }
+            let inputs: Vec<ResolveInput> = paths
+                .iter()
+                .map(|path| {
+                    if path.ends_with("same.conf") {
+                        input(path, "same\n", "same\n")
+                    } else {
+                        input(path, "mine\n", "theirs\n")
+                    }
+                })
+                .collect();
+            let prepared = prepare(
+                action,
+                &inputs,
+                "txn-1",
+                "2026-06-01T00:00:00Z",
+                "4.5.0-3",
+                &[],
+            )
+            .map_err(|error| error.to_string())?;
+            let skipped = prepared
+                .skipped
+                .iter()
+                .map(|skip| format!("{} {}", skip.path, skip.reason.label()))
+                .collect();
+            let view = match prepared.plan.as_ref() {
+                Some(plan) => PlanView::build(plan, "STATE", &prepared.contents),
+                None => PlanView::build(
+                    &drift_core::Plan::new("none", "t", "v", Vec::new(), &[]).unwrap(),
+                    "STATE",
+                    &[],
+                ),
+            };
+            Ok(Proposal {
+                prepared,
+                view,
+                skipped,
+            })
+        }
+
+        fn apply(&mut self, proposal: &Proposal) -> Result<String, String> {
+            let id = proposal.view.id.clone();
+            self.log.borrow_mut().applied.push(id.clone());
+            if self.fail_apply {
+                return Err("the files changed on disk".to_string());
+            }
+            Ok(format!(
+                "Applied {} file(s) as {id}.",
+                proposal.prepared.writes.len()
+            ))
+        }
+    }
+
+    fn entry(path: &str, status: Status) -> ScanEntry {
+        ScanEntry {
+            path: path.to_string(),
+            template: Some(format!("config/{}", path.trim_start_matches(".config/"))),
+            status,
+            badge: None,
+            base: BaseProvenance::None,
+            volatile: false,
+            note: String::new(),
+        }
+    }
+
+    fn actionable(fail_propose: bool, fail_apply: bool) -> (Screen, Rc<RefCell<Log>>) {
+        let report = ScanReport {
+            package_version: "4.5.0-3".to_string(),
+            reviewed_version: None,
+            entries: vec![
+                entry(".config/a.conf", Status::Conflict),
+                entry(".config/b.conf", Status::UpstreamChanged),
+                entry(".config/same.conf", Status::Unchanged),
+            ],
+            backups: Vec::new(),
+            ignored: 0,
+        };
+        let log = Rc::new(RefCell::new(Log::default()));
+        let screen = Screen::with_report(&report).with_resolver(Box::new(Fake {
+            log: Rc::clone(&log),
+            fail_propose,
+            fail_apply,
+        }));
+        (screen, log)
+    }
+
+    fn press(screen: &mut Screen, keys: &str) {
+        for c in keys.chars() {
+            let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Char(c))));
+        }
+    }
+
+    fn shown(screen: &mut Screen) -> String {
+        let (grid, clusters) = render_once(screen, 120, 36);
+        grid.display_text(&clusters)
+    }
+
+    fn notice(screen: &Screen) -> String {
+        screen
+            .review()
+            .and_then(|review| review.notice().map(str::to_string))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn take_upstream_opens_the_plan_dialog_and_nothing_is_written_until_it_is_confirmed() {
+        let (mut screen, log) = actionable(false, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jt");
+        assert_eq!(
+            log.borrow().proposed,
+            [(
+                ResolveAction::TakeUpstream,
+                vec![".config/a.conf".to_string()]
+            )]
+        );
+        assert!(log.borrow().applied.is_empty());
+        let text = shown(&mut screen);
+        assert!(text.contains("Apply plan txn-1"), "{text}");
+        assert!(text.contains("take upstream .config/a.conf"), "{text}");
+        assert!(text.contains("[>Cancel<]"), "{text}");
+    }
+
+    #[test]
+    fn cancelling_the_dialog_writes_nothing_and_says_so() {
+        for keys in ["n", "q", "\n"] {
+            let (mut screen, log) = actionable(false, false);
+            let _ = shown(&mut screen);
+            press(&mut screen, "jjt");
+            if keys == "\n" {
+                let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)));
+            } else {
+                press(&mut screen, keys);
+            }
+            assert!(log.borrow().applied.is_empty(), "{keys:?}");
+            assert!(
+                notice(&screen).contains("Cancelled"),
+                "{keys:?} {}",
+                notice(&screen)
+            );
+            assert!(!shown(&mut screen).contains("Apply plan"), "{keys:?}");
+        }
+    }
+
+    #[test]
+    fn q_inside_the_dialog_cancels_it_and_does_not_leave_the_program() {
+        let (mut screen, _) = actionable(false, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jjt");
+        assert_eq!(
+            screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('q')))),
+            ControlFlow::Continue
+        );
+        assert_eq!(
+            screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('q')))),
+            ControlFlow::Break
+        );
+    }
+
+    #[test]
+    fn confirming_with_y_or_the_mouse_applies_once_and_reports_the_result() {
+        for method in ["y", "tab-enter", "click"] {
+            let (mut screen, log) = actionable(false, false);
+            let _ = shown(&mut screen);
+            press(&mut screen, "jjt");
+            let _ = shown(&mut screen);
+            match method {
+                "y" => press(&mut screen, "y"),
+                "tab-enter" => {
+                    let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Tab)));
+                    let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)));
+                }
+                _ => {
+                    let text = shown(&mut screen);
+                    let row = text
+                        .lines()
+                        .position(|line| line.contains("[ Confirm ]"))
+                        .unwrap() as u16;
+                    let column = text
+                        .lines()
+                        .nth(row as usize)
+                        .unwrap()
+                        .find("[ Confirm ]")
+                        .unwrap() as u16
+                        + 3;
+                    let _ = screen.update(&Event::Mouse(MouseEvent::new(
+                        MouseKind::Down(MouseButton::Left),
+                        column,
+                        row,
+                    )));
+                }
+            }
+            assert_eq!(log.borrow().applied, ["txn-1"], "{method}");
+            assert_eq!(notice(&screen), "Applied 1 file(s) as txn-1.", "{method}");
+            assert!(!shown(&mut screen).contains("Apply plan"), "{method}");
+        }
+    }
+
+    #[test]
+    fn marked_files_go_to_one_proposal_and_one_apply() {
+        let (mut screen, log) = actionable(false, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "j ");
+        press(&mut screen, "j ");
+        press(&mut screen, "o");
+        assert_eq!(log.borrow().proposed.len(), 1);
+        assert_eq!(log.borrow().proposed[0].0, ResolveAction::KeepMine);
+        assert_eq!(
+            log.borrow().proposed[0].1,
+            [".config/a.conf", ".config/b.conf"]
+        );
+        press(&mut screen, "y");
+        assert_eq!(log.borrow().applied.len(), 1);
+    }
+
+    #[test]
+    fn keep_and_merge_use_the_same_dialog_with_their_own_actions() {
+        for (key, action) in [('o', ResolveAction::KeepMine), ('m', ResolveAction::Merge)] {
+            let (mut screen, log) = actionable(false, false);
+            let _ = shown(&mut screen);
+            press(&mut screen, "jj");
+            press(&mut screen, &key.to_string());
+            assert_eq!(log.borrow().proposed[0].0, action);
+        }
+    }
+
+    #[test]
+    fn a_selection_with_nothing_to_do_shows_why_and_opens_no_dialog() {
+        let (mut screen, log) = actionable(false, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jjjt");
+        assert_eq!(log.borrow().proposed.len(), 1);
+        assert!(
+            notice(&screen).starts_with("Nothing to do: .config/same.conf nothing to do"),
+            "{}",
+            notice(&screen)
+        );
+        assert!(!shown(&mut screen).contains("Apply plan"));
+        assert!(log.borrow().applied.is_empty());
+    }
+
+    #[test]
+    fn a_failing_proposal_or_apply_is_shown_not_hidden() {
+        let (mut screen, log) = actionable(true, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jjt");
+        assert_eq!(notice(&screen), "cannot load the files");
+        assert!(log.borrow().applied.is_empty());
+
+        let (mut screen, log) = actionable(false, true);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jjty");
+        assert_eq!(log.borrow().applied.len(), 1);
+        assert_eq!(notice(&screen), "the files changed on disk");
+    }
+
+    #[test]
+    fn without_a_resolver_the_keys_only_report_the_action() {
+        let report = ScanReport {
+            package_version: "4.5.0-3".to_string(),
+            reviewed_version: None,
+            entries: vec![entry(".config/a.conf", Status::Conflict)],
+            backups: Vec::new(),
+            ignored: 0,
+        };
+        let mut screen = Screen::with_report(&report);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jt");
+        assert_eq!(
+            screen.take_action(),
+            Some(Action::Take(vec![".config/a.conf".to_string()]))
+        );
+        assert!(!shown(&mut screen).contains("Apply plan"));
+    }
+
+    #[test]
+    fn a_confirmed_action_rescans_and_the_result_survives_the_new_report() {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let unlock = Unlock(Some(release_tx));
+        let worker = crate::worker::launch(
+            Box::new(move || {
+                let _ = release_rx.recv();
+                Ok(empty_report())
+            }),
+            Duration::from_millis(200),
+        );
+        let report = ScanReport {
+            package_version: "4.5.0-3".to_string(),
+            reviewed_version: None,
+            entries: vec![entry(".config/a.conf", Status::Conflict)],
+            backups: Vec::new(),
+            ignored: 0,
+        };
+        let log = Rc::new(RefCell::new(Log::default()));
+        let mut screen = Screen::attached(worker).with_resolver(Box::new(Fake {
+            log: Rc::clone(&log),
+            fail_propose: false,
+            fail_apply: false,
+        }));
+        screen.kick = false;
+        screen.apply_note(Note::Ready(report.clone()));
+        let _ = shown(&mut screen);
+        press(&mut screen, "jty");
+        assert_eq!(log.borrow().applied, ["txn-1"]);
+        assert!(screen.needs_animation_frames());
+        screen.apply_note(Note::Ready(report));
+        assert!(!screen.needs_animation_frames());
+        assert_eq!(notice(&screen), "Applied 1 file(s) as txn-1.");
+        drop(unlock);
+        drop(screen);
+    }
+
+    #[test]
+    fn a_scan_that_starts_while_the_dialog_is_open_cancels_it_so_a_hidden_plan_cannot_be_confirmed()
+    {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let unlock = Unlock(Some(release_tx));
+        let worker = crate::worker::launch(
+            Box::new(move || {
+                let _ = release_rx.recv();
+                Ok(empty_report())
+            }),
+            Duration::from_millis(200),
+        );
+        let report = ScanReport {
+            package_version: "4.5.0-3".to_string(),
+            reviewed_version: None,
+            entries: vec![entry(".config/a.conf", Status::Conflict)],
+            backups: Vec::new(),
+            ignored: 0,
+        };
+        let log = Rc::new(RefCell::new(Log::default()));
+        let mut screen = Screen::attached(worker).with_resolver(Box::new(Fake {
+            log: Rc::clone(&log),
+            fail_propose: false,
+            fail_apply: false,
+        }));
+        screen.kick = false;
+        screen.apply_note(Note::Ready(report.clone()));
+        let _ = shown(&mut screen);
+        press(&mut screen, "jt");
+        assert!(shown(&mut screen).contains("Apply plan"));
+        screen.apply_note(Note::Scanning);
+        assert!(!shown(&mut screen).contains("Apply plan"));
+        press(&mut screen, "y");
+        press(&mut screen, "\n");
+        assert!(log.borrow().applied.is_empty());
+        screen.apply_note(Note::Ready(report));
+        assert!(
+            notice(&screen).contains("plan was cancelled"),
+            "{}",
+            notice(&screen)
+        );
+        press(&mut screen, "y");
+        assert!(log.borrow().applied.is_empty());
+        drop(unlock);
+        drop(screen);
+    }
+
+    #[test]
+    fn a_failed_scan_also_cancels_an_open_dialog() {
+        let (mut screen, log) = actionable(false, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jt");
+        screen.apply_note(Note::Failed("boom".to_string()));
+        press(&mut screen, "y");
+        assert!(log.borrow().applied.is_empty());
+        assert!(!shown(&mut screen).contains("Apply plan"));
     }
 }
