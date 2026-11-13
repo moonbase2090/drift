@@ -309,7 +309,7 @@ impl drift_tui::Resolver for LiveResolver {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs;
 
     use drift_apply::{HyprlandStatus, Roots};
@@ -321,18 +321,18 @@ mod tests {
 
     use super::*;
 
-    fn args(list: &[&str]) -> Vec<String> {
+    pub(crate) fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|item| item.to_string()).collect()
     }
 
-    fn sha(text: &str) -> String {
+    pub(crate) fn sha(text: &str) -> String {
         Sha256::digest(text.as_bytes())
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect()
     }
 
-    fn world(files: &[(&str, &str, Option<&str>, Option<&str>)]) -> MaterializedRoot {
+    pub(crate) fn world(files: &[(&str, &str, Option<&str>, Option<&str>)]) -> MaterializedRoot {
         let mut builder = RootBuilder::new();
         for keep in [
             "state/.keep",
@@ -378,7 +378,7 @@ mod tests {
         builder.materialize().unwrap()
     }
 
-    fn scan_paths(root: &MaterializedRoot) -> ScanPaths {
+    pub(crate) fn scan_paths(root: &MaterializedRoot) -> ScanPaths {
         let base = root.path().to_path_buf();
         ScanPaths {
             source: SourcePaths::new(
@@ -396,7 +396,7 @@ mod tests {
         }
     }
 
-    struct Checker(HyprlandStatus);
+    pub(crate) struct Checker(pub(crate) HyprlandStatus);
 
     impl HyprlandCheck for Checker {
         fn config_errors(&self) -> HyprlandStatus {
@@ -404,13 +404,13 @@ mod tests {
         }
     }
 
-    struct Run {
-        result: Result<u8, String>,
-        out: String,
-        err: String,
+    pub(crate) struct Run {
+        pub(crate) result: Result<u8, String>,
+        pub(crate) out: String,
+        pub(crate) err: String,
     }
 
-    fn go(
+    pub(crate) fn go(
         root: &MaterializedRoot,
         list: &[&str],
         interactive: bool,
@@ -420,7 +420,7 @@ mod tests {
         go_at(root, list, interactive, typed, checker, 1_800_000_000_123)
     }
 
-    fn go_at(
+    pub(crate) fn go_at(
         root: &MaterializedRoot,
         list: &[&str],
         interactive: bool,
@@ -454,15 +454,15 @@ mod tests {
         }
     }
 
-    fn clean() -> Checker {
+    pub(crate) fn clean() -> Checker {
         Checker(HyprlandStatus::Clean)
     }
 
-    fn read(root: &MaterializedRoot, rel: &str) -> String {
+    pub(crate) fn read(root: &MaterializedRoot, rel: &str) -> String {
         fs::read_to_string(root.path().join(rel)).unwrap()
     }
 
-    fn transactions(root: &MaterializedRoot) -> usize {
+    pub(crate) fn transactions(root: &MaterializedRoot) -> usize {
         fs::read_dir(root.path().join("state/backups"))
             .map(|dir| dir.count())
             .unwrap_or(0)

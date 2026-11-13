@@ -200,6 +200,7 @@ dependencies = [
  "flate2",
  "inotify",
  "libc",
+ "serde_json",
  "sha2",
 ]
 

@@ -1,5 +1,6 @@
 mod diff;
 mod environment;
+mod history;
 mod resolve;
 mod scan;
 mod watch;
@@ -15,6 +16,8 @@ Usage: drift [--snapshot [--width N] [--height N]] [--version] [--help]
        drift integrate [--yes | --dry-run]
        drift diff <path> [--json]
        drift resolve <path>... --keep | --upstream | --merge [--yes | --dry-run]
+       drift history [--json]
+       drift undo [<transaction>] [--force <path>]... [--yes | --dry-run]
        drift scan
        drift status [--json | --bar]
 
@@ -25,6 +28,9 @@ asks before writing. --yes skips the question; --dry-run only shows the diff.
 diff prints base, ours, theirs, hunks and the automatic result for one live path.
 resolve shows a plan for keep mine, take upstream or a clean merge of the given files and
 asks before writing; all files go in one transaction. --yes skips the question.
+history lists the transactions drift has written, newest first. undo shows what undoing
+a transaction (the newest by default) would restore or remove, and asks before writing;
+files changed since are left alone unless named with --force. --yes skips the question.
 scan lists every tracked file with its status. status prints a summary, as JSON with
 --json, or as a status-bar module with --bar. Exit codes: 0 no drift, 1 drift, 2 error.
 ";
@@ -37,6 +43,8 @@ enum Action {
     Scan(scan::View),
     Diff(diff::DiffArgs),
     Resolve(resolve::ResolveArgs),
+    History(history::HistoryArgs),
+    Undo(history::UndoArgs),
 }
 
 fn prefixed<T>(result: Result<T, String>) -> Result<T, String> {
@@ -48,6 +56,8 @@ fn subcommand(args: &[String]) -> Option<Result<Action, String>> {
     match args.first().map(String::as_str)? {
         "diff" => Some(prefixed(diff::parse(rest)).map(Action::Diff)),
         "resolve" => Some(prefixed(resolve::parse(rest)).map(Action::Resolve)),
+        "history" => Some(prefixed(history::parse_history(rest)).map(Action::History)),
+        "undo" => Some(prefixed(history::parse_undo(rest)).map(Action::Undo)),
         "scan" if rest.is_empty() => Some(Ok(Action::Scan(scan::View::Scan))),
         "scan" => Some(Err(format!("drift: scan takes no arguments\n{USAGE}"))),
         "status" => Some(
@@ -223,6 +233,40 @@ fn resolve_now(args: &resolve::ResolveArgs) -> Result<u8, String> {
     )
 }
 
+fn state_roots() -> (drift_source::ScanPaths, drift_apply::Roots) {
+    let paths = scan::paths_from_env();
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .map_or_else(
+            || std::path::PathBuf::from("/run"),
+            std::path::PathBuf::from,
+        );
+    let roots = resolve::roots_for(&paths, runtime);
+    (paths, roots)
+}
+
+fn history_now(args: &history::HistoryArgs) -> Result<u8, String> {
+    let (paths, roots) = state_roots();
+    history::run_history(&roots, &paths, args, &mut std::io::stdout())
+}
+
+fn undo_now(args: &history::UndoArgs) -> Result<u8, String> {
+    let (paths, roots) = state_roots();
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?;
+    history::run_undo(
+        &roots,
+        &paths,
+        args,
+        elapsed,
+        std::io::stdin().is_terminal(),
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+}
+
 fn finish(result: Result<u8, String>) -> ExitCode {
     match result {
         Ok(code) => ExitCode::from(code),
@@ -245,6 +289,8 @@ fn execute(action: Result<Action, String>) -> ExitCode {
         }
         Ok(Action::Integrate(mode)) => finish(integrate_now(mode).map(|()| 0)),
         Ok(Action::Resolve(args)) => finish(resolve_now(&args)),
+        Ok(Action::History(args)) => finish(history_now(&args)),
+        Ok(Action::Undo(args)) => finish(undo_now(&args)),
         Ok(Action::Diff(args)) => finish(diff::run(
             &scan::paths_from_env(),
             &args,

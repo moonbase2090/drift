@@ -20,6 +20,7 @@ libc.workspace = true
 drift-fixtures.workspace = true
 flate2 = "1"
 sha2 = "0.10"
+serde_json = "1"
 libc.workspace = true
 
 [[bin]]
