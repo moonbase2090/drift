@@ -213,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn an_update_lock_or_a_saved_off_sends_nothing() {
+    fn a_leftover_lock_file_still_sends_and_off_stays_quiet() {
         let drifted = world(
             &[("hypr/a.lua", b"new\n", b"")],
             &[("run/omarchy-update.lock", "")],
@@ -233,7 +233,7 @@ mod tests {
             },
         );
         assert_eq!(code.unwrap(), 0);
-        assert!(sent.is_empty());
+        assert_eq!(sent, ["1 config drifted"]);
 
         let again = world(&[("hypr/a.lua", b"new\n", b"")], &[]);
         let (code, out, _) = drive(&again, Request::Disable);

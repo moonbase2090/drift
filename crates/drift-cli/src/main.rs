@@ -40,8 +40,10 @@ scan lists every tracked file with its status. status prints a summary, as JSON 
 roots into /var/lib/drift/snapshots/<version> before a package upgrade and writes only
 under that store. notify sends a normal-urgency notification when a scan finds drift.
 The text is 1 config drifted, or N configs drifted, and clicking it opens Drift.
-Nothing is sent when there is no drift, while an update lock is held, or after
-drift notify off. Notifications start on. drift notify on turns them back on.
+Nothing is sent when there is no drift, while another process holds the update
+lock, or after drift notify off. The post-update hook inherits that lock and
+still sends. A lock file left behind does not block a later notify.
+Notifications start on. drift notify on turns them back on.
 notify exits 0 when it sends or skips, and 2 when the scan or the notifier fails.
 Exit codes for the other commands: 0 no drift, 1 drift, 2 error.
 ";

@@ -1,5 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::process::Command;
 
@@ -111,7 +112,51 @@ pub fn set_notifications(state: &Path, enabled: bool) -> Result<(), NotifyError>
 }
 
 pub fn update_running(omarchy_lock: &Path, pacman_lock: &Path) -> bool {
-    fs::symlink_metadata(omarchy_lock).is_ok() || fs::symlink_metadata(pacman_lock).is_ok()
+    let inherited = std::env::var("OMARCHY_UPDATE_LOCK_FD")
+        .ok()
+        .and_then(|text| text.parse().ok());
+    update_running_from(omarchy_lock, pacman_lock, inherited)
+}
+
+fn update_running_from(omarchy_lock: &Path, pacman_lock: &Path, inherited: Option<i32>) -> bool {
+    if inherited_lock(omarchy_lock, inherited) {
+        return false;
+    }
+    foreign_lock(omarchy_lock) || foreign_lock(pacman_lock)
+}
+
+fn inherited_lock(lock: &Path, inherited: Option<i32>) -> bool {
+    let Some(fd) = inherited else {
+        return false;
+    };
+    if fd < 0 {
+        return false;
+    }
+    let opened = match fs::canonicalize(format!("/proc/self/fd/{fd}")) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    let expected = match fs::canonicalize(lock) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    if opened != expected {
+        return false;
+    }
+    unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) == 0 }
+}
+
+fn foreign_lock(path: &Path) -> bool {
+    let file = match OpenOptions::new().read(true).open(path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    let held = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if held == 0 {
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+        return false;
+    }
+    std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock
 }
 
 pub fn send(program: &Path, notice: &Notice) -> Result<(), NotifyError> {
@@ -170,6 +215,8 @@ fn symlink_at(path: &Path) -> Result<bool, NotifyError> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::process::CommandExt;
+
     use super::*;
 
     #[test]
@@ -255,16 +302,118 @@ mod tests {
     }
 
     #[test]
-    fn an_update_lock_counts_as_running() {
+    fn a_lock_file_blocks_only_while_another_process_holds_it() {
         let root = drift_fixtures::RootBuilder::new()
             .file("run/omarchy-update.lock", b"")
             .unwrap()
+            .file("db.lck", b"")
+            .unwrap()
             .materialize()
             .unwrap();
-        let held = root.path().join("run/omarchy-update.lock");
-        let absent = root.path().join("db.lck");
-        assert!(update_running(&held, &absent));
-        assert!(update_running(&absent, &held));
-        assert!(!update_running(&absent, &root.path().join("other.lck")));
+        let omarchy = root.path().join("run/omarchy-update.lock");
+        let pacman = root.path().join("db.lck");
+        let absent = root.path().join("missing.lock");
+        assert!(!update_running_from(&omarchy, &absent, None));
+        assert!(!update_running_from(&absent, &pacman, None));
+        assert!(!update_running_from(&absent, &absent, None));
+        assert!(!update_running_from(&omarchy, &pacman, Some(-1)));
+        assert!(!update_running_from(&omarchy, &pacman, Some(1_000_000)));
+
+        {
+            let _held = hold(&omarchy);
+            assert!(update_running_from(&omarchy, &absent, None));
+            assert!(!update_running_from(&absent, &pacman, None));
+        }
+        assert!(!update_running_from(&omarchy, &absent, None));
+
+        {
+            let _held = hold(&pacman);
+            assert!(update_running_from(&absent, &pacman, None));
+            assert!(update_running_from(&omarchy, &pacman, None));
+        }
+        assert!(!update_running_from(&absent, &pacman, None));
+    }
+
+    #[test]
+    fn the_post_update_hook_sends_while_its_lock_is_held() {
+        let root = drift_fixtures::RootBuilder::new()
+            .file("run/omarchy-update.lock", b"")
+            .unwrap()
+            .file("db.lck", b"")
+            .unwrap()
+            .materialize()
+            .unwrap();
+        let omarchy = root.path().join("run/omarchy-update.lock");
+        let pacman = root.path().join("db.lck");
+        let hook = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&omarchy)
+            .unwrap();
+        let fd = hook.as_raw_fd();
+        assert_eq!(unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) }, 0);
+        assert!(!update_running_from(&omarchy, &pacman, Some(fd)));
+        {
+            let _held = hold(&pacman);
+            assert!(!update_running_from(&omarchy, &pacman, Some(fd)));
+            assert!(update_running_from(&omarchy, &pacman, None));
+        }
+        drop(hook);
+        let other = OpenOptions::new().read(true).open(&pacman).unwrap();
+        {
+            let _held = hold(&omarchy);
+            assert!(update_running_from(
+                &omarchy,
+                &pacman,
+                Some(other.as_raw_fd())
+            ));
+        }
+        assert!(!update_running_from(&omarchy, &pacman, None));
+        let inherited = OpenOptions::new().read(true).open(&omarchy).unwrap();
+        assert!(!update_running_from(
+            &omarchy,
+            &pacman,
+            Some(inherited.as_raw_fd())
+        ));
+        drop(inherited);
+        assert!(!update_running_from(&omarchy, &pacman, None));
+    }
+
+    struct Held(std::process::Child);
+
+    impl Held {
+        fn at(path: &Path) -> Self {
+            let mut child = Command::new("flock")
+                .arg("-F")
+                .arg(path)
+                .arg("sh")
+                .arg("-c")
+                .arg("printf 'ready\\n'; exec sleep 30")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let mut line = String::new();
+            std::io::BufRead::read_line(
+                &mut std::io::BufReader::new(child.stdout.as_mut().unwrap()),
+                &mut line,
+            )
+            .unwrap();
+            assert_eq!(line, "ready\n");
+            Self(child)
+        }
+    }
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            let pid = self.0.id() as libc::pid_t;
+            unsafe { libc::kill(-pid, libc::SIGKILL) };
+            let _ = self.0.wait();
+        }
+    }
+
+    fn hold(path: &Path) -> Held {
+        Held::at(path)
     }
 }
