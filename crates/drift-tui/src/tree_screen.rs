@@ -1128,6 +1128,20 @@ mod tests {
     }
 
     #[test]
+    fn a_search_selects_the_first_match_and_enter_opens_it() {
+        let mut screen = opened();
+        press(&mut screen, "/monitors");
+        assert_eq!(selected_path(&screen), ".config/hypr/monitors.lua");
+        assert_eq!(key(&mut screen, KeyCode::Enter), None);
+        assert!(!screen.searching());
+        assert_eq!(selected_path(&screen), ".config/hypr/monitors.lua");
+        assert_eq!(
+            key(&mut screen, KeyCode::Enter),
+            Some(Action::Open(".config/hypr/monitors.lua".to_string()))
+        );
+    }
+
+    #[test]
     fn slash_searches_incrementally_and_enter_keeps_it_while_escape_drops_it() {
         let mut screen = opened();
         press(&mut screen, "/");
