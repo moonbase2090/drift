@@ -1,7 +1,7 @@
 use lunatui_core::Color;
-use lunatui_theme::{Theme, Token, Variant};
+use lunatui_theme::{Token, Variant};
 
-use crate::diff_palette::{DiffPalette, RowKind};
+use crate::diff_palette::{theme_for, DiffPalette, RowKind};
 
 fn rgb(color: Color) -> [u8; 3] {
     match color {
@@ -38,28 +38,26 @@ fn the_wcag_ratio_matches_known_values() {
     assert!((ratio(Color::Rgb(119, 119, 119), white) - 4.48).abs() < 0.02);
 }
 
-const LIGHT_SHORTFALLS: [Token; 5] = [
-    Token::Accent,
-    Token::Ok,
-    Token::Warn,
-    Token::Fail,
-    Token::FocusRing,
-];
-
 fn shortfalls(variant: Variant) -> Vec<Token> {
-    let theme = Theme::builtin(variant);
-    let ground = theme.resolve(Token::Surface0);
+    let theme = theme_for(variant);
+    let grounds = [
+        theme.resolve(Token::Surface0),
+        theme.resolve(Token::Surface1),
+    ];
     [
-        (Token::TextPrimary, 4.5),
-        (Token::Accent, 4.5),
-        (Token::Ok, 4.5),
-        (Token::Warn, 4.5),
-        (Token::Fail, 4.5),
-        (Token::FocusRing, 3.0),
+        Token::TextPrimary,
+        Token::Accent,
+        Token::Ok,
+        Token::Warn,
+        Token::Fail,
+        Token::FocusRing,
     ]
     .into_iter()
-    .filter(|(token, wanted)| ratio(theme.resolve(*token), ground) < *wanted)
-    .map(|(token, _)| token)
+    .filter(|token| {
+        grounds
+            .iter()
+            .any(|ground| ratio(theme.resolve(*token), *ground) < 4.5)
+    })
     .collect()
 }
 
@@ -69,10 +67,8 @@ fn the_dark_theme_drift_runs_in_keeps_text_status_and_focus_legible() {
 }
 
 #[test]
-fn the_light_fallback_keeps_text_legible_and_its_known_status_shortfalls_are_pinned() {
-    let found = shortfalls(Variant::Light);
-    assert!(!found.contains(&Token::TextPrimary));
-    assert_eq!(found, LIGHT_SHORTFALLS.to_vec());
+fn the_light_palette_keeps_text_status_and_focus_legible() {
+    assert_eq!(shortfalls(Variant::Light), Vec::<Token>::new());
 }
 
 const OMARCHY: [(&str, &str); 4] = [
@@ -95,7 +91,7 @@ const OMARCHY: [(&str, &str); 4] = [
 ];
 
 fn diff_shortfalls(variant: Variant, palette: DiffPalette) -> Vec<String> {
-    let theme = Theme::builtin(variant);
+    let theme = theme_for(variant);
     let ground = theme.resolve(Token::Surface0);
     let text = theme.resolve(Token::TextPrimary);
     let tints = palette.tints(ground);

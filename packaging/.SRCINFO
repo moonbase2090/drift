@@ -1,0 +1,27 @@
+pkgbase = omarchy-drift
+	pkgdesc = Review local Omarchy configuration against the shipped templates
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/moonbase2090/drift
+	install = omarchy-drift.install
+	arch = x86_64
+	license = MIT
+	makedepends = git
+	makedepends = patchelf
+	makedepends = rust
+	depends = bash
+	depends = glibc
+	depends = libgcc
+	depends = qt6-declarative
+	depends = quickshell
+	provides = drift
+	conflicts = drift
+	conflicts = drift-bin
+	conflicts = drift-diff-bin
+	conflicts = drift-git
+	options = !debug
+	options = !lto
+	source = omarchy-drift-0.1.0.tar.gz::https://github.com/moonbase2090/drift/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = b9e15ef997fa7f61b52159df2b1a558f1b202f56763e5597511c71865e3a9a75
+
+pkgname = omarchy-drift
