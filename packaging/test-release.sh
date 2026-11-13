@@ -27,9 +27,26 @@ if env -u DRIFT_PACMAN_SIGNING_KEY -u DRIFT_KEY_FILE DRIFT_PACMAN_SIGNING_KEY_ID
   echo 'Production validation accepted a throwaway key ID.' >&2
   exit 1
 fi
+if env -u DRIFT_PACMAN_SIGNING_KEY -u DRIFT_KEY_FILE DRIFT_PACMAN_SIGNING_KEY_ID=F6365E856F3A896BABDAA4BD378705A414BF786C "$root/packaging/release-repo.sh" check-key > "$work/missing.log" 2>&1; then
+  echo 'Production validation accepted a missing secret.' >&2
+  exit 1
+fi
+grep -q 'DRIFT_PACMAN_SIGNING_KEY is not set' "$work/missing.log"
+if env -u DRIFT_PACMAN_SIGNING_KEY DRIFT_KEY_FILE="$work/key.asc" DRIFT_PACMAN_SIGNING_KEY_ID=F6365E856F3A896BABDAA4BD378705A414BF786C "$root/packaging/release-repo.sh" check-key > "$work/wrong.log" 2>&1; then
+  echo 'Production validation accepted an unrelated secret key.' >&2
+  exit 1
+fi
+grep -q 'Secret key does not match' "$work/wrong.log"
 DRIFT_VERSION=$(awk '/^\[workspace.package\]/{inside=1;next} inside && /^version *=/{gsub(/[" ]/, "", $0); sub(/^version=/, ""); print; exit}' "$root/Cargo.toml")
 export DRIFT_VERSION DRIFT_KEY_FILE=$work/key.asc DRIFT_PACMAN_SIGNING_KEY_ID=$fingerprint
+if DRIFT_VERSION=99.99.99 "$work/source/packaging/release-repo.sh" stage "$work/mismatch" > "$work/version.log" 2>&1; then
+  echo 'A version tag that disagrees with Cargo.toml was accepted.' >&2
+  exit 1
+fi
+grep -q 'Version tag must match' "$work/version.log"
 "$work/source/packaging/release-repo.sh" stage "$dest"
+[[ -f $dest/SRCINFO ]]
+[[ -z $(find "$dest" -type l -print -quit) ]]
 for artifact in "$dest/"*.pkg.tar.zst "$dest/omarchy-drift.db" "$dest/omarchy-drift.files" "$dest/SHA256SUMS"; do
   gpg --batch --verify "$artifact.sig" "$artifact"
 done
