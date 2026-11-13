@@ -22,6 +22,8 @@ A changed file opens in five columns once the window is at least 160 cells wide:
 
 Below 160 columns the same file uses fewer panes. From 100 columns it shows ours and theirs side by side, with the result underneath. Narrower than that, the rows stack in one column. A removed line keeps a minus mark, an added line keeps a plus mark, and a conflict shows ours and theirs. `v` cycles those layouts. A resize that crosses a width boundary follows the width again and keeps the selected hunk. A file with no base stays on two panes, and the header says the base is unknown.
 
+The Omarchy menu opens Drift with app id `TUI.float`. Omarchy floats and centers that class at 875×600. JetBrains Mono at 9pt with 14px of terminal padding fits 117×36 cells in that window, which is the two-pane layout. Maximizing reaches four panes at 160 columns. Drift does not add its own window rule.
+
 ![Narrower diff layouts](docs/media/layout-cycle.gif)
 
 ## Plan dialog
@@ -53,7 +55,7 @@ Undoing a resolution restores the file and the reviewed base it replaced, so an 
 
 ## Using it
 
-Launch Drift from the Omarchy menu, or as a floating Hyprland window, through the [Omarchy shell-plugin](https://github.com/basecamp/omarchy/blob/quattro/manual/32-shell-plugins.md) mechanism. It is built for Omarchy 4.5 (Quattro). Package templates are read from `/usr/share/omarchy`.
+Launch Drift from the Omarchy menu. The menu action is `omarchy-launch-or-focus-tui --app-id=TUI.float drift`, which opens the floating window, or focuses that window if it is already open. It is built for Omarchy 4.5 (Quattro), through the [Omarchy shell-plugin](https://github.com/basecamp/omarchy/blob/quattro/manual/32-shell-plugins.md) mechanism. Package templates are read from `/usr/share/omarchy`.
 
 The interface is a path tree plus the per-file diff. Classification uses the installed package file list and, when available, a cache of the previous package version, so "matches template," "local override," and "conflicts with a new upstream change" stay distinct.
 
