@@ -107,7 +107,7 @@ mod tests {
     }
 
     fn frame(screen: &mut drift_tui::Screen) -> String {
-        let (grid, clusters) = lunatui::render_once(screen, 160, 40);
+        let (grid, clusters) = lunatui::render_once(screen, 200, 40);
         grid.display_text(&clusters)
     }
 
