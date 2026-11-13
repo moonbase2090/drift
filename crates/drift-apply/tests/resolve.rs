@@ -755,3 +755,58 @@ fn the_base_restore_runs_under_the_same_lock_as_the_file_undo() {
     assert_eq!(base(&world, "hypr/b.lua").as_deref(), Some("old b\n"));
     assert_eq!(base(&world, "hypr/a.lua").as_deref(), Some("old\n"));
 }
+
+#[test]
+fn undoing_the_oldest_kept_transaction_still_restores_its_bases_when_the_undo_prunes_it() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "upstream new\n", Some("old\n"), Some("old\n"));
+    for index in 0..99 {
+        builder.file(
+            &format!("hypr/f{index}.lua"),
+            "new\n",
+            Some("mine\n"),
+            Some("old\n"),
+        );
+    }
+    let world = builder.build();
+    let (first, _) = world.prepared(Action::TakeUpstream, "txn-000", &[".config/hypr/a.lua"]);
+    execute(&world.roots(), &world.share(), &first, &Quiet).unwrap();
+    for index in 0..99 {
+        let id = format!("txn-{:03}", index + 1);
+        let target = format!(".config/hypr/f{index}.lua");
+        let (next, _) = world.prepared(Action::KeepMine, &id, &[target.as_str()]);
+        execute(&world.roots(), &world.share(), &next, &Quiet).unwrap();
+    }
+    assert_eq!(transactions(&world).len(), 100);
+    assert_eq!(
+        base(&world, "hypr/a.lua").as_deref(),
+        Some("upstream new\n")
+    );
+
+    let done = undo_with_bases(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-000", "undo-1", &[]),
+    )
+    .unwrap();
+    assert!(matches!(done.outcome, UndoOutcome::Restored(_)));
+    assert!(
+        !transactions(&world).contains(&"txn-000".to_string()),
+        "the oldest transaction was pruned by the undo"
+    );
+    assert_eq!(done.bases.restored, ["config/hypr/a.lua"]);
+    assert_eq!(read(&world, "home/.config/hypr/a.lua"), "old\n");
+    assert_eq!(base(&world, "hypr/a.lua").as_deref(), Some("old\n"));
+
+    let again = undo_with_bases(
+        &world.roots(),
+        &world.share(),
+        &undo_request("undo-1", "undo-2", &[]),
+    )
+    .unwrap();
+    assert_eq!(again.bases.restored, ["config/hypr/a.lua"]);
+    assert_eq!(
+        base(&world, "hypr/a.lua").as_deref(),
+        Some("upstream new\n")
+    );
+}

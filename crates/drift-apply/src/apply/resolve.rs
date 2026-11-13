@@ -173,7 +173,19 @@ pub fn restore_reviewed_bases(
     time: &str,
     package_version: &str,
 ) -> Result<Restored, ApplyError> {
-    let Some(entries) = load_previous(state, target)? else {
+    let entries = load_previous(state, target)?;
+    restore_entries(entries, share, state, undo_id, time, package_version)
+}
+
+fn restore_entries(
+    entries: Option<Previous>,
+    share: &Path,
+    state: &Path,
+    undo_id: &str,
+    time: &str,
+    package_version: &str,
+) -> Result<Restored, ApplyError> {
+    let Some(entries) = entries else {
         return Ok(Restored {
             restored: Vec::new(),
             failed: Vec::new(),
@@ -248,29 +260,34 @@ pub fn undo_with_bases_probed(
         restored: Vec::new(),
         failed: Vec::new(),
     };
-    let outcome = undo_locked(roots, request, &mut |result| {
-        let has_record = load_previous(&roots.state, request.target)?.is_some();
-        let outcome = match result {
-            Ok(UndoOutcome::Diverged(items)) => return Ok(UndoOutcome::Diverged(items)),
-            Ok(restored) => restored,
-            Err(error) if has_record && error.message == "nothing to undo" => {
-                UndoOutcome::Restored(ApplyReport {
-                    applied: Vec::new(),
-                    pruned: Vec::new(),
-                })
-            }
-            Err(error) => return Err(error),
-        };
-        between();
-        bases = restore_reviewed_bases(
-            share,
-            &roots.state,
-            request.target,
-            request.id,
-            request.time,
-            request.package_version,
-        )?;
-        Ok(outcome)
-    })?;
+    let outcome = undo_locked(
+        roots,
+        request,
+        || load_previous(&roots.state, request.target),
+        |previous, result| {
+            let has_record = previous.is_some();
+            let outcome = match result {
+                Ok(UndoOutcome::Diverged(items)) => return Ok(UndoOutcome::Diverged(items)),
+                Ok(restored) => restored,
+                Err(error) if has_record && error.message == "nothing to undo" => {
+                    UndoOutcome::Restored(ApplyReport {
+                        applied: Vec::new(),
+                        pruned: Vec::new(),
+                    })
+                }
+                Err(error) => return Err(error),
+            };
+            between();
+            bases = restore_entries(
+                previous,
+                share,
+                &roots.state,
+                request.id,
+                request.time,
+                request.package_version,
+            )?;
+            Ok(outcome)
+        },
+    )?;
     Ok(UndoneWithBases { outcome, bases })
 }

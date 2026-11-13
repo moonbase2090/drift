@@ -84,13 +84,14 @@ pub fn inspect_undo(roots: &Roots, target: &str) -> Result<Vec<UndoItem>, ApplyE
 }
 
 pub fn undo(roots: &Roots, request: &UndoRequest<'_>) -> Result<UndoOutcome, ApplyError> {
-    undo_locked(roots, request, &mut |outcome| outcome)
+    undo_locked(roots, request, || Ok(()), |(), outcome| outcome)
 }
 
-pub(super) fn undo_locked(
+pub(super) fn undo_locked<T>(
     roots: &Roots,
     request: &UndoRequest<'_>,
-    under_lock: &mut dyn FnMut(Result<UndoOutcome, ApplyError>) -> Result<UndoOutcome, ApplyError>,
+    before: impl FnOnce() -> Result<T, ApplyError>,
+    after: impl FnOnce(T, Result<UndoOutcome, ApplyError>) -> Result<UndoOutcome, ApplyError>,
 ) -> Result<UndoOutcome, ApplyError> {
     if node_exists(&roots.omarchy_lock) {
         return Err(bare("omarchy update lock is held"));
@@ -99,8 +100,9 @@ pub(super) fn undo_locked(
         return Err(bare("pacman database lock is held"));
     }
     let _lock = DriftLock::take(&roots.state)?;
+    let captured = before()?;
     let outcome = undo_held(roots, request);
-    under_lock(outcome)
+    after(captured, outcome)
 }
 
 fn undo_held(roots: &Roots, request: &UndoRequest<'_>) -> Result<UndoOutcome, ApplyError> {
