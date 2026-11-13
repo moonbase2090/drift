@@ -67,6 +67,7 @@ pub fn snapshot_templates(
     if !snapshots.is_absolute() || snapshots.parent().is_none() || snapshots == Path::new("/") {
         return Err(SnapshotError::Escape(snapshots.to_path_buf()));
     }
+    refuse_linked_components(omarchy_path)?;
     ensure_store(snapshots)?;
     let staging = snapshots.join(format!(".partial-{version}"));
     let dest = snapshots.join(version);
@@ -99,7 +100,34 @@ fn version_ok(version: &str) -> bool {
     components.next().is_none() && version.chars().all(|c| !c.is_whitespace() && c != '\0')
 }
 
+fn refuse_linked_components(path: &Path) -> Result<(), SnapshotError> {
+    if !path.is_absolute() {
+        return Err(SnapshotError::Escape(path.to_path_buf()));
+    }
+    let mut cursor = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::RootDir => cursor.push(component),
+            Component::CurDir => {}
+            Component::Normal(name) => {
+                cursor.push(name);
+                match fs::symlink_metadata(&cursor) {
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        return Err(SnapshotError::Escape(cursor));
+                    }
+                    Ok(_) => {}
+                    Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(()),
+                    Err(source) => return Err(SnapshotError::io(&cursor, source)),
+                }
+            }
+            _ => return Err(SnapshotError::Escape(path.to_path_buf())),
+        }
+    }
+    Ok(())
+}
+
 fn ensure_store(dir: &Path) -> Result<(), SnapshotError> {
+    refuse_linked_components(dir)?;
     let mut missing = Vec::new();
     let mut cursor = dir.to_path_buf();
     loop {
@@ -154,6 +182,7 @@ fn copy_root(
     if !source.starts_with(omarchy_path) {
         return Err(SnapshotError::Escape(source));
     }
+    refuse_linked_components(&source)?;
     match fs::symlink_metadata(&source) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),
         Err(error) => Err(SnapshotError::io(&source, error)),
@@ -220,41 +249,24 @@ fn copy_file(
     if link_at(&dest)? {
         return Err(SnapshotError::Escape(dest));
     }
-    let temp = temp_path(parent, &dest);
-    if !temp.starts_with(staging) || link_at(&temp)? {
-        return Err(SnapshotError::Escape(temp));
-    }
-    if fs::symlink_metadata(&temp).is_ok() {
-        fs::remove_file(&temp).map_err(|source| SnapshotError::io(&temp, source))?;
-    }
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&temp)
-        .map_err(|source| SnapshotError::io(&temp, source))?;
+        .open(&dest)
+        .map_err(|source| SnapshotError::io(&dest, source))?;
     let mut input = File::open(from).map_err(|source| SnapshotError::io(from, source))?;
     io::copy(&mut input, &mut output).map_err(|source| SnapshotError::io(from, source))?;
     output
         .sync_all()
-        .map_err(|source| SnapshotError::io(&temp, source))?;
+        .map_err(|source| SnapshotError::io(&dest, source))?;
     drop(output);
     drop(input);
-    fs::set_permissions(&temp, fs::Permissions::from_mode(0o644))
-        .map_err(|source| SnapshotError::io(&temp, source))?;
-    fs::rename(&temp, &dest).map_err(|source| SnapshotError::io(&dest, source))?;
+    fs::set_permissions(&dest, fs::Permissions::from_mode(0o644))
+        .map_err(|source| SnapshotError::io(&dest, source))?;
     if let Ok(dir) = File::open(parent) {
         let _ = dir.sync_all();
     }
     Ok(())
-}
-
-fn temp_path(parent: &Path, dest: &Path) -> PathBuf {
-    let primary = parent.join(".drift-snapshot.tmp");
-    if primary == dest {
-        parent.join(".drift-snapshot.alt.tmp")
-    } else {
-        primary
-    }
 }
 
 fn publish(store: &Path, staging: &Path, version: &str) -> Result<(), SnapshotError> {

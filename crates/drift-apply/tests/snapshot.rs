@@ -239,6 +239,111 @@ fn a_linked_template_root_is_not_followed() {
 }
 
 #[test]
+fn scratch_names_are_copied_beside_ordinary_files() {
+    let mut builder = RootBuilder::new();
+    builder
+        .file("omarchy/config/.drift-snapshot.tmp", b"keep me")
+        .unwrap()
+        .file("omarchy/config/.drift-snapshot.alt.tmp", b"keep alt")
+        .unwrap()
+        .file("omarchy/config/z.conf", b"normal")
+        .unwrap();
+    let tree = builder.materialize().unwrap();
+    let store = tree.path().join("snapshots");
+    let report = snapshot_templates(
+        &Registry::v1(),
+        &tree.path().join("omarchy"),
+        &store,
+        "1.0.0-1",
+    )
+    .unwrap();
+    assert_eq!(report.files, 3);
+    assert_eq!(list_dir(&store), vec!["1.0.0-1".to_string()]);
+    assert_eq!(
+        files_under(&store.join("1.0.0-1")),
+        vec![
+            (
+                "config/.drift-snapshot.alt.tmp".to_string(),
+                b"keep alt".to_vec()
+            ),
+            (
+                "config/.drift-snapshot.tmp".to_string(),
+                b"keep me".to_vec()
+            ),
+            ("config/z.conf".to_string(), b"normal".to_vec()),
+        ]
+    );
+}
+
+#[test]
+fn an_intermediate_source_link_publishes_nothing() {
+    let mut builder = RootBuilder::new();
+    builder
+        .file("outside/nested/secret.conf", SECRET)
+        .unwrap()
+        .file("real-store/.keep", b"keep\n")
+        .unwrap();
+    let tree = builder.materialize().unwrap();
+    let source = tree.path().join("source");
+    fs::create_dir(&source).unwrap();
+    symlink(tree.path().join("outside"), source.join("vendor")).unwrap();
+    let vendor = Root::new(
+        "vendor",
+        rel("vendor/nested"),
+        rel(".local/share/vendor"),
+        Vec::new(),
+        Origin::User,
+    )
+    .unwrap();
+    let registry = Registry::v1().with_roots(vec![vendor]).unwrap();
+    let store = tree.path().join("real-store");
+    let error = snapshot_templates(&registry, &source, &store, "1.0.0-1").unwrap_err();
+    assert!(matches!(error, SnapshotError::Escape(_)), "{error}");
+    assert!(error.to_string().contains("vendor"), "{error}");
+    assert_eq!(list_dir(&store), vec![".keep".to_string()]);
+    assert!(!store.join("1.0.0-1").exists());
+    assert_eq!(fs::read(store.join(".keep")).unwrap(), b"keep\n");
+    assert_eq!(
+        fs::read(tree.path().join("outside/nested/secret.conf")).unwrap(),
+        SECRET
+    );
+}
+
+#[test]
+fn a_store_ancestor_link_publishes_nothing() {
+    let mut builder = RootBuilder::new();
+    builder
+        .file("omarchy/config/z.conf", b"normal")
+        .unwrap()
+        .file("real/snapshots/nested/already.txt", b"already\n")
+        .unwrap();
+    let tree = builder.materialize().unwrap();
+    symlink(tree.path().join("real"), tree.path().join("alias")).unwrap();
+    let store = tree.path().join("alias").join("snapshots");
+    let error = snapshot_templates(
+        &Registry::v1(),
+        &tree.path().join("omarchy"),
+        &store,
+        "1.0.0-1",
+    )
+    .unwrap_err();
+    assert!(matches!(error, SnapshotError::Escape(_)), "{error}");
+    assert!(error.to_string().contains("alias"), "{error}");
+    let real = tree.path().join("real").join("snapshots");
+    assert_eq!(list_dir(&real), vec!["nested".to_string()]);
+    assert!(!real.join("1.0.0-1").exists());
+    assert!(!real.join(".partial-1.0.0-1").exists());
+    assert_eq!(
+        fs::read(real.join("nested/already.txt")).unwrap(),
+        b"already\n"
+    );
+    assert_eq!(
+        fs::read(tree.path().join("omarchy/config/z.conf")).unwrap(),
+        b"normal"
+    );
+}
+
+#[test]
 fn an_empty_root_still_records_the_version_directory() {
     let mut builder = RootBuilder::new();
     builder.file("omarchy/.keep", b"o\n").unwrap();
