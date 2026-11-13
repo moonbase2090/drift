@@ -545,6 +545,10 @@ impl Screen {
 }
 
 impl App for Screen {
+    fn token_palette(&self) -> Option<&[lunatui_core::Color]> {
+        self.diff.as_ref().and_then(App::token_palette)
+    }
+
     fn needs_animation_frames(&self) -> bool {
         matches!(self.phase, Phase::Scanning)
     }
