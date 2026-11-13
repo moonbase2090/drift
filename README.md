@@ -110,6 +110,10 @@ On the tree screen `H` opens the same list. `Enter` asks to undo the selected tr
 
 ![History and undo](docs/media/history.gif)
 
+## Package snapshot
+
+`drift snapshot --pre` copies the installed template roots into `/var/lib/drift/snapshots/<version>/` before an `omarchy-settings` upgrade. Pacman runs it from a PreTransaction hook. The command writes only under that store. A failure exits 2 and does not stop the upgrade.
+
 ## Development
 
 Rust 1.99.1, pinned by `rust-toolchain.toml`. From this repository:
