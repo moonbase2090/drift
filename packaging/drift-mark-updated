@@ -2,9 +2,12 @@
 set -eu
 file=${DRIFT_UPDATED_FILE:-/var/lib/drift/updated}
 dir=$(dirname "$file")
+umask 022
 mkdir -p "$dir"
+chmod a+rx "$dir"
 tmp=$(mktemp "$dir/.updated.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
+chmod 0644 "$tmp"
 date -u +%Y-%m-%dT%H:%M:%SZ > "$tmp"
 mv -f "$tmp" "$file"
 trap - EXIT

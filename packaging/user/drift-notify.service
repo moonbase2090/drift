@@ -4,3 +4,4 @@ Description=Send a Drift notification after a settings upgrade
 [Service]
 Type=oneshot
 ExecStart=/usr/lib/drift/drift-notify-after-upgrade
+TimeoutStartSec=infinity

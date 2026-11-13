@@ -162,13 +162,17 @@ fn the_packaged_hook_matches_integrate_and_the_units_verify() {
 
     let mark_text = fs::read_to_string(&mark).unwrap();
     assert!(mark_text.contains("file=${DRIFT_UPDATED_FILE:-/var/lib/drift/updated}\n"));
+    assert!(mark_text.contains("chmod a+rx \"$dir\"\n"));
     assert!(mark_text.contains("tmp=$(mktemp \"$dir/.updated.XXXXXX\")\n"));
+    assert!(mark_text.contains("chmod 0644 \"$tmp\"\n"));
     assert!(mark_text.contains("mv -f \"$tmp\" \"$file\"\n"));
 
     let waiter_text = fs::read_to_string(&waiter).unwrap();
     assert!(waiter_text.contains("lock=${DRIFT_PACMAN_LOCK:-/var/lib/pacman/db.lck}\n"));
+    assert!(waiter_text.contains("while [ -e \"$lock\" ]; do\n"));
     assert!(waiter_text.contains("exec drift notify\n"));
     assert!(!waiter_text.contains("flock"));
+    assert!(!waiter_text.contains("DRIFT_LOCK_POLLS"));
 
     let path_text = fs::read_to_string(&path_unit).unwrap();
     assert!(path_text.contains("PathChanged=/var/lib/drift/updated\n"));
@@ -180,6 +184,7 @@ fn the_packaged_hook_matches_integrate_and_the_units_verify() {
     let service_text = fs::read_to_string(&service_unit).unwrap();
     assert!(service_text.contains("Type=oneshot\n"));
     assert!(service_text.contains("ExecStart=/usr/lib/drift/drift-notify-after-upgrade\n"));
+    assert!(service_text.contains("TimeoutStartSec=infinity\n"));
 
     let checked = TempDir(scratch("verify"));
     let exe = checked.0.join("drift-notify-after-upgrade");
@@ -278,5 +283,100 @@ fn the_waiter_holds_while_the_pacman_lock_exists() {
         .unwrap();
     assert!(status.success(), "{err}");
     assert_eq!(fs::read_to_string(&log).unwrap(), "notify\n");
+    assert!(!lock.exists());
+}
+
+#[test]
+fn the_stamp_is_readable_when_its_directory_was_private() {
+    let root = TempDir(scratch("mode"));
+    let dir = root.0.join("state");
+    fs::create_dir(&dir).unwrap();
+    let mut permissions = fs::metadata(&dir).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&dir, permissions).unwrap();
+    let updated = dir.join("updated");
+    let status = Command::new("sh")
+        .arg(repo("packaging/drift-mark-updated"))
+        .env("DRIFT_UPDATED_FILE", &updated)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let body = fs::read_to_string(&updated).unwrap();
+    assert!(stamp_ok(&body), "{body:?}");
+    let file_mode = fs::symlink_metadata(&updated).unwrap().permissions().mode() & 0o777;
+    let dir_mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+    assert_eq!(file_mode, 0o644, "stamp mode {file_mode:o}");
+    assert_eq!(dir_mode & 0o007, 0o005, "directory mode {dir_mode:o}");
+    assert_eq!(names(&dir), vec!["updated".to_string()]);
+}
+
+#[test]
+fn a_lock_past_the_poll_budget_still_notifies_after_release() {
+    let root = TempDir(scratch("budget"));
+    let bin = root.0.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let sleep_log = root.0.join("sleeps");
+    let notify_log = root.0.join("log");
+    let lock = root.0.join("db.lck");
+    fs::write(&lock, b"").unwrap();
+    let sleep_path = bin.join("sleep");
+    fs::write(
+        &sleep_path,
+        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$DRIFT_SLEEP_LOG\"\nexec /usr/bin/sleep \"$@\"\n",
+    )
+    .unwrap();
+    let drift_path = bin.join("drift");
+    fs::write(
+        &drift_path,
+        "#!/bin/sh\nset -eu\nlock=${DRIFT_PACMAN_LOCK:-/var/lib/pacman/db.lck}\nif [ -e \"$lock\" ]; then\n  printf '%s\\n' skipped >> \"$DRIFT_NOTIFY_LOG\"\n  exit 0\nfi\nprintf '%s\\n' \"$*\" >> \"$DRIFT_NOTIFY_LOG\"\n",
+    )
+    .unwrap();
+    for path in [&sleep_path, &drift_path] {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+    let child = Command::new("sh")
+        .arg(repo("packaging/drift-notify-after-upgrade"))
+        .env("PATH", path_with(&bin))
+        .env("DRIFT_NOTIFY_LOG", &notify_log)
+        .env("DRIFT_SLEEP_LOG", &sleep_log)
+        .env("DRIFT_PACMAN_LOCK", &lock)
+        .env("DRIFT_LOCK_POLLS", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reap = Reap(Some(child));
+    let (gave_up, sleeps) = loop {
+        let sleeps = fs::read_to_string(&sleep_log)
+            .map(|text| text.lines().filter(|line| !line.is_empty()).count())
+            .unwrap_or(0);
+        match reap.0.as_mut().unwrap().try_wait() {
+            Ok(Some(status)) => break (Some(status), sleeps),
+            Ok(None) if sleeps >= 2 => break (None, sleeps),
+            Ok(None) => continue,
+            Err(err) => panic!("wait: {err}"),
+        }
+    };
+    assert!(
+        gave_up.is_none(),
+        "waiter gave up while the lock existed: {gave_up:?} sleeps {sleeps}"
+    );
+    assert!(sleeps >= 2, "sleeps {sleeps}");
+    assert!(!notify_log.exists());
+    fs::remove_file(&lock).unwrap();
+    let mut child = reap.0.take().unwrap();
+    let status = child.wait().unwrap();
+    let mut err = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut err)
+        .unwrap();
+    assert!(status.success(), "{err}");
+    assert_eq!(fs::read_to_string(&notify_log).unwrap(), "notify\n");
     assert!(!lock.exists());
 }
