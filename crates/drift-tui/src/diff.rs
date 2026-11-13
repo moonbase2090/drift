@@ -1827,6 +1827,26 @@ mod tests {
     }
 
     #[test]
+    fn the_measured_foot_float_uses_two_panes() {
+        let columns = 121;
+        let rows = 33;
+        assert!(matches!(width_class(columns, rows), WidthClass::Medium));
+        let mut screen = changed();
+        let (grid, clusters) = render_once(&mut screen, columns, rows);
+        assert!(matches!(screen.effective(), Layout::Two));
+        let text = grid.display_text(&clusters);
+        let header = text.lines().nth(1).unwrap_or("");
+        assert!(
+            header.contains("ours") && header.contains("theirs"),
+            "{text}"
+        );
+        assert!(text.contains("result"), "{text}");
+        assert!(!header.contains("hunks"), "{header}");
+        assert!(!text.contains("stacked"), "{text}");
+        assert!(text.contains("hello WORLD"), "{text}");
+    }
+
+    #[test]
     fn a_narrow_window_stacks_the_change() {
         let mut screen = changed();
         let (grid, clusters) = render_once(&mut screen, 80, 24);
