@@ -57,6 +57,19 @@ fn executable(path: &Path) {
     assert_ne!(mode & 0o111, 0, "{}", path.display());
 }
 
+fn units_verify(paths: &[&str]) {
+    let output = Command::new("systemd-analyze")
+        .arg("verify")
+        .args(paths)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let about_ours = stderr
+        .lines()
+        .any(|line| line.contains("drift-notify") || paths.iter().any(|path| line.contains(path)));
+    assert!(output.status.success() && !about_ours, "{stderr}");
+}
+
 fn command_ok(program: &str, args: &[&str]) {
     let output = Command::new(program).args(args).output().unwrap();
     assert!(
@@ -183,14 +196,7 @@ fn the_packaged_hook_matches_integrate_and_the_units_verify() {
     let copy_service = checked.0.join("drift-notify.service");
     fs::write(&copy_path, &path_text).unwrap();
     fs::write(&copy_service, rewritten).unwrap();
-    command_ok(
-        "systemd-analyze",
-        &[
-            "verify",
-            copy_path.to_str().unwrap(),
-            copy_service.to_str().unwrap(),
-        ],
-    );
+    units_verify(&[copy_path.to_str().unwrap(), copy_service.to_str().unwrap()]);
 }
 
 #[test]
