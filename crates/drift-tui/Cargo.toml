@@ -25,7 +25,12 @@ unicode-width = "0.2.3"
 lunatui-test.workspace = true
 drift-fixtures.workspace = true
 sha2 = "0.10"
+vt100 = "0.16"
 
 [[test]]
 name = "editor_pty"
+harness = false
+
+[[test]]
+name = "resize_pty"
 harness = false

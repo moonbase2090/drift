@@ -8,7 +8,7 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 
 ## Review screen
 
-`drift` opens a screen with a header, a path tree, and the key hints taken from the keymap. While a scan is running the tree shows a scanning row, and the rest of the screen still takes input. Press `r` to scan again. A change under a tracked root starts one follow-up scan after a short pause, including when many changes arrive together. Press `q`, or click Quit, to leave. The terminal is restored when the screen closes.
+`drift` opens a screen with a header, a path tree, and the key hints taken from the keymap. While a scan is running the tree shows a scanning row, and the rest of the screen still takes input. Press `r` to scan again. A change under a tracked root starts one follow-up scan after a short pause, including when many changes arrive together. Press `q`, or click Quit, to leave. The terminal is restored when the screen closes. The screen follows the terminal when its size changes, whichever screen or dialog is open, and repaints at the new size.
 
 ![Empty Drift screen](docs/media/empty-screen.gif)
 
