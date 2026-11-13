@@ -3,7 +3,11 @@ use lunatui_term::{Event, KeyCode, KeyKind, MouseButton, MouseKind, Scroll};
 use lunatui_theme::{Theme, Token, Variant};
 use lunatui_widgets::RenderCx;
 
+use lunatui_runtime::keymap::Keymap;
+
 use drift_core::HistoryView;
+
+use crate::commands::{global_keymap, history_keymap, press, GlobalCommand, HistoryCommand};
 
 const WHEEL_STEP: usize = 3;
 
@@ -12,10 +16,14 @@ pub enum HistoryAction {
     Back,
     Refresh,
     Undo { target: String, force: bool },
+    Help,
+    Palette,
 }
 
 const HINTS: &[(&str, KeyCode)] = &[
     ("[Q] Back", KeyCode::Char('q')),
+    ("[?] Help", KeyCode::Char('?')),
+    ("[:] Palette", KeyCode::Char(':')),
     ("[Enter] Undo", KeyCode::Enter),
     ("[U] Undo and force", KeyCode::Char('U')),
     ("[r] Refresh", KeyCode::Char('r')),
@@ -35,6 +43,8 @@ pub struct HistoryScreen {
     selected: usize,
     scroll: usize,
     follow: bool,
+    keymap: Keymap,
+    globals: Keymap,
     notice: Option<String>,
     error: Option<String>,
     area: Option<Rect>,
@@ -49,6 +59,8 @@ impl HistoryScreen {
             selected: 0,
             scroll: 0,
             follow: true,
+            keymap: history_keymap(),
+            globals: global_keymap(),
             notice: None,
             error: None,
             area: None,
@@ -108,20 +120,31 @@ impl HistoryScreen {
 
     fn key(&mut self, code: KeyCode) -> Option<HistoryAction> {
         self.follow = true;
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => return Some(HistoryAction::Back),
-            KeyCode::Char('r') => return Some(HistoryAction::Refresh),
-            KeyCode::Enter | KeyCode::Char('u') => return self.undo(false),
-            KeyCode::Char('U') => return self.undo(true),
-            KeyCode::Char('j') | KeyCode::Down => self.move_by(1),
-            KeyCode::Char('k') | KeyCode::Up => self.move_by(-1),
-            KeyCode::Char('g') | KeyCode::Home => self.selected = 0,
-            KeyCode::Char('G') | KeyCode::End => {
+        let event = press(code);
+        if let Some(id) = self.globals.dispatch(&event) {
+            return match GlobalCommand::from_id(id)? {
+                GlobalCommand::Help => Some(HistoryAction::Help),
+                GlobalCommand::Palette => Some(HistoryAction::Palette),
+            };
+        }
+        let id = self.keymap.dispatch(&event)?;
+        self.run(HistoryCommand::from_id(id)?)
+    }
+
+    pub fn run(&mut self, command: HistoryCommand) -> Option<HistoryAction> {
+        match command {
+            HistoryCommand::Back => return Some(HistoryAction::Back),
+            HistoryCommand::Refresh => return Some(HistoryAction::Refresh),
+            HistoryCommand::Undo => return self.undo(false),
+            HistoryCommand::UndoForce => return self.undo(true),
+            HistoryCommand::Down => self.move_by(1),
+            HistoryCommand::Up => self.move_by(-1),
+            HistoryCommand::Top => self.selected = 0,
+            HistoryCommand::Bottom => {
                 self.selected = self.view.rows.len().saturating_sub(1);
             }
-            KeyCode::PageDown => self.move_by(self.page()),
-            KeyCode::PageUp => self.move_by(-self.page()),
-            _ => {}
+            HistoryCommand::PageDown => self.move_by(self.page()),
+            HistoryCommand::PageUp => self.move_by(-self.page()),
         }
         None
     }

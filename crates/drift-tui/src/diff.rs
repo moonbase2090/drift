@@ -231,7 +231,7 @@ impl DiffScreen {
             class: None,
             two_way: false,
             title: None,
-            keymap: keymap(),
+            keymap: diff_keymap(),
             columns: 0,
             rows: 0,
             generation: 0,
@@ -535,7 +535,7 @@ impl DiffScreen {
     }
 }
 
-fn keymap() -> Keymap {
+pub(crate) fn diff_keymap() -> Keymap {
     let mut map = Keymap::new();
     map.register(Command::new(QUIT, "Quit", QUIT_CHORDS));
     map.register(Command::new(NEXT, "Next hunk", NEXT_CHORDS));
@@ -961,64 +961,8 @@ impl App for DiffScreen {
             return ControlFlow::Continue;
         }
         match self.keymap.dispatch(event) {
-            Some(QUIT) => ControlFlow::Break,
-            Some(NEXT) => {
-                self.move_hunk(1);
-                ControlFlow::Continue
-            }
-            Some(PREVIOUS) => {
-                self.move_hunk(-1);
-                ControlFlow::Continue
-            }
-            Some(FOCUS_NEXT) => {
-                self.move_focus(1);
-                ControlFlow::Continue
-            }
-            Some(FOCUS_PREVIOUS) => {
-                self.move_focus(-1);
-                ControlFlow::Continue
-            }
-            Some(WIDEN) => {
-                self.resize_focused(4);
-                ControlFlow::Continue
-            }
-            Some(NARROW) => {
-                self.resize_focused(-4);
-                ControlFlow::Continue
-            }
-            Some(DOWN) => {
-                self.scroll_by(1);
-                ControlFlow::Continue
-            }
-            Some(UP) => {
-                self.scroll_by(-1);
-                ControlFlow::Continue
-            }
-            Some(MINE) => {
-                self.choose(Choice::Mine);
-                ControlFlow::Continue
-            }
-            Some(THEIRS) => {
-                self.choose(Choice::Theirs);
-                ControlFlow::Continue
-            }
-            Some(BOTH) => {
-                self.choose(Choice::Both);
-                ControlFlow::Continue
-            }
-            Some(EDIT) => {
-                self.edit_selected();
-                ControlFlow::Continue
-            }
-            Some(WRITE) => {
-                self.write_plan();
-                ControlFlow::Continue
-            }
-            Some(LAYOUT) => {
-                self.cycle_layout();
-                ControlFlow::Continue
-            }
-            _ => ControlFlow::Continue,
+            Some(id) => self.run(id).unwrap_or(ControlFlow::Continue),
+            None => ControlFlow::Continue,
         }
     }
 
@@ -1090,6 +1034,71 @@ impl App for DiffScreen {
         } else {
             None
         }
+    }
+}
+
+impl DiffScreen {
+    pub(crate) fn run(&mut self, id: &str) -> Option<ControlFlow> {
+        Some(match id {
+            QUIT => ControlFlow::Break,
+            NEXT => {
+                self.move_hunk(1);
+                ControlFlow::Continue
+            }
+            PREVIOUS => {
+                self.move_hunk(-1);
+                ControlFlow::Continue
+            }
+            FOCUS_NEXT => {
+                self.move_focus(1);
+                ControlFlow::Continue
+            }
+            FOCUS_PREVIOUS => {
+                self.move_focus(-1);
+                ControlFlow::Continue
+            }
+            WIDEN => {
+                self.resize_focused(4);
+                ControlFlow::Continue
+            }
+            NARROW => {
+                self.resize_focused(-4);
+                ControlFlow::Continue
+            }
+            DOWN => {
+                self.scroll_by(1);
+                ControlFlow::Continue
+            }
+            UP => {
+                self.scroll_by(-1);
+                ControlFlow::Continue
+            }
+            MINE => {
+                self.choose(Choice::Mine);
+                ControlFlow::Continue
+            }
+            THEIRS => {
+                self.choose(Choice::Theirs);
+                ControlFlow::Continue
+            }
+            BOTH => {
+                self.choose(Choice::Both);
+                ControlFlow::Continue
+            }
+            EDIT => {
+                self.edit_selected();
+                ControlFlow::Continue
+            }
+            WRITE => {
+                self.write_plan();
+                ControlFlow::Continue
+            }
+            LAYOUT => {
+                self.cycle_layout();
+                ControlFlow::Continue
+            }
+            _ => return None,
+        })
     }
 }
 
@@ -2493,5 +2502,19 @@ mod tests {
             .err()
             .unwrap();
         assert!(error.contains("the base side"), "{error}");
+    }
+
+    #[test]
+    fn every_command_in_the_diff_keymap_is_handled_and_an_unknown_one_is_not() {
+        let mut screen = two_hunks();
+        let _ = render_once(&mut screen, 160, 40);
+        for command in diff_keymap().commands() {
+            if command.id() == "diff.edit" || command.id() == "diff.write" {
+                continue;
+            }
+            assert!(screen.run(command.id()).is_some(), "{}", command.id());
+        }
+        assert!(screen.run("diff.nope").is_none());
+        assert_eq!(screen.run("diff.quit"), Some(ControlFlow::Break));
     }
 }

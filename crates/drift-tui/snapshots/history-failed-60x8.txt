@@ -5,4 +5,4 @@
                                                             
                                                             
                                                             
-[Q] Back  [Enter] Undo  [U] Undo and force  [r] Refresh     
+[Q] Back  [?] Help  [:] Palette  [Enter] Undo               

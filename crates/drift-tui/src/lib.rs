@@ -1,7 +1,9 @@
+mod commands;
 mod diff;
 mod differ;
 mod historian;
 mod history_screen;
+mod overlay;
 mod plan_dialog;
 mod resolver;
 mod screen;
@@ -10,10 +12,15 @@ mod tree_screen;
 mod wake;
 mod worker;
 
+pub use commands::{
+    chord_text, chords_text, help_lines, help_sections, keymap_of, Context, GlobalCommand,
+    HistoryCommand, TreeCommand, GLOBAL_COMMANDS, HISTORY_COMMANDS, TREE_COMMANDS,
+};
 pub use diff::DiffScreen;
 pub use differ::Differ;
 pub use historian::{Historian, UndoProposal};
 pub use history_screen::{HistoryAction, HistoryScreen};
+pub use overlay::{Help, Outcome, Palette};
 pub use plan_dialog::{apply_decision, review_plan, Decision, Focus, PlanDialog};
 pub use resolver::{Proposal, Resolver};
 pub use screen::{

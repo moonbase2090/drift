@@ -33,4 +33,4 @@
                                                                         |                                               
                                                                         |                                               
                                                                         |                                               
-[Q] Quit  [/] Search  [1-6] Filter  [Space] Mark  [Enter] Open  [o] Keep  [t] Take  [m] Merge  [r] Rescan  [H] History  
+[Q] Quit  [?] Help  [:] Palette  [/] Search  [Enter] Open  [o] Keep  [t] Take  [m] Merge  [H] History                   
