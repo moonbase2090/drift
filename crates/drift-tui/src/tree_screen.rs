@@ -1121,18 +1121,15 @@ mod tests {
     }
 
     fn expand_all(screen: &mut TreeScreen) {
-        loop {
-            let Some(row) = screen.view().rows().iter().position(|row| {
-                matches!(
-                    row.kind,
-                    RowKind::Dir {
-                        expanded: false,
-                        ..
-                    }
-                )
-            }) else {
-                break;
-            };
+        while let Some(row) = screen.view().rows().iter().position(|row| {
+            matches!(
+                row.kind,
+                RowKind::Dir {
+                    expanded: false,
+                    ..
+                }
+            )
+        }) {
             key(screen, KeyCode::Home);
             for _ in 0..row {
                 key(screen, KeyCode::Down);
