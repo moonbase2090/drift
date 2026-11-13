@@ -72,6 +72,19 @@ drift integrate --yes
 
 `integrate` adds a Drift row to the Omarchy menu (`~/.config/omarchy/extensions/omarchy-menu.jsonc`) and a hook (`~/.config/omarchy/hooks/post-update.d/drift`) that runs `drift notify` after `omarchy-update`. It shows the change as a diff, asks before writing, and is itself a transaction you can undo. `--dry-run` only shows the diff; run it again after a change and it says there is nothing to do.
 
+## Bar widget
+
+```sh
+drift widget install --dry-run
+drift widget install
+drift widget sync
+drift widget remove --yes
+```
+
+`widget` manages the [bar widget](widget.md). `install` copies the packaged plugin folder (from `/usr/share/omarchy-drift/plugin`, or `DRIFT_PLUGIN_DIR` or `--source <folder>`, or the repository's `plugin/` folder when running from a checkout) into `~/.config/omarchy/plugins/drift.status/`, runs `omarchy-shell shell rescanPlugins`, enables it with `omarchy plugin enable drift.status` and puts it on the bar with `omarchy bar put drift.status`; `--no-place` leaves the bar alone. Running it again changes no file. `sync` refreshes the copy after a package upgrade, but only when your copy still matches what Drift installed. `remove` asks, disables the widget and deletes your copy; the packaged files and the binary stay.
+
+A file you edited is never overwritten without asking. `--yes` does not allow it: the command stops with exit `1` and tells you to use `--force`. Answering `y` at the prompt, or `--force`, replaces it after saving your edited copy as `.drift.status.bak.<time>` beside the plugin. Install and sync also refuse to write through a symlink. Without `omarchy` and `omarchy-shell` on `PATH` the commands say so and write nothing. `--dry-run` prints the files and the exact commands and does nothing.
+
 ## Other
 
 ```sh

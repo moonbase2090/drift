@@ -71,13 +71,15 @@ fn world() -> MaterializedRoot {
         .unwrap()
         .file("home/.config/omarchy/hooks/post-update.d/.keep", b"")
         .unwrap();
-    builder
-        .file_with_mode(
-            "bin/omarchy-notification-send",
-            b"#!/bin/sh\nexit 0\n",
-            0o755,
-        )
-        .unwrap();
+    for name in [
+        "bin/omarchy-notification-send",
+        "bin/omarchy",
+        "bin/omarchy-shell",
+    ] {
+        builder
+            .file_with_mode(name, b"#!/bin/sh\nexit 0\n", 0o755)
+            .unwrap();
+    }
     let mut listed = String::from("%FILES%\nusr/share/omarchy/config/\n");
     let mut mtree = String::from("#mtree\n/set type=file uid=0 gid=0 mode=644\n");
     for (rel, theirs, ours, base) in FILES {
@@ -216,6 +218,17 @@ fn every_command_in_the_documentation_runs_against_a_fixture_system() {
                 ],
             );
             assert!(seeded.status.success(), "{:?}", seeded);
+            if line.starts_with("drift widget sync") || line.starts_with("drift widget remove") {
+                let first = drift(
+                    root.path(),
+                    &[
+                        "widget".to_string(),
+                        "install".to_string(),
+                        "--yes".to_string(),
+                    ],
+                );
+                assert!(first.status.success(), "{first:?}");
+            }
             let id = newest_transaction(root.path());
             let line = line.replace("<transaction>", &id);
             let args = words(&line, &root.path().join("home"));
@@ -252,6 +265,11 @@ fn every_command_in_the_documentation_runs_against_a_fixture_system() {
     said("drift undo --dry-run", "config.jsonc");
     said("drift integrate --dry-run", "post-update.d/drift");
     said("drift resolve .config/hypr/hyprland.conf", "hyprland.conf");
+    said(
+        "drift widget install --dry-run",
+        "would run  omarchy bar put drift.status",
+    );
+    said("drift widget remove --yes", "Removed drift.status");
     for verb in [
         "scan",
         "status",
