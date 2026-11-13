@@ -1,4 +1,5 @@
 mod apply;
+mod edit;
 mod seed;
 mod snapshot;
 
@@ -10,6 +11,7 @@ pub use apply::{
     Restored, Roots, Unapplied, UndoItem, UndoOutcome, UndoRequest, UndoStatus, UndoneWithBases,
     WriteFollowup,
 };
+pub use edit::edit_text;
 pub use seed::{record_bases, scan, Recorded, Scan, StoreRoots};
 pub use snapshot::{snapshot_templates, SnapshotError, SnapshotReport};
 

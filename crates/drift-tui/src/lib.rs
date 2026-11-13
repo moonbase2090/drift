@@ -2,6 +2,7 @@ mod diff;
 mod plan_dialog;
 mod resolver;
 mod screen;
+mod suspend;
 mod tree_screen;
 mod wake;
 mod worker;

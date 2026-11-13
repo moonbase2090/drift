@@ -274,6 +274,21 @@ impl Merge {
     pub fn auto(&self) -> Result<String, Error> {
         self.render(&vec![None; self.hunk_count()])
     }
+
+    pub fn hunk_text(&self, index: usize, choice: Option<&Choice>) -> Option<String> {
+        let hunk = self.hunks().nth(index)?;
+        Some(match choice {
+            Some(Choice::Mine) => hunk.ours.clone(),
+            Some(Choice::Theirs) => hunk.theirs.clone(),
+            Some(Choice::Both) => both(hunk, self.terminator),
+            Some(Choice::Custom(text)) => text.clone(),
+            None => match hunk.kind {
+                HunkKind::TheirsOnly => hunk.theirs.clone(),
+                HunkKind::OursOnly | HunkKind::BothSame => hunk.ours.clone(),
+                HunkKind::Conflict => return None,
+            },
+        })
+    }
 }
 
 #[cfg(test)]
