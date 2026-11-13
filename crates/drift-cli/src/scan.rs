@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-use drift_core::{registry_from_user_config, Registry, USER_CONFIG_PATH};
+use drift_core::{registry_from_user_config, Registry, ScanReport, USER_CONFIG_PATH};
 use drift_source::{build_report, drift_share, drift_state, ResolvePaths, ScanPaths, SourcePaths};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,14 @@ pub fn paths_from(source: SourcePaths, lookup: &dyn Fn(&str) -> Option<OsString>
     }
 }
 
+pub(crate) fn load_registry(paths: &ScanPaths) -> Result<Registry, String> {
+    registry(paths)
+}
+
+pub(crate) fn scan_report(paths: &ScanPaths, registry: &Registry) -> Result<ScanReport, String> {
+    build_report(registry, paths, &BTreeSet::new()).map_err(|error| error.to_string())
+}
+
 pub(crate) fn registry(paths: &ScanPaths) -> Result<Registry, String> {
     let path = paths.source.home.join(USER_CONFIG_PATH);
     match fs::read_to_string(&path) {
@@ -68,10 +76,13 @@ pub(crate) fn registry(paths: &ScanPaths) -> Result<Registry, String> {
     }
 }
 
-pub fn run(paths: &ScanPaths, view: View, out: &mut dyn Write) -> Result<u8, String> {
+pub fn build(paths: &ScanPaths) -> Result<drift_core::ScanReport, String> {
     let registry = registry(paths)?;
-    let report =
-        build_report(&registry, paths, &BTreeSet::new()).map_err(|error| error.to_string())?;
+    build_report(&registry, paths, &BTreeSet::new()).map_err(|error| error.to_string())
+}
+
+pub fn run(paths: &ScanPaths, view: View, out: &mut dyn Write) -> Result<u8, String> {
+    let report = build(paths)?;
     let text = match view {
         View::Scan => report.scan_text(),
         View::Status => report.status_text(),

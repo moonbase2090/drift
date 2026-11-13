@@ -1337,32 +1337,24 @@ mod tests {
     use std::time::Duration;
 
     use drift_core::MAX_DIFF_BYTES;
+    use drift_fixtures::{busy_for, cpu_cost};
     use lunatui::render_once;
     use lunatui_term::KeyEvent;
     use lunatui_test::styled_snapshot;
-    use rustix::time::{clock_gettime, ClockId};
 
     use super::*;
 
-    fn thread_cpu_time() -> Duration {
-        let now = clock_gettime(ClockId::ThreadCPUTime);
-        Duration::new(
-            u64::try_from(now.tv_sec).unwrap_or(0),
-            u32::try_from(now.tv_nsec).unwrap_or(0),
-        )
-    }
-
-    fn cpu_cost(mut work: impl FnMut()) -> Duration {
-        let started = thread_cpu_time();
-        work();
-        thread_cpu_time().saturating_sub(started)
-    }
-
-    fn busy_for(cpu: Duration) {
-        let started = thread_cpu_time();
-        while thread_cpu_time().saturating_sub(started) < cpu {
-            std::hint::black_box(0u64);
-        }
+    fn timed_frame(
+        screen: &mut DiffScreen,
+        columns: u16,
+        rows: u16,
+    ) -> (Duration, lunatui_core::Grid, lunatui_core::ClusterTable) {
+        let mut rendered = None;
+        let took = cpu_cost(|| {
+            rendered = Some(render_once(screen, columns, rows));
+        });
+        let (grid, clusters) = rendered.expect("frame");
+        (took, grid, clusters)
     }
 
     fn sample_near_the_cap() -> (String, usize) {
@@ -1788,22 +1780,12 @@ mod tests {
         assert!(text.len() <= MAX_DIFF_BYTES as usize);
         let mut changed = changed_near_the_cap(&text);
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Down)));
-        let mut rendered = None;
-        let scrolled = cpu_cost(|| {
-            rendered = Some(render_once(&mut changed, 160, 40));
-        });
-        let (grid, clusters) = rendered.unwrap();
+        let (scrolled, grid, clusters) = timed_frame(&mut changed, 160, 40);
         assert!(grid.display_text(&clusters).contains('B'));
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Tab)));
-        let focused = cpu_cost(|| {
-            let _ = render_once(&mut changed, 160, 40);
-        });
+        let (focused, _, _) = timed_frame(&mut changed, 160, 40);
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Char('n'))));
-        let mut rendered = None;
-        let jumped = cpu_cost(|| {
-            rendered = Some(render_once(&mut changed, 160, 40));
-        });
-        let (grid, clusters) = rendered.unwrap();
+        let (jumped, grid, clusters) = timed_frame(&mut changed, 160, 40);
         assert!(grid.display_text(&clusters).contains('C'));
         assert!(changed.scroll_top() > 0);
         let worst_cold = scrolled.max(focused).max(jumped);
