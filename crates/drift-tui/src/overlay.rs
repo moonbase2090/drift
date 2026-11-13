@@ -40,35 +40,40 @@ impl Help {
 
     pub fn handle(&mut self, event: &Event) -> Outcome {
         match event {
-            Event::Key(key) if key.kind == KeyKind::Press => match key.code {
-                KeyCode::Esc | KeyCode::Char('q' | '?') => return Outcome::Close,
-                KeyCode::Char('j') | KeyCode::Down => {
-                    self.scroll = (self.scroll + 1).min(self.limit())
-                }
-                KeyCode::Char('k') | KeyCode::Up => self.scroll = self.scroll.saturating_sub(1),
-                KeyCode::PageDown => {
-                    self.scroll =
-                        (self.scroll + usize::from(self.rows.max(2) / 2)).min(self.limit());
-                }
-                KeyCode::PageUp => {
-                    self.scroll = self
-                        .scroll
-                        .saturating_sub(usize::from(self.rows.max(2) / 2));
-                }
-                KeyCode::Char('g') | KeyCode::Home => self.scroll = 0,
-                KeyCode::Char('G') | KeyCode::End => self.scroll = self.limit(),
-                _ => {}
-            },
-            Event::Mouse(mouse) => match mouse.kind {
-                MouseKind::Scroll(Scroll::Down) => {
-                    self.scroll = (self.scroll + 3).min(self.limit())
-                }
-                MouseKind::Scroll(Scroll::Up) => self.scroll = self.scroll.saturating_sub(3),
-                _ => {}
-            },
+            Event::Key(key) if key.kind == KeyKind::Press => self.key(key.code),
+            Event::Mouse(mouse) => {
+                self.wheel(mouse.kind);
+                Outcome::Stay
+            }
+            _ => Outcome::Stay,
+        }
+    }
+
+    fn key(&mut self, code: KeyCode) -> Outcome {
+        let half = usize::from(self.rows.max(2) / 2);
+        match code {
+            KeyCode::Esc | KeyCode::Char('q' | '?') => return Outcome::Close,
+            KeyCode::Char('j') | KeyCode::Down => self.scroll_by(1),
+            KeyCode::Char('k') | KeyCode::Up => self.scroll_by(-1),
+            KeyCode::PageDown => self.scroll_by(half as isize),
+            KeyCode::PageUp => self.scroll_by(-(half as isize)),
+            KeyCode::Char('g') | KeyCode::Home => self.scroll = 0,
+            KeyCode::Char('G') | KeyCode::End => self.scroll = self.limit(),
             _ => {}
         }
         Outcome::Stay
+    }
+
+    fn wheel(&mut self, kind: MouseKind) {
+        match kind {
+            MouseKind::Scroll(Scroll::Down) => self.scroll_by(3),
+            MouseKind::Scroll(Scroll::Up) => self.scroll_by(-3),
+            _ => {}
+        }
+    }
+
+    fn scroll_by(&mut self, delta: isize) {
+        self.scroll = self.scroll.saturating_add_signed(delta).min(self.limit());
     }
 
     pub fn render(&mut self, grid: &mut Grid, area: Rect, clusters: &mut ClusterTable) {
@@ -472,6 +477,33 @@ mod tests {
             assert_eq!(help.handle(&key(closer)), Outcome::Close);
         }
         assert_eq!(help.handle(&key(KeyCode::Char('x'))), Outcome::Stay);
+    }
+
+    #[test]
+    fn page_keys_and_arrows_scroll_by_the_expected_amounts() {
+        let mut help = Help::new(Context::Tree);
+        let _ = render_once(&mut Helps(&mut help), 80, 12);
+        let _ = help.handle(&key(KeyCode::PageDown));
+        assert_eq!(help.scroll, 5);
+        let _ = help.handle(&key(KeyCode::Down));
+        assert_eq!(help.scroll, 6);
+        let _ = help.handle(&key(KeyCode::Up));
+        let _ = help.handle(&key(KeyCode::Char('k')));
+        assert_eq!(help.scroll, 4);
+        let _ = help.handle(&key(KeyCode::PageUp));
+        assert_eq!(help.scroll, 0);
+        let _ = help.handle(&key(KeyCode::Char('G')));
+        assert_eq!(help.scroll, help.limit());
+        let _ = help.handle(&key(KeyCode::PageDown));
+        assert_eq!(help.scroll, help.limit());
+        let _ = help.handle(&key(KeyCode::Char('g')));
+        assert_eq!(help.scroll, 0);
+        let up = Event::Mouse(MouseEvent::new(MouseKind::Scroll(Scroll::Up), 5, 5));
+        let _ = help.handle(&up);
+        assert_eq!(help.scroll, 0);
+        let release = Event::Key(KeyEvent::press(KeyCode::Char('j')).kind(KeyKind::Release));
+        let _ = help.handle(&release);
+        assert_eq!(help.scroll, 0);
     }
 
     #[test]
