@@ -1,6 +1,7 @@
 mod diff;
 mod environment;
 mod history;
+mod notify;
 mod resolve;
 mod scan;
 mod snapshot;
@@ -22,6 +23,7 @@ Usage: drift [--snapshot [--width N] [--height N]] [--version] [--help]
        drift scan
        drift snapshot --pre
        drift status [--json | --bar]
+       drift notify [on | off]
 
 With no arguments, drift opens the review screen.
 --snapshot prints one frame and does not take the terminal.
@@ -36,7 +38,16 @@ files changed since are left alone unless named with --force. --yes skips the qu
 scan lists every tracked file with its status. status prints a summary, as JSON with
 --json, or as a status-bar module with --bar. snapshot --pre copies installed template
 roots into /var/lib/drift/snapshots/<version> before a package upgrade and writes only
-under that store. Exit codes: 0 no drift, 1 drift, 2 error.
+under that store. notify sends a normal-urgency notification when a scan finds drift.
+The text is 1 config drifted, or N configs drifted, and clicking it opens Drift.
+Nothing is sent when there is no drift, while another process holds the Omarchy
+update lock, while the pacman database lock exists, or after drift notify off.
+The post-update hook inherits the Omarchy lock and still sends, and it still
+checks the pacman lock. An Omarchy lock file left behind does not block a later
+notify. Pacman removes its database lock when the transaction ends.
+Notifications start on. drift notify on turns them back on.
+notify exits 0 when it sends or skips, and 2 when the scan or the notifier fails.
+Exit codes for the other commands: 0 no drift, 1 drift, 2 error.
 ";
 
 enum Action {
@@ -50,6 +61,7 @@ enum Action {
     History(history::HistoryArgs),
     Undo(history::UndoArgs),
     PreSnapshot,
+    Notify(notify::Request),
 }
 
 fn prefixed<T>(result: Result<T, String>) -> Result<T, String> {
@@ -72,6 +84,7 @@ fn subcommand(args: &[String]) -> Option<Result<Action, String>> {
         ),
         "integrate" => Some(integrate_mode(rest).map(Action::Integrate)),
         "snapshot" => Some(prefixed(snapshot::parse(rest)).map(|()| Action::PreSnapshot)),
+        "notify" => Some(prefixed(notify::parse(rest)).map(Action::Notify)),
         _ => None,
     }
 }
@@ -263,6 +276,19 @@ fn state_roots() -> (drift_source::ScanPaths, drift_apply::Roots) {
     (paths, roots)
 }
 
+fn notify_now(request: notify::Request) -> Result<u8, String> {
+    let (paths, roots) = state_roots();
+    notify::run(
+        &paths,
+        &roots.state,
+        &roots.omarchy_lock,
+        &roots.pacman_lock,
+        std::path::Path::new("omarchy-notification-send"),
+        request,
+        &mut std::io::stdout(),
+    )
+}
+
 fn history_now(args: &history::HistoryArgs) -> Result<u8, String> {
     let (paths, roots) = state_roots();
     history::run_history(&roots, &paths, args, &mut std::io::stdout())
@@ -320,6 +346,7 @@ fn execute(action: Result<Action, String>) -> ExitCode {
             &mut std::io::stdout(),
         )),
         Ok(Action::PreSnapshot) => finish(snapshot::run().map(|()| 0)),
+        Ok(Action::Notify(request)) => finish(notify_now(request)),
         Ok(Action::Launch) => match open_review() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -435,6 +462,22 @@ mod tests {
             execute(run(&args(&["status", "--nope"]))),
             ExitCode::from(2)
         );
+    }
+
+    #[test]
+    fn notify_defaults_to_sending_and_accepts_the_toggle() {
+        let request = |list: &[&str]| match run(&args(list)).unwrap() {
+            Action::Notify(request) => request,
+            _ => panic!("notify"),
+        };
+        assert_eq!(request(&["notify"]), notify::Request::Send);
+        assert_eq!(request(&["notify", "on"]), notify::Request::Enable);
+        assert_eq!(request(&["notify", "off"]), notify::Request::Disable);
+        assert!(run(&args(&["notify", "later"])).is_err());
+        let Action::Text(help) = run(&args(&["--help"])).unwrap() else {
+            panic!("help");
+        };
+        assert!(help.contains("drift notify [on | off]"));
     }
 
     #[test]
