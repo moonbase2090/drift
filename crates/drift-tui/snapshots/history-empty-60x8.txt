@@ -1,8 +1,0 @@
- Drift  History  0 transactions                             
- Newest first. Undo restores files and reviewed bases.      
-                                                            
- No transactions yet.                                       
-                                                            
-                                                            
-                                                            
-[Q] Back  [?] Help  [:] Palette  [Enter] Undo               

@@ -183,7 +183,7 @@ pub fn run(
         Mode::Yes => say(out, &view.render_body())?,
     }
     let done = execute(env.roots, &env.paths.resolve.share, &prepared, env.checker)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.describe())?;
     say(
         out,
         &format!(
@@ -287,7 +287,7 @@ impl drift_tui::Resolver for LiveResolver {
             &proposal.prepared,
             self.checker.as_ref(),
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.describe())?;
         let mut message = format!(
             "Applied {} file(s) as transaction {}; {} reviewed base(s) recorded.",
             done.checked.report.applied.len(),
@@ -788,7 +788,13 @@ pub(crate) mod tests {
             &mut Vec::new(),
             &mut Vec::new(),
         );
-        assert!(result.unwrap_err().contains("omarchy update lock"));
+        let error = result.unwrap_err();
+        assert!(error.contains("omarchy update lock is held"), "{error}");
+        assert!(
+            error.contains(&roots.omarchy_lock.display().to_string()),
+            "{error}"
+        );
+        assert!(error.ends_with(": .config/hypr/a.lua"), "{error}");
         assert_eq!(read(&root, "home/.config/hypr/a.lua"), "mine\n");
     }
 

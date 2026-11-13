@@ -54,6 +54,21 @@ Before anything is written, the plan dialog lists every file with its action, th
 
 ![Help and palette](docs/media/help-palette.gif)
 
+## Empty and error states
+
+Each screen says what is going on when there is nothing to list, and offers only the keys that can do something.
+
+- **No drift.** When no file needs review the tree is replaced by "Nothing needs review", with a count per status (local overrides and user-only files are not drift) and the package version when one is waiting for review. The hint bar offers `R` Rescan and `H` History only, and the keys that act on a file (`Enter`, `o`, `t`, `m`, `i`, marking) do nothing, so nothing can be changed on a row you cannot see. `1` to `6` still list the files with one status; clearing the filter brings the message back.
+- **No tracked files** and **no match.** An empty package file list, or a search or filter that matches nothing, is named as such. A filter or search that matches nothing shows what it was and the key that clears it.
+- **Scan failed.** The reason is shown in full, wrapped, with the file it names, and the hint bar offers Rescan and History.
+- **Notices.** A notice too long for the info line (for example an apply that stopped on one file) is shown in full beside the tree, or on the message screen. Errors from applying or undoing name the file and the reason, and a held update or package-database lock names the lock file.
+- **History.** An empty history explains how a transaction is recorded; a history that could not be read shows the reason and offers Refresh. A transaction whose manifest cannot be read is listed with the manifest's path.
+- **What each status means.** The summary pane explains the selected file's status and badge in a sentence, and pointing at a count in the header shows the same sentence on the info line.
+
+The capture below is the real `drift` binary on a scratch home directory whose files all match the package: the no-drift screen, the unchanged files listed with `1`, back to the message with `1` again, the empty history, and finally a notice that names the unreadable state directory.
+
+![Empty and error states](docs/media/edge-states.gif)
+
 ## Acting on files from the tree
 
 On the tree screen, `o` (keep mine), `t` (take upstream) and `m` (merge) act on the marked files, or on the selected file or directory when nothing is marked (`Space` marks, `a` marks everything in the filter). The action opens the plan dialog; nothing is written until you confirm, all the files in one go go into one transaction, and the screen rescans afterwards. Files that cannot be acted on are named in the notice line. The capture below is the real review screen running `cargo run -p drift-tui --example tree_actions` on a sample report; its resolver only reports what it would write. It marks two files, takes upstream, expands a diff, moves focus to Confirm and confirms.

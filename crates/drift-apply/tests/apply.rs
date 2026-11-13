@@ -222,6 +222,10 @@ fn symlink_targets_and_volatile_files_are_refused_without_an_override() {
         "{}",
         error.message
     );
+    assert_eq!(
+        error.describe(),
+        "refusing to follow a symlink: config/hypr/monitors.lua"
+    );
     assert_eq!(fs::read(outside.join("victim")).unwrap(), b"original");
     assert!(fix
         .live(path)
@@ -251,6 +255,10 @@ fn symlink_targets_and_volatile_files_are_refused_without_an_override() {
     )
     .unwrap_err();
     assert!(error.message.contains("volatile"), "{}", error.message);
+    assert_eq!(
+        error.describe(),
+        "refusing to write a volatile file: config/hypr/monitors.lua"
+    );
     assert_eq!(fs::read(regular.live(file)).unwrap(), b"x\n");
 }
 
@@ -352,6 +360,14 @@ fn foreign_locks_and_our_lock_refuse_the_write() {
         );
         let error = apply_one(&fix, &plan, b"hi\n").unwrap_err();
         assert!(error.message.contains(phrase), "{}", error.message);
+        if lock != "state/lock" {
+            assert!(
+                error.message.contains(&lock_path.display().to_string()),
+                "{}",
+                error.message
+            );
+        }
+        assert!(error.describe().ends_with(path), "{}", error.describe());
         assert!(error.applied.is_empty());
         assert_eq!(error.unapplied[0].path, path);
         assert_eq!(fs::read(fix.live(path)).unwrap(), b"x\n");
@@ -817,4 +833,47 @@ fn leftovers(root: &Path) -> Vec<PathBuf> {
         }
     }
     found
+}
+
+#[test]
+fn describe_names_each_file_with_its_own_reason() {
+    let error = ApplyError {
+        message: "io error at /home/u/.config/a: Permission denied".to_string(),
+        applied: Vec::new(),
+        unapplied: vec![
+            drift_apply::Unapplied {
+                path: ".config/a".to_string(),
+                reason: "io error at /home/u/.config/a: Permission denied".to_string(),
+            },
+            drift_apply::Unapplied {
+                path: ".config/b".to_string(),
+                reason: "not applied".to_string(),
+            },
+        ],
+    };
+    assert_eq!(
+        error.describe(),
+        "io error at /home/u/.config/a: Permission denied (.config/a: io error at /home/u/.config/a: Permission denied; .config/b: not applied)"
+    );
+    let bare = ApplyError {
+        message: "there is nothing to apply".to_string(),
+        applied: Vec::new(),
+        unapplied: Vec::new(),
+    };
+    assert_eq!(bare.describe(), "there is nothing to apply");
+    let same = ApplyError {
+        message: "stale".to_string(),
+        applied: Vec::new(),
+        unapplied: vec![
+            drift_apply::Unapplied {
+                path: "a".to_string(),
+                reason: "stale".to_string(),
+            },
+            drift_apply::Unapplied {
+                path: "b".to_string(),
+                reason: "stale".to_string(),
+            },
+        ],
+    };
+    assert_eq!(same.describe(), "stale: a, b");
 }

@@ -94,10 +94,16 @@ pub(super) fn undo_locked<T>(
     after: impl FnOnce(T, Result<UndoOutcome, ApplyError>) -> Result<UndoOutcome, ApplyError>,
 ) -> Result<UndoOutcome, ApplyError> {
     if node_exists(&roots.omarchy_lock) {
-        return Err(bare("omarchy update lock is held"));
+        return Err(bare(format!(
+            "omarchy update lock is held ({})",
+            roots.omarchy_lock.display()
+        )));
     }
     if node_exists(&roots.pacman_lock) {
-        return Err(bare("pacman database lock is held"));
+        return Err(bare(format!(
+            "pacman database lock is held ({})",
+            roots.pacman_lock.display()
+        )));
     }
     let _lock = DriftLock::take(&roots.state)?;
     let captured = before()?;
