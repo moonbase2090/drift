@@ -10,6 +10,7 @@ mod plan;
 mod plan_view;
 mod registry;
 mod report;
+mod resolve_plan;
 mod rows;
 mod status;
 mod tree_view;
@@ -30,6 +31,9 @@ pub use registry::{
     Mapping, Origin, Registry, Root, BUILTIN_CONFIG_ROOT, VOLATILE_CHROMIUM_PREFERENCES,
 };
 pub use report::{counts_as_drift, BackupSummary, ScanEntry, ScanReport, SCHEMA};
+pub use resolve_plan::{
+    prepare, BaseRecord, Prepared, ResolveInput, Skip, SkipReason, Write as PlannedWrite,
+};
 pub use rows::{
     DiffRows, LineEnding, LineNumbers, Mark, Row, RowCache, Span, MAX_SPAN_GRAPHEMES, TAB_WIDTH,
 };

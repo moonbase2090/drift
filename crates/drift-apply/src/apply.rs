@@ -11,7 +11,14 @@ use drift_core::{Action, Plan, PlannedFile};
 
 mod hypr;
 mod integrate;
+mod resolve;
 mod undo;
+
+pub use resolve::{execute, Executed};
+
+pub fn pending_prune(state: &Path) -> Result<Vec<String>, ApplyError> {
+    transactions_to_prune(state)
+}
 
 pub use hypr::{
     apply_checked, touches_hypr_config, CheckedApply, Hyprctl, HyprlandCheck, HyprlandStatus,
@@ -91,6 +98,14 @@ pub struct Request<'a> {
 }
 
 pub fn apply(roots: &Roots, request: &Request<'_>) -> Result<ApplyReport, ApplyError> {
+    apply_locked(roots, request, &mut |_| {})
+}
+
+fn apply_locked(
+    roots: &Roots,
+    request: &Request<'_>,
+    committed: &mut dyn FnMut(&ApplyReport),
+) -> Result<ApplyReport, ApplyError> {
     if node_exists(&roots.omarchy_lock) {
         return Err(refused(request.plan, "omarchy update lock is held"));
     }
@@ -123,7 +138,9 @@ pub fn apply(roots: &Roots, request: &Request<'_>) -> Result<ApplyReport, ApplyE
         }
     }
 
-    finish(roots, request.plan, applied, request.fail_at)
+    let report = finish(roots, request.plan, applied, request.fail_at)?;
+    committed(&report);
+    Ok(report)
 }
 
 fn finish(
