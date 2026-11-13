@@ -7,10 +7,12 @@ use lunatui_widgets::{KeyHintBar, RenderCx, Tree, TreeItem, TreeState, Widget};
 
 use drift_core::{Action as ResolveAction, ScanReport};
 
+use crate::commands::Context;
 use crate::diff::DiffScreen;
 use crate::differ::Differ;
 use crate::historian::{Historian, UndoProposal};
 use crate::history_screen::{HistoryAction, HistoryScreen};
+use crate::overlay::{Help, Outcome, Palette};
 use crate::plan_dialog::{Decision, PlanDialog};
 use crate::resolver::{Proposal, Resolver};
 use crate::tree_screen::{Action, TreeScreen};
@@ -31,6 +33,11 @@ enum Pending {
     Undo(UndoProposal),
 }
 
+enum Overlay {
+    Help(Help),
+    Palette(Palette),
+}
+
 struct Modal {
     dialog: PlanDialog,
     pending: Pending,
@@ -41,6 +48,7 @@ pub struct Screen {
     historian: Option<Box<dyn Historian>>,
     differ: Option<Box<dyn Differ>>,
     diff: Option<DiffScreen>,
+    overlay: Option<Overlay>,
     history: Option<HistoryScreen>,
     modal: Option<Modal>,
     notice: Option<String>,
@@ -64,6 +72,7 @@ impl Screen {
             historian: None,
             differ: None,
             diff: None,
+            overlay: None,
             history: None,
             modal: None,
             notice: None,
@@ -303,6 +312,14 @@ impl Screen {
                 self.open_diff(path);
                 return;
             }
+            Action::Help => {
+                self.open_help();
+                return;
+            }
+            Action::Palette => {
+                self.open_palette();
+                return;
+            }
             other => {
                 self.action = Some(other);
                 return;
@@ -345,7 +362,73 @@ impl Screen {
         }
     }
 
+    fn context(&self) -> Option<Context> {
+        if self.diff.is_some() {
+            Some(Context::Diff)
+        } else if self.history.is_some() {
+            Some(Context::History)
+        } else if self.review.is_some() {
+            Some(Context::Tree)
+        } else {
+            None
+        }
+    }
+
+    pub fn help(&self) -> Option<&Help> {
+        match self.overlay.as_ref() {
+            Some(Overlay::Help(help)) => Some(help),
+            _ => None,
+        }
+    }
+
+    pub fn palette(&self) -> Option<&Palette> {
+        match self.overlay.as_ref() {
+            Some(Overlay::Palette(palette)) => Some(palette),
+            _ => None,
+        }
+    }
+
+    fn open_help(&mut self) {
+        if let Some(context) = self.context() {
+            self.overlay = Some(Overlay::Help(Help::new(context)));
+        }
+    }
+
+    fn open_palette(&mut self) {
+        if let Some(context) = self.context() {
+            self.overlay = Some(Overlay::Palette(Palette::new(context)));
+        }
+    }
+
+    fn update_overlay(&mut self, event: &Event) -> ControlFlow {
+        let outcome = match self.overlay.as_mut() {
+            Some(Overlay::Help(help)) => help.handle(event),
+            Some(Overlay::Palette(palette)) => palette.handle(event),
+            None => Outcome::Stay,
+        };
+        match outcome {
+            Outcome::Stay => ControlFlow::Continue,
+            Outcome::Close => {
+                self.overlay = None;
+                ControlFlow::Continue
+            }
+            Outcome::Run(pressed) => {
+                self.overlay = None;
+                self.update(&pressed)
+            }
+        }
+    }
+
     fn update_diff(&mut self, event: &Event) {
+        if let Event::Key(key) = event {
+            if key.kind == KeyKind::Press {
+                match key.code {
+                    KeyCode::Char('?') => return self.open_help(),
+                    KeyCode::Char(':') => return self.open_palette(),
+                    _ => {}
+                }
+            }
+        }
         let leaves = matches!(
             event,
             Event::Key(key) if key.kind == KeyKind::Press && key.code == KeyCode::Esc
@@ -407,6 +490,8 @@ impl Screen {
             HistoryAction::Back => self.history = None,
             HistoryAction::Refresh => self.refresh_history(),
             HistoryAction::Undo { target, force } => self.propose_undo(&target, force),
+            HistoryAction::Help => self.open_help(),
+            HistoryAction::Palette => self.open_palette(),
         }
     }
 
@@ -555,6 +640,9 @@ impl App for Screen {
 
     fn update(&mut self, event: &Event) -> ControlFlow {
         self.apply_notes();
+        if self.overlay.is_some() {
+            return self.update_overlay(event);
+        }
         if self.modal.is_some() {
             self.update_modal(event);
             return ControlFlow::Continue;
@@ -598,6 +686,17 @@ impl App for Screen {
     }
 
     fn render(&mut self, grid: &mut Grid, area: Rect, clusters: &mut ClusterTable) {
+        self.render_base(grid, area, clusters);
+        match self.overlay.as_mut() {
+            Some(Overlay::Help(help)) => help.render(grid, area, clusters),
+            Some(Overlay::Palette(palette)) => palette.render(grid, area, clusters),
+            None => {}
+        }
+    }
+}
+
+impl Screen {
+    fn render_base(&mut self, grid: &mut Grid, area: Rect, clusters: &mut ClusterTable) {
         self.apply_notes();
         self.kick_scan();
         if let Some(diff) = self.diff.as_mut() {
@@ -2098,5 +2197,300 @@ mod tests {
         press(&mut screen, "j");
         enter(&mut screen);
         assert!(screen.diff().is_some() && screen.history().is_none());
+    }
+
+    use crate::commands::{
+        keymap_of, Context, HistoryCommand, TreeCommand, HISTORY_COMMANDS, TREE_COMMANDS,
+    };
+
+    fn everything() -> Screen {
+        let (screen, _) = differing(false, false);
+        let (fake, _) = historian(false, false, false, false);
+        let log = Rc::new(RefCell::new(Log::default()));
+        screen
+            .with_historian(Box::new(fake))
+            .with_resolver(Box::new(Fake {
+                log,
+                fail_propose: false,
+                fail_apply: false,
+            }))
+    }
+
+    fn chord_event(command: &lunatui_runtime::keymap::Command) -> Event {
+        let chord = command.chords()[0];
+        Event::Key(KeyEvent::press(chord.code()).modifiers(chord.modifiers()))
+    }
+
+    fn through_palette(screen: &mut Screen, title: &str) -> ControlFlow {
+        press(screen, ":");
+        assert!(screen.palette().is_some(), "{title}");
+        press(screen, title);
+        for _ in 0..80 {
+            if screen
+                .palette()
+                .and_then(|palette| palette.selected_title())
+                == Some(title)
+            {
+                break;
+            }
+            let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Down)));
+        }
+        assert_eq!(
+            screen
+                .palette()
+                .and_then(|palette| palette.selected_title()),
+            Some(title)
+        );
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)))
+    }
+
+    fn observed(screen: &mut Screen, flow: ControlFlow) -> (ControlFlow, String, Option<Action>) {
+        let (grid, clusters) = render_once(screen, 120, 36);
+        (flow, grid.display_text(&clusters), screen.take_action())
+    }
+
+    fn at(context: Context) -> Screen {
+        let mut screen = everything();
+        let _ = shown(&mut screen);
+        match context {
+            Context::Tree => {}
+            Context::History => press(&mut screen, "H"),
+            Context::Diff => {
+                press(&mut screen, "j");
+                enter(&mut screen);
+            }
+        }
+        let _ = shown(&mut screen);
+        screen
+    }
+
+    #[test]
+    fn the_palette_runs_every_tree_action_exactly_like_its_key() {
+        for command in TREE_COMMANDS {
+            let found = keymap_of(Context::Tree);
+            let registered = found
+                .commands()
+                .iter()
+                .find(|candidate| candidate.id() == command.id())
+                .unwrap();
+            let mut keyed = at(Context::Tree);
+            let flow = keyed.update(&chord_event(registered));
+            let by_key = observed(&mut keyed, flow);
+            let mut palette = at(Context::Tree);
+            let flow = through_palette(&mut palette, command.title());
+            let by_palette = observed(&mut palette, flow);
+            assert!(palette.palette().is_none(), "{}", command.id());
+            assert_eq!(by_key, by_palette, "{}", command.id());
+        }
+    }
+
+    #[test]
+    fn the_palette_runs_every_history_action_exactly_like_its_key() {
+        for command in HISTORY_COMMANDS {
+            let found = keymap_of(Context::History);
+            let registered = found
+                .commands()
+                .iter()
+                .find(|candidate| candidate.id() == command.id())
+                .unwrap();
+            let mut keyed = at(Context::History);
+            let flow = keyed.update(&chord_event(registered));
+            let by_key = observed(&mut keyed, flow);
+            let mut palette = at(Context::History);
+            let flow = through_palette(&mut palette, command.title());
+            let by_palette = observed(&mut palette, flow);
+            assert_eq!(by_key, by_palette, "{}", command.id());
+        }
+    }
+
+    #[test]
+    fn the_palette_runs_every_diff_action_exactly_like_its_key() {
+        for command in keymap_of(Context::Diff).commands() {
+            if command.id() == "diff.edit" {
+                continue;
+            }
+            let mut keyed = at(Context::Diff);
+            let flow = keyed.update(&chord_event(command));
+            let by_key = observed(&mut keyed, flow);
+            let mut palette = at(Context::Diff);
+            let flow = through_palette(&mut palette, command.title());
+            let by_palette = observed(&mut palette, flow);
+            assert_eq!(by_key, by_palette, "{}", command.id());
+        }
+    }
+
+    #[test]
+    fn the_palette_and_the_keys_both_change_something_for_the_actions_that_show_a_change() {
+        let mut screen = at(Context::Tree);
+        let before = shown(&mut screen);
+        let _ = through_palette(&mut screen, "Filter: conflict");
+        let after = shown(&mut screen);
+        assert_ne!(before, after);
+        assert!(after.contains("filter: conflict"), "{after}");
+
+        let mut screen = at(Context::Tree);
+        let flow = through_palette(&mut screen, "Quit");
+        assert_eq!(flow, ControlFlow::Break);
+
+        let mut screen = at(Context::Tree);
+        let _ = through_palette(&mut screen, "Keep mine");
+        assert!(shown(&mut screen).contains("Apply plan"));
+
+        let mut screen = at(Context::Tree);
+        let _ = through_palette(&mut screen, "Open the history");
+        assert!(screen.history().is_some());
+    }
+
+    #[test]
+    fn question_mark_opens_the_help_of_the_current_screen_generated_from_its_keymaps() {
+        for (context, section) in [
+            (Context::Tree, "Tree"),
+            (Context::History, "History"),
+            (Context::Diff, "Diff"),
+        ] {
+            let mut screen = at(context);
+            press(&mut screen, "?");
+            let help = screen.help().expect("help");
+            assert_eq!(
+                help.lines(),
+                crate::commands::help_lines(context).as_slice()
+            );
+            let (grid, clusters) = render_once(&mut screen, 100, 60);
+            let text = grid.display_text(&clusters);
+            assert!(text.contains("Drift  Help"), "{text}");
+            let first_section = text
+                .lines()
+                .skip(1)
+                .filter(|line| !line.starts_with("  ") && !line.trim().is_empty())
+                .nth(1)
+                .unwrap_or("");
+            assert_eq!(first_section.trim(), section, "{text}");
+            for command in keymap_of(context).commands() {
+                assert!(
+                    text.contains(command.title()),
+                    "{context:?} {}",
+                    command.id()
+                );
+            }
+            press(&mut screen, "j");
+            assert!(screen.help().is_some());
+            escape(&mut screen);
+            assert!(screen.help().is_none());
+        }
+    }
+
+    #[test]
+    fn q_in_the_help_closes_it_and_does_not_leave_the_program() {
+        let mut screen = at(Context::Tree);
+        press(&mut screen, "?");
+        assert_eq!(
+            screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('q')))),
+            ControlFlow::Continue
+        );
+        assert!(screen.help().is_none());
+        assert_eq!(
+            screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('q')))),
+            ControlFlow::Break
+        );
+    }
+
+    #[test]
+    fn keys_typed_into_the_palette_do_not_reach_the_screen_underneath() {
+        let mut screen = at(Context::Tree);
+        press(&mut screen, ":");
+        assert_eq!(
+            screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('q')))),
+            ControlFlow::Continue
+        );
+        assert_eq!(screen.palette().map(|palette| palette.query()), Some("q"));
+        escape(&mut screen);
+        assert!(screen.palette().is_none());
+        assert!(screen.diff().is_none() && screen.history().is_none());
+    }
+
+    #[test]
+    fn question_mark_and_colon_are_text_while_searching() {
+        let mut screen = at(Context::Tree);
+        press(&mut screen, "/?:");
+        assert!(screen.help().is_none() && screen.palette().is_none());
+        assert!(shown(&mut screen).contains("search: ?:"));
+    }
+
+    #[test]
+    fn neither_opens_while_the_first_scan_is_running() {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let unlock = Unlock(Some(release_tx));
+        let worker = crate::worker::launch(
+            Box::new(move || {
+                let _ = release_rx.recv();
+                Ok(empty_report())
+            }),
+            Duration::from_millis(200),
+        );
+        let mut screen = Screen::attached(worker);
+        let _ = shown(&mut screen);
+        press(&mut screen, "?:");
+        assert!(screen.help().is_none() && screen.palette().is_none());
+        drop(unlock);
+        drop(screen);
+    }
+
+    #[test]
+    fn the_hint_bar_offers_help_and_the_palette_and_a_click_opens_them() {
+        let mut screen = at(Context::Tree);
+        let text = wide(&mut screen);
+        let row = text
+            .lines()
+            .position(|line| line.contains("[?] Help"))
+            .unwrap() as u16;
+        let line = text.lines().nth(row as usize).unwrap();
+        let column = |needle: &str| line[..line.find(needle).unwrap()].chars().count() as u16 + 1;
+        let click = |column, row| {
+            Event::Mouse(MouseEvent::new(
+                MouseKind::Down(MouseButton::Left),
+                column,
+                row,
+            ))
+        };
+        let _ = screen.update(&click(column("[?] Help"), row));
+        assert!(screen.help().is_some());
+        escape(&mut screen);
+        let _ = screen.update(&click(column("[:] Palette"), row));
+        assert!(screen.palette().is_some());
+    }
+
+    #[test]
+    fn the_palette_works_in_the_diff_and_the_history_and_leaves_with_escape() {
+        let mut screen = at(Context::Diff);
+        press(&mut screen, ":");
+        assert!(screen.palette().is_some());
+        let titles: Vec<String> = screen
+            .palette()
+            .unwrap()
+            .titles()
+            .iter()
+            .map(|title| title.to_string())
+            .collect();
+        assert!(titles.iter().any(|title| title == "Layout"));
+        escape(&mut screen);
+        assert!(screen.palette().is_none() && screen.diff().is_some());
+        let _ = through_palette(&mut screen, "Quit");
+        assert!(screen.diff().is_none());
+    }
+
+    #[test]
+    fn history_help_lists_the_history_actions() {
+        let mut screen = at(Context::History);
+        press(&mut screen, "?");
+        let lines = screen.help().unwrap().lines().to_vec();
+        for command in HISTORY_COMMANDS {
+            assert!(
+                lines.iter().any(|line| line.contains(command.title())),
+                "{}",
+                command.id()
+            );
+        }
+        assert!(HistoryCommand::from_id("history.undo").is_some());
+        assert!(TreeCommand::from_id("tree.quit").is_some());
     }
 }

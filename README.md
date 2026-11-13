@@ -22,6 +22,8 @@ A changed file opens in five columns once the window is at least 160 cells wide:
 
 Below 160 columns the same file uses fewer panes. From 100 columns it shows ours and theirs side by side, with the result underneath. Narrower than that, the rows stack in one column. A removed line keeps a minus mark, an added line keeps a plus mark, and a conflict shows ours and theirs. `v` cycles those layouts. A resize that crosses a width boundary follows the width again and keeps the selected hunk. A file with no base stays on two panes, and the header says the base is unknown.
 
+The Omarchy menu opens Drift with app id `TUI.float`. Omarchy floats and centers that class at 875×600. Stock Foot, with JetBrains Mono at 9pt and 14px of padding, measures 121×33 cells in that window, which is the two-pane layout. Maximizing reaches four panes at 160 columns. Drift does not add its own window rule.
+
 ![Narrower diff layouts](docs/media/layout-cycle.gif)
 
 `o` keeps the selected hunk's ours text, `t` takes theirs, `b` keeps both, and `e` edits that hunk. The result pane updates immediately. `w` opens the plan once every conflict is chosen. An unresolved conflict stays in the result pane and `w` explains why it will not open the plan.
@@ -46,6 +48,12 @@ Before anything is written, the plan dialog lists every file with its action, th
 
 ![Opening a diff](docs/media/open-diff.gif)
 
+## Help and the command palette
+
+`?` opens the help on any screen: every key of the current screen first, then the other screens and the keys that work everywhere, with `j`/`k`, `PageUp`/`PageDown` and `Home`/`End` to scroll and `Esc`, `q` or `?` to close. `:` opens the command palette: type part of an action's name, move with the arrow keys and press `Enter` to run it exactly as if you had pressed its key; the palette shows each action's keys beside it. Both are built from the same keymaps the screens use to handle keys, so a key that works is listed, and neither can drift from what the screens do. Both are unavailable while the first scan is still running and while you are typing a search, where `?` and `:` are ordinary characters. The capture below is the real `drift` binary on a scratch home directory: it opens the help, scrolls it, closes it, then opens the palette, filters to "filter loc" and runs the local override filter.
+
+![Help and palette](docs/media/help-palette.gif)
+
 ## Acting on files from the tree
 
 On the tree screen, `o` (keep mine), `t` (take upstream) and `m` (merge) act on the marked files, or on the selected file or directory when nothing is marked (`Space` marks, `a` marks everything in the filter). The action opens the plan dialog; nothing is written until you confirm, all the files in one go go into one transaction, and the screen rescans afterwards. Files that cannot be acted on are named in the notice line. The capture below is the real review screen running `cargo run -p drift-tui --example tree_actions` on a sample report; its resolver only reports what it would write. It marks two files, takes upstream, expands a diff, moves focus to Confirm and confirms.
@@ -63,7 +71,7 @@ Undoing a resolution restores the file and the reviewed base it replaced, so an 
 
 ## Using it
 
-Launch Drift from the Omarchy menu, or as a floating Hyprland window, through the [Omarchy shell-plugin](https://github.com/basecamp/omarchy/blob/quattro/manual/32-shell-plugins.md) mechanism. It is built for Omarchy 4.5 (Quattro). Package templates are read from `/usr/share/omarchy`.
+Launch Drift from the Omarchy menu. The menu action is `omarchy-launch-or-focus-tui --app-id=TUI.float drift`, which opens the floating window, or focuses that window if it is already open. It is built for Omarchy 4.5 (Quattro), through the [Omarchy shell-plugin](https://github.com/basecamp/omarchy/blob/quattro/manual/32-shell-plugins.md) mechanism. Package templates are read from `/usr/share/omarchy`.
 
 `drift notify` scans and, when configuration has drifted, sends a notification through `omarchy-notification-send`. One drifted file reads `1 config drifted`; more than one reads `N configs drifted`. The urgency is normal, and clicking the notification runs `omarchy-launch-or-focus-tui --app-id=TUI.float drift`, which opens Drift or focuses the existing window. Nothing is sent when the count is zero, while another process holds the update lock, or after `drift notify off`. The post-update hook inherits that lock and still sends. A lock file left behind does not block a later notify. Notifications are on until turned off. `drift notify on` turns them back on, and that choice is kept in Drift's state.
 

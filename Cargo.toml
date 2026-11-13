@@ -29,7 +29,7 @@ lunatui-core = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.29
 lunatui-runtime = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.29", version = "=0.1.29", default-features = false, features = ["app", "keymap"] }
 lunatui-term = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.29", version = "=0.1.29" }
 lunatui-theme = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.29", version = "=0.1.29" }
-lunatui-widgets = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.29", version = "=0.1.29", default-features = false, features = ["code-view", "key-hints", "split-keys", "tree"] }
+lunatui-widgets = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.29", version = "=0.1.29", default-features = false, features = ["code-view", "command-palette", "key-hints", "split-keys", "tree"] }
 lunatui-test = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.29", version = "=0.1.29" }
 terminal_size = "0.4"
 inotify = { version = "0.9.6", default-features = false }
