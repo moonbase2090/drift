@@ -20,6 +20,10 @@ A changed file opens in five columns once the window is at least 160 cells wide:
 
 ![Four-pane diff](docs/media/four-pane.gif)
 
+Below 160 columns the same file uses fewer panes. From 100 columns it shows ours and theirs side by side, with the result underneath. Narrower than that, the rows stack in one column. A removed line keeps a minus mark, an added line keeps a plus mark, and a conflict shows ours and theirs. `v` cycles those layouts. A resize that crosses a width boundary follows the width again and keeps the selected hunk. A file with no base stays on two panes, and the header says the base is unknown.
+
+![Narrower diff layouts](docs/media/layout-cycle.gif)
+
 `o` keeps the selected hunk's ours text, `t` takes theirs, `b` keeps both, and `e` edits that hunk. The result pane updates immediately. `w` opens the plan once every conflict is chosen. An unresolved conflict stays in the result pane and `w` explains why it will not open the plan.
 
 ![Hunk choices](docs/media/hunk-resolver.gif)
@@ -35,6 +39,14 @@ Before anything is written, the plan dialog lists every file with its action, th
 `drift` scans the installed package against your files and shows the result as a path tree. Every file has a glyph, its status label and a colour, so no status depends on colour alone; the header counts each status and doubles as the filter buttons. `j` and `k` move, `h` and `l` collapse and expand, `1`-`6` filter by status and `0` clears, `/` searches as you type, `Space` marks and `a` marks everything in the filter. The mouse selects, double-clicks to open, scrolls, toggles carets and checkboxes, and presses the header counts and the hint bar. The capture below is the real program: `cargo run -p drift-tui --example tree_screen` opens the screen on a sample report. It moves to a file (the summary pane shows its template and base), marks it, filters to upstream changes, then searches for `way`.
 
 ![Tree screen](docs/media/tree-screen.gif)
+
+## Acting on files from the tree
+
+On the tree screen, `o` (keep mine), `t` (take upstream) and `m` (merge) act on the marked files, or on the selected file or directory when nothing is marked (`Space` marks, `a` marks everything in the filter). The action opens the plan dialog; nothing is written until you confirm, all the files in one go go into one transaction, and the screen rescans afterwards. Files that cannot be acted on are named in the notice line. The capture below is the real review screen running `cargo run -p drift-tui --example tree_actions` on a sample report; its resolver only reports what it would write. It marks two files, takes upstream, expands a diff, moves focus to Confirm and confirms.
+
+![Tree actions](docs/media/tree-actions.gif)
+
+Undoing a resolution restores the file and the reviewed base it replaced, so an undone take upstream reads as upstream changed again.
 
 ## Safety model
 
@@ -67,6 +79,22 @@ files over 1 MiB show their hash and size instead of content.
 Exit codes are 0 for no drift in the selected file, 1 for drift and 2 for an error,
 including an unknown path. Local overrides and user-only files count as no drift,
 matching `status`. These commands write no configuration or state.
+
+## Resolving files
+
+```sh
+drift resolve .config/hypr/monitors.lua --keep
+drift resolve .config/hypr/a.lua .config/waybar/style.css --upstream --dry-run
+drift resolve "$HOME/.config/hypr/looknfeel.lua" --merge --yes
+```
+
+`resolve` shows a plan (each file, its action, the backup location and a diff summary) and writes only after you answer `y`; `--yes` skips the question, `--dry-run` only prints the plan, and without a terminal nothing is written unless `--yes` is given. All files in one call go into one transaction.
+
+- `--keep` (keep mine) writes no configuration. It records the shipped template as the reviewed base, so the file reads as an acknowledged local override and stays that way after a rescan.
+- `--upstream` (take upstream) replaces the file with the template, or creates it when it is missing, after backing up the original.
+- `--merge` applies a three-way merge when it has no conflicting hunks. Files with conflicts, no known base, non-text content or only local changes are skipped and named.
+
+Symlinks, files an app rewrites, files without a template and files already equal to upstream are skipped with a reason. A write under `~/.config/hypr` is followed by `hyprctl configerrors`, and Drift offers to undo the transaction if Hyprland reports errors.
 
 ## Development
 

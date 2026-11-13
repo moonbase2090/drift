@@ -92,6 +92,12 @@ impl PlanView {
     }
 
     pub fn render_text(&self) -> String {
+        let mut out = self.render_body();
+        out.push_str("\nDry run: nothing was written.\n");
+        out
+    }
+
+    pub fn render_body(&self) -> String {
         let mut out = format!(
             "plan {}\ntime {}\npackage {}\n",
             self.id, self.time, self.package_version
@@ -118,7 +124,6 @@ impl PlanView {
                 out.push_str(&format!("prune  {id}\n"));
             }
         }
-        out.push_str("\nDry run: nothing was written.\n");
         out
     }
 }
