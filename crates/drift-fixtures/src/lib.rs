@@ -1,4 +1,5 @@
 mod case;
+mod cpu_time;
 mod error;
 mod hash;
 mod root;
@@ -8,6 +9,7 @@ pub use case::{
     case_dirs, fixtures_dir, load_case, materialize_case, Case, Expected, ExpectedFile,
     MaterializedCase, Presence,
 };
+pub use cpu_time::{busy_for, cpu_cost, thread_cpu_time};
 pub use error::Error;
 pub use hash::{hash_tree, TreeDigest};
 pub use root::{MaterializedRoot, RootBuilder};

@@ -458,6 +458,7 @@ fn mouse_quits(columns: u16, rows: u16, mouse: &MouseEvent) -> bool {
 mod tests {
     use std::time::{Duration, Instant};
 
+    use drift_fixtures::cpu_cost;
     use lunatui::{render_once, App, ControlFlow};
     use lunatui_term::{KeyEvent, MouseEvent};
     use lunatui_test::styled_snapshot;
@@ -543,9 +544,9 @@ mod tests {
             let mut screen = Screen::new();
             let mut samples = Vec::new();
             for _ in 0..32 {
-                let started = Instant::now();
-                let _ = render_once(&mut screen, columns, rows);
-                samples.push(started.elapsed());
+                samples.push(cpu_cost(|| {
+                    let _ = render_once(&mut screen, columns, rows);
+                }));
             }
             let worst = samples.iter().copied().max().unwrap();
             assert!(
