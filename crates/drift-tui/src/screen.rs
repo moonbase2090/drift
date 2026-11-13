@@ -2609,6 +2609,76 @@ mod tests {
         assert!(screen.diff().is_none());
     }
 
+    type Builder = Box<dyn Fn() -> Screen>;
+
+    fn resized_frame(build: &dyn Fn() -> Screen, first: (u16, u16), then: (u16, u16)) -> String {
+        let mut screen = build();
+        let _ = render_once(&mut screen, first.0, first.1);
+        let _ = screen.update(&Event::Resize(then.0, then.1));
+        let (grid, clusters) = render_once(&mut screen, then.0, then.1);
+        styled_snapshot(&grid, &clusters)
+    }
+
+    fn fresh_frame(build: &dyn Fn() -> Screen, size: (u16, u16)) -> String {
+        let mut screen = build();
+        let (grid, clusters) = render_once(&mut screen, size.0, size.1);
+        styled_snapshot(&grid, &clusters)
+    }
+
+    #[test]
+    fn every_screen_and_overlay_repaints_for_the_new_size_after_a_resize() {
+        let scenarios: Vec<(&str, Builder)> = vec![
+            ("tree", Box::new(|| at(Context::Tree))),
+            ("history", Box::new(|| at(Context::History))),
+            ("diff", Box::new(|| at(Context::Diff))),
+            (
+                "plan dialog",
+                Box::new(|| {
+                    let mut screen = at(Context::Tree);
+                    press(&mut screen, "o");
+                    screen
+                }),
+            ),
+            (
+                "undo dialog",
+                Box::new(|| {
+                    let mut screen = at(Context::History);
+                    enter(&mut screen);
+                    screen
+                }),
+            ),
+            (
+                "help",
+                Box::new(|| {
+                    let mut screen = at(Context::Diff);
+                    press(&mut screen, "?");
+                    screen
+                }),
+            ),
+            (
+                "palette",
+                Box::new(|| {
+                    let mut screen = at(Context::Tree);
+                    press(&mut screen, ":");
+                    screen
+                }),
+            ),
+        ];
+        for (name, build) in &scenarios {
+            for (first, then) in [
+                ((120_u16, 36_u16), (80_u16, 24_u16)),
+                ((80, 24), (200, 50)),
+                ((200, 50), (100, 30)),
+            ] {
+                assert_eq!(
+                    resized_frame(build.as_ref(), first, then),
+                    fresh_frame(build.as_ref(), then),
+                    "{name} {first:?} -> {then:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_palette_works_in_the_diff_and_the_history_and_leaves_with_escape() {
         let mut screen = at(Context::Diff);
