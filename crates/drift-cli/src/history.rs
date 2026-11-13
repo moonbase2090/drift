@@ -2,8 +2,8 @@ use std::io::{BufRead, Write};
 use std::time::Duration;
 
 use drift_apply::{
-    history, inspect_undo, recorded_bases, undo_with_bases, Restored, Roots, UndoOutcome,
-    UndoRequest, UndoStatus,
+    history, inspect_undo, pending_prune, recorded_bases, undo_with_bases_expecting, Restored,
+    Roots, UndoOutcome, UndoRequest, UndoStatus,
 };
 use drift_core::{HistoryView, UndoKind, UndoLine, UndoPreview};
 use drift_source::{read_package, ScanPaths};
@@ -144,6 +144,7 @@ impl Undoer<'_> {
             package_version,
             lines: items.into_iter().map(line_of).collect(),
             bases: recorded_bases(&self.roots.state, target).map_err(|error| error.to_string())?,
+            prune: pending_prune(&self.roots.state).map_err(|error| error.to_string())?,
         })
     }
 
@@ -168,8 +169,13 @@ impl Undoer<'_> {
             restore_anyway: forced,
             fail_at: None,
         };
-        let done = undo_with_bases(self.roots, &self.paths.resolve.share, &request)
-            .map_err(|error| error.to_string())?;
+        let done = undo_with_bases_expecting(
+            self.roots,
+            &self.paths.resolve.share,
+            &request,
+            &preview.prune,
+        )
+        .map_err(|error| error.to_string())?;
         match done.outcome {
             UndoOutcome::Restored(report) => Ok(Undone {
                 message: restored_message(preview, report.applied.len(), &done.bases),
@@ -839,5 +845,140 @@ mod tests {
         assert_eq!(read(&tui, "home/.config/hypr/a.lua"), "edited later\n");
         let _ = screen.update(&key(KeyCode::Char('y')));
         assert_eq!(read(&tui, "home/.config/hypr/a.lua"), "mine a\n");
+    }
+
+    const FULL: usize = 100;
+
+    fn full() -> MaterializedRoot {
+        let files: Vec<(String, String, String, String)> = (0..FULL + 1)
+            .map(|index| {
+                (
+                    format!("hypr/f{index:03}.lua"),
+                    format!("new {index}\n"),
+                    format!("mine {index}\n"),
+                    format!("old {index}\n"),
+                )
+            })
+            .collect();
+        let borrowed: Vec<(&str, &str, Option<&str>, Option<&str>)> = files
+            .iter()
+            .map(|(rel, theirs, ours, base)| {
+                (
+                    rel.as_str(),
+                    theirs.as_str(),
+                    Some(ours.as_str()),
+                    Some(base.as_str()),
+                )
+            })
+            .collect();
+        let root = world(&borrowed);
+        for index in 0..FULL {
+            let target = format!(".config/hypr/f{index:03}.lua");
+            let done = go_at(
+                &root,
+                &[target.as_str(), "--upstream", "--yes"],
+                false,
+                "",
+                &clean(),
+                FIRST + index as u64 * 1000,
+            );
+            assert_eq!(done.result, Ok(0), "{}", done.err);
+        }
+        assert_eq!(transactions(&root), FULL);
+        root
+    }
+
+    fn oldest() -> String {
+        format!("resolve-{FIRST}")
+    }
+
+    #[test]
+    fn a_dry_run_names_the_oldest_transaction_the_undo_would_delete() {
+        let root = full();
+        let before = hash_tree(root.path()).unwrap();
+        let run = undo_at(&root, &["--dry-run"], false, "", FIRST + 1_000_000);
+        assert_eq!(run.result, Ok(0), "{}", run.err);
+        assert!(
+            run.out.contains(&format!("\nprune  {}\n", oldest())),
+            "{}",
+            run.out
+        );
+        assert_eq!(hash_tree(root.path()).unwrap(), before);
+    }
+
+    #[test]
+    fn confirming_deletes_exactly_what_the_preview_named_and_no_more() {
+        let root = full();
+        let run = undo_at(&root, &["--yes"], false, "", FIRST + 1_000_000);
+        assert_eq!(run.result, Ok(0), "{}", run.err);
+        assert!(
+            run.out.contains(&format!("prune  {}", oldest())),
+            "{}",
+            run.out
+        );
+        assert_eq!(transactions(&root), FULL);
+        let listed = listed(&root, false);
+        assert!(!listed.contains(&oldest()), "{listed}");
+        assert!(listed.contains("undo-"), "{listed}");
+    }
+
+    #[test]
+    fn a_history_that_changes_after_the_preview_refuses_the_undo() {
+        let root = full();
+        let paths = scan_paths(&root);
+        let roots = roots_for(&paths, root.path().join("runtime"));
+        let undoer = Undoer {
+            roots: &roots,
+            paths: &paths,
+        };
+        let target = undoer.newest().unwrap();
+        let preview = undoer
+            .preview(&target, Duration::from_millis(FIRST + 1_000_000))
+            .unwrap();
+        assert_eq!(preview.prune, [oldest()]);
+        let extra = go_at(
+            &root,
+            &[".config/hypr/f100.lua", "--upstream", "--yes"],
+            false,
+            "",
+            &clean(),
+            FIRST + 2_000_000,
+        );
+        assert_eq!(extra.result, Ok(0), "{}", extra.err);
+        let live = read(&root, "home/.config/hypr/f099.lua");
+        let error = undoer.perform(&preview, &[]).err().unwrap();
+        assert!(error.contains("changed since the preview"), "{error}");
+        assert_eq!(read(&root, "home/.config/hypr/f099.lua"), live);
+        assert!(!listed(&root, false).contains("undo-"));
+    }
+
+    #[test]
+    fn the_history_screen_plan_shows_the_prune_and_the_confirmed_set_is_the_one_deleted() {
+        use lunatui::App as _;
+        use lunatui_term::KeyCode;
+
+        let tui = full();
+        let paths = scan_paths(&tui);
+        let roots = roots_for(&paths, tui.path().join("runtime"));
+        let mut screen =
+            drift_tui::Screen::with_report(&tree_report(&tui)).with_historian(Box::new(
+                LiveHistorian::new(paths, roots, || Duration::from_millis(FIRST + 1_000_000)),
+            ));
+        let _ = lunatui::render_once(&mut screen, 120, 36);
+        for code in [KeyCode::Char('H'), KeyCode::Enter] {
+            let _ = screen.update(&key(code));
+        }
+        let (grid, clusters) = lunatui::render_once(&mut screen, 120, 40);
+        let text = grid.display_text(&clusters);
+        assert!(
+            text.contains(&format!(
+                "1 old transaction(s) will be removed: {}",
+                oldest()
+            )),
+            "{text}"
+        );
+        let _ = screen.update(&key(KeyCode::Char('y')));
+        assert!(!listed(&tui, false).contains(&oldest()));
+        assert!(listed(&tui, false).contains("undo-1800001000123"));
     }
 }

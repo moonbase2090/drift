@@ -1520,6 +1520,7 @@ mod tests {
                 package_version: "4.5.0-3".to_string(),
                 lines,
                 bases: Vec::new(),
+                prune: Vec::new(),
             };
             let forced: Vec<String> = if force {
                 preview.diverged().into_iter().map(str::to_string).collect()

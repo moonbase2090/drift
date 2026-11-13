@@ -257,11 +257,30 @@ pub fn undo_with_bases(
     undo_with_bases_probed(roots, share, request, &mut || {})
 }
 
+pub fn undo_with_bases_expecting(
+    roots: &Roots,
+    share: &Path,
+    request: &UndoRequest<'_>,
+    prune: &[String],
+) -> Result<UndoneWithBases, ApplyError> {
+    undo_checked(roots, share, request, Some(prune), &mut || {})
+}
+
 #[doc(hidden)]
 pub fn undo_with_bases_probed(
     roots: &Roots,
     share: &Path,
     request: &UndoRequest<'_>,
+    between: &mut dyn FnMut(),
+) -> Result<UndoneWithBases, ApplyError> {
+    undo_checked(roots, share, request, None, between)
+}
+
+fn undo_checked(
+    roots: &Roots,
+    share: &Path,
+    request: &UndoRequest<'_>,
+    expected_prune: Option<&[String]>,
     between: &mut dyn FnMut(),
 ) -> Result<UndoneWithBases, ApplyError> {
     let mut bases = Restored {
@@ -271,7 +290,17 @@ pub fn undo_with_bases_probed(
     let outcome = undo_locked(
         roots,
         request,
-        || load_previous(&roots.state, request.target),
+        || {
+            if let Some(expected) = expected_prune {
+                let now = transactions_to_prune(&roots.state)?;
+                if !same_ids(expected, &now) {
+                    return Err(bare(
+                        "the transactions to prune changed since the preview; nothing was written",
+                    ));
+                }
+            }
+            load_previous(&roots.state, request.target)
+        },
         |previous, result| {
             let has_record = previous.is_some();
             let outcome = match result {

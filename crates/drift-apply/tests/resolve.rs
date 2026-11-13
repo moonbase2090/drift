@@ -4,8 +4,9 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use drift_apply::{
-    execute, pending_prune, recorded_bases, undo, undo_with_bases, undo_with_bases_probed,
-    HyprlandCheck, HyprlandStatus, Roots, UndoOutcome, UndoRequest, WriteFollowup,
+    execute, pending_prune, recorded_bases, undo, undo_with_bases, undo_with_bases_expecting,
+    undo_with_bases_probed, HyprlandCheck, HyprlandStatus, Roots, UndoOutcome, UndoRequest,
+    WriteFollowup,
 };
 use drift_core::{prepare, Action, Prepared, Registry, RelPath, ScanReport, Status};
 use drift_fixtures::{hash_tree, MaterializedRoot, RootBuilder};
@@ -829,4 +830,55 @@ fn the_recorded_bases_of_a_transaction_are_listed_and_empty_without_a_record() {
     assert!(recorded_bases(&world.path("state"), "missing")
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn an_undo_that_expects_a_prune_list_refuses_when_the_list_has_changed_and_writes_nothing() {
+    let mut builder = Builder::new();
+    for index in 0..101 {
+        builder.file(
+            &format!("hypr/f{index:03}.lua"),
+            "new\n",
+            Some("mine\n"),
+            Some("old\n"),
+        );
+    }
+    let world = builder.build();
+    for index in 0..100 {
+        let id = format!("txn-{index:03}");
+        let target = format!(".config/hypr/f{index:03}.lua");
+        let (next, _) = world.prepared(Action::TakeUpstream, &id, &[target.as_str()]);
+        execute(&world.roots(), &world.share(), &next, &Quiet).unwrap();
+    }
+    let expected = pending_prune(&world.path("state")).unwrap();
+    assert_eq!(expected, ["txn-000"]);
+
+    let (extra, _) = world.prepared(Action::TakeUpstream, "txn-100", &[".config/hypr/f100.lua"]);
+    execute(&world.roots(), &world.share(), &extra, &Quiet).unwrap();
+    let before = transactions(&world);
+    let error = undo_with_bases_expecting(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-050", "undo-1", &[]),
+        &expected,
+    )
+    .unwrap_err();
+    assert!(
+        error.message.contains("changed since the preview"),
+        "{}",
+        error.message
+    );
+    assert_eq!(transactions(&world), before);
+    assert_eq!(read(&world, "home/.config/hypr/f050.lua"), "new\n");
+
+    let fresh = pending_prune(&world.path("state")).unwrap();
+    undo_with_bases_expecting(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-050", "undo-1", &[]),
+        &fresh,
+    )
+    .unwrap();
+    assert_eq!(read(&world, "home/.config/hypr/f050.lua"), "mine\n");
+    assert!(!transactions(&world).contains(&"txn-001".to_string()));
 }

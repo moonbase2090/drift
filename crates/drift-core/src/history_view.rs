@@ -130,6 +130,7 @@ pub struct UndoPreview {
     pub package_version: String,
     pub lines: Vec<UndoLine>,
     pub bases: Vec<String>,
+    pub prune: Vec<String>,
 }
 
 fn short(hash: Option<&String>) -> String {
@@ -195,6 +196,12 @@ impl UndoPreview {
         for base in &self.bases {
             out.push_str(&format!("reviewed base    {base}  (put back as it was)\n"));
         }
+        if !self.prune.is_empty() {
+            out.push('\n');
+            for id in &self.prune {
+                out.push_str(&format!("prune  {id}\n"));
+            }
+        }
         out
     }
 
@@ -252,7 +259,7 @@ impl UndoPreview {
             time: self.time.clone(),
             package_version: self.package_version.clone(),
             files,
-            prune: Vec::new(),
+            prune: self.prune.clone(),
         }
     }
 }
@@ -353,6 +360,7 @@ broken-1  (manifest unreadable)
                 ),
             ],
             bases: vec!["config/a".to_string()],
+            prune: Vec::new(),
         }
     }
 
@@ -433,6 +441,7 @@ Dry run: nothing was written.
                 kind: UndoKind::Kept,
             }],
             bases: vec!["config/k".to_string()],
+            prune: Vec::new(),
         };
         assert_eq!(view.changes(&[]), 0);
         let plan = view.plan_view("STATE", &[]);
@@ -441,5 +450,24 @@ Dry run: nothing was written.
         assert!(view
             .render_body(&[])
             .contains("reviewed base    config/k  (put back as it was)"));
+    }
+
+    #[test]
+    fn the_transactions_an_undo_would_delete_are_listed_in_the_text_and_the_plan() {
+        let mut view = preview();
+        view.prune = vec!["resolve-0001".to_string(), "resolve-0002".to_string()];
+        let body = view.render_body(&[]);
+        assert!(
+            body.ends_with("(put back as it was)\n\nprune  resolve-0001\nprune  resolve-0002\n"),
+            "{body}"
+        );
+        assert!(view
+            .render_text(&[])
+            .ends_with("prune  resolve-0002\n\nDry run: nothing was written.\n"));
+        assert_eq!(
+            view.plan_view("STATE", &[]).prune,
+            ["resolve-0001", "resolve-0002"]
+        );
+        assert!(preview().plan_view("STATE", &[]).prune.is_empty());
     }
 }
