@@ -362,9 +362,7 @@ impl DiffScreen {
         self.aligned = align(&self.merge, &self.choices);
         let count = self.aligned.hunk_rows.len();
         self.hunk = if count == 0 { 0 } else { hunk.min(count - 1) };
-        if let Some(row) = self.aligned.hunk_rows.get(self.hunk).copied() {
-            self.scroll.scroll_to(row);
-        }
+        self.scroll.scroll_to(self.hunk_scroll_row());
         self.revise();
     }
 
@@ -622,12 +620,13 @@ fn align(merge: &Merge, choices: &[Option<Choice>]) -> Aligned {
                 }
             }
             drift_core::Segment::Hunk(hunk) => {
-                push_stacked(&mut aligned, hunk);
+                let choice = choices.get(hunk_index).and_then(Option::as_ref);
+                let chosen = choice.and_then(|_| merge.hunk_text(hunk_index, choice));
+                push_stacked(&mut aligned, hunk, chosen.as_deref());
                 let start = at;
                 while at < rows.len() && rows[at].hunk == Some(hunk_index) {
                     at += 1;
                 }
-                let choice = choices.get(hunk_index).and_then(Option::as_ref);
                 push_hunk(
                     &mut aligned,
                     merge,
@@ -850,8 +849,11 @@ fn split_pair(area: Rect) -> (Rect, Rect) {
     (left, right)
 }
 
-fn push_stacked(aligned: &mut Aligned, hunk: &Hunk) {
+fn push_stacked(aligned: &mut Aligned, hunk: &Hunk, chosen: Option<&str>) {
     aligned.stacked_hunk_rows.push(aligned.stacked.len());
+    if let Some(text) = chosen {
+        push_marked(&mut aligned.stacked, "= ", text);
+    }
     match hunk.kind {
         HunkKind::Conflict => {
             push_marked(&mut aligned.stacked, "- ", &hunk.base);
@@ -1907,6 +1909,83 @@ mod tests {
         assert!(
             home.first().is_some_and(|line| line.contains("- alpha")),
             "{back}"
+        );
+    }
+
+    #[test]
+    fn a_choice_keeps_the_selected_stacked_hunk_visible() {
+        let mut base = String::new();
+        let mut ours = String::new();
+        let mut theirs = String::new();
+        for index in 0..30 {
+            let old = format!("OLD{index:02}\n");
+            let new = format!("NEW{index:02}\n");
+            base.push_str(&old);
+            ours.push_str(&old);
+            theirs.push_str(&new);
+        }
+        for index in 0..30 {
+            let line = format!("CTX{index:02}\n");
+            base.push_str(&line);
+            ours.push_str(&line);
+            theirs.push_str(&line);
+        }
+        base.push_str("SECOND_OLD\n");
+        ours.push_str("SECOND_OLD\n");
+        theirs.push_str("SECOND_NEW\n");
+        let mut screen = DiffScreen::new(&base, &ours, &theirs);
+        let _ = frame(&mut screen);
+        press(&mut screen, 'n');
+        let jumped = frame(&mut screen);
+        assert_eq!(screen.selected_hunk(), 1);
+        let top = screen.scroll_top();
+        assert!(jumped.contains("SECOND_OLD"), "{jumped}");
+        assert!(jumped.contains("SECOND_NEW"), "{jumped}");
+        press(&mut screen, 'o');
+        let chosen = frame(&mut screen);
+        assert_eq!(screen.selected_hunk(), 1);
+        assert_eq!(screen.scroll_top(), top);
+        let body = stacked_body(&chosen);
+        assert!(
+            body.iter().any(|line| line.contains("SECOND_OLD")),
+            "{chosen}"
+        );
+        assert!(
+            body.iter().any(|line| line.contains("= SECOND_OLD")),
+            "{chosen}"
+        );
+    }
+
+    #[test]
+    fn stacked_choices_show_the_result_without_resizing() {
+        let base = "alpha\nbase-line\nomega\n";
+        let ours = "alpha\nours-line\nomega\n";
+        let theirs = "alpha\ntheirs-line\nomega\n";
+        let mut screen =
+            DiffScreen::with_editor(base, ours, theirs, |_| Ok(String::from("CUSTOM_RESULT\n")));
+        let _ = frame(&mut screen);
+        press(&mut screen, 'o');
+        let mine = frame(&mut screen);
+        assert!(mine.contains("= ours-line"), "{mine}");
+        assert_eq!(screen.result_text().unwrap(), ours);
+        press(&mut screen, 't');
+        let taken = frame(&mut screen);
+        assert!(taken.contains("= theirs-line"), "{taken}");
+        assert_eq!(screen.result_text().unwrap(), theirs);
+        press(&mut screen, 'b');
+        let both = frame(&mut screen);
+        assert!(both.contains("= ours-line"), "{both}");
+        assert!(both.contains("= theirs-line"), "{both}");
+        assert_eq!(
+            screen.result_text().unwrap(),
+            "alpha\nours-line\ntheirs-line\nomega\n"
+        );
+        press(&mut screen, 'e');
+        let edited = frame(&mut screen);
+        assert!(edited.contains("= CUSTOM_RESULT"), "{edited}");
+        assert_eq!(
+            screen.result_text().unwrap(),
+            "alpha\nCUSTOM_RESULT\nomega\n"
         );
     }
 
