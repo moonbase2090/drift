@@ -1,0 +1,40 @@
+# Maintainer: Moonbase 2090 <322824348+mb2090@users.noreply.github.com>
+pkgname=omarchy-drift
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Review local Omarchy configuration against the shipped templates'
+arch=('x86_64')
+url='https://github.com/moonbase2090/drift'
+license=('MIT')
+depends=('bash' 'glibc' 'libgcc' 'qt6-declarative' 'quickshell')
+makedepends=('git' 'patchelf' 'rust')
+provides=('drift')
+conflicts=('drift' 'drift-bin' 'drift-diff-bin' 'drift-git')
+install=omarchy-drift.install
+options=('!debug' '!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('b9e15ef997fa7f61b52159df2b1a558f1b202f56763e5597511c71865e3a9a75')
+
+build() {
+  cd "drift-$pkgver"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export CARGO_TARGET_DIR="$srcdir/target"
+  export RUSTFLAGS="--remap-path-prefix=$srcdir=src"
+  cargo build --locked --release -p drift-cli --bin drift
+}
+
+package() {
+  cd "drift-$pkgver"
+  install -Dm755 "$srcdir/target/release/drift" "$pkgdir/usr/bin/drift"
+  patchelf --remove-needed ld-linux-x86-64.so.2 "$pkgdir/usr/bin/drift"
+  install -Dm755 packaging/drift-mark-updated "$pkgdir/usr/bin/drift-mark-updated"
+  install -Dm755 packaging/drift-notify-after-upgrade "$pkgdir/usr/lib/drift/drift-notify-after-upgrade"
+  install -Dm755 packaging/hooks/post-update.d/drift "$pkgdir/usr/share/$pkgname/hooks/post-update.d/drift"
+  install -Dm644 packaging/10-drift-snapshot.hook "$pkgdir/usr/share/libalpm/hooks/10-drift-snapshot.hook"
+  install -Dm644 packaging/20-drift-updated.hook "$pkgdir/usr/share/libalpm/hooks/20-drift-updated.hook"
+  install -Dm644 packaging/user/drift-notify.path "$pkgdir/usr/lib/systemd/user/drift-notify.path"
+  install -Dm644 packaging/user/drift-notify.service "$pkgdir/usr/lib/systemd/user/drift-notify.service"
+  install -Dm644 plugin/manifest.json "$pkgdir/usr/share/$pkgname/plugin/manifest.json"
+  install -Dm644 plugin/BarWidget.qml "$pkgdir/usr/share/$pkgname/plugin/BarWidget.qml"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

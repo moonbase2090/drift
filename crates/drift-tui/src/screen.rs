@@ -2,7 +2,7 @@ use lunatui::{render_once, run, App, ControlFlow, RunOptions};
 use lunatui_core::{clip_display_prefix, width, ClusterTable, Grid, Rect, Style};
 use lunatui_runtime::keymap::{Command, KeyChord, Keymap};
 use lunatui_term::{Event, KeyCode, KeyKind, Modifiers, MouseButton, MouseEvent, MouseKind};
-use lunatui_theme::{Theme, Token, Variant};
+use lunatui_theme::Token;
 use lunatui_widgets::{KeyHintBar, RenderCx, Tree, TreeItem, TreeState, Widget};
 
 use drift_core::{Action as ResolveAction, ScanReport};
@@ -760,7 +760,7 @@ impl Screen {
         }
         self.columns = area.width;
         self.rows = area.height;
-        let theme = Theme::builtin(Variant::Dark);
+        let theme = crate::diff_palette::active_theme();
         let mut cx = RenderCx::new(grid, clusters, &theme);
         let text = Style::new()
             .fg(cx.token(Token::TextPrimary))
@@ -2712,5 +2712,14 @@ mod tests {
         }
         assert!(HistoryCommand::from_id("history.undo").is_some());
         assert!(TreeCommand::from_id("tree.quit").is_some());
+    }
+
+    #[test]
+    fn the_screen_paints_the_active_lunatui_surface() {
+        let mut screen = Screen::new();
+        let (grid, _) = render_once(&mut screen, 80, 24);
+        let painted = grid.get(0, 0).expect("cell").style().bg;
+        let theme = crate::diff_palette::active_theme();
+        assert_eq!(painted, theme.resolve(lunatui_theme::Token::Surface0));
     }
 }

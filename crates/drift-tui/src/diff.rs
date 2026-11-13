@@ -9,7 +9,7 @@ use lunatui::{App, ControlFlow};
 use lunatui_core::{clip_display_prefix, width, Attrs, Color, Grid, Rect, Style, CLUSTER_TAG};
 use lunatui_runtime::keymap::{Command, KeyChord, Keymap};
 use lunatui_term::{Event, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind, Scroll};
-use lunatui_theme::{Theme, Token, Variant};
+use lunatui_theme::{Token, Variant};
 use lunatui_widgets::{
     CodeHighlight, CodeMark, CodeView, CodeViewState, DividerId, RenderCx, SplitAxis, SplitDrag,
     SplitLayout, SplitTree, Widget, WidgetState,
@@ -151,6 +151,7 @@ struct Painted {
     columns: u16,
     rows: u16,
     generation: u64,
+    variant: Variant,
     grid: Grid,
 }
 
@@ -1206,16 +1207,18 @@ impl App for DiffScreen {
             self.painted = None;
             return;
         }
+        let theme = crate::diff_palette::active_theme();
+        let variant = theme.variant();
         if let Some(painted) = &self.painted {
             if painted.columns == area.width
                 && painted.rows == area.height
                 && painted.generation == self.generation
+                && painted.variant == variant
             {
                 grid.blit(&painted.grid, area, area.x, area.y);
                 return;
             }
         }
-        let theme = Theme::builtin(Variant::Dark);
         let mut cx = RenderCx::new(grid, clusters, &theme);
         let text = Style::new()
             .fg(cx.token(Token::TextPrimary))
@@ -1249,6 +1252,7 @@ impl App for DiffScreen {
                 columns: area.width,
                 rows: area.height,
                 generation: self.generation,
+                variant,
                 grid: grid.clone(),
             });
         } else {

@@ -4,7 +4,7 @@ use std::rc::Rc;
 use lunatui::{run, App, ControlFlow, RunOptions};
 use lunatui_core::{clip_display_prefix, width, Attrs, ClusterTable, Grid, Rect, Style};
 use lunatui_term::{Event, KeyCode, KeyKind, MouseButton, MouseKind, Scroll};
-use lunatui_theme::{Theme, Token, Variant};
+use lunatui_theme::Token;
 use lunatui_widgets::RenderCx;
 
 use drift_core::{Action, PlanView};
@@ -263,7 +263,7 @@ impl PlanDialog {
 
     pub fn render(&mut self, grid: &mut Grid, area: Rect, clusters: &mut ClusterTable) {
         self.area = Some(area);
-        let theme = Theme::builtin(Variant::Dark);
+        let theme = crate::diff_palette::active_theme();
         let mut cx = RenderCx::new(grid, clusters, &theme);
         let base = Style::new()
             .fg(cx.token(Token::TextPrimary))
