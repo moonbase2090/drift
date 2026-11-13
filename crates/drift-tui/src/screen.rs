@@ -1035,7 +1035,7 @@ mod tests {
                     let _ = release_rx.recv();
                     Ok(named_report("report-one"))
                 } else {
-                    Err("unavailable".to_string())
+                    Err("zzqq unreachable".to_string())
                 }
             }),
             Duration::ZERO,
@@ -1123,7 +1123,7 @@ mod tests {
         let ready = wait_text(&captured, &text_rx, "report-one", Duration::from_secs(5));
         parent_trigger.write_all(b"C").unwrap();
         parent_trigger.flush().unwrap();
-        let failed = wait_text(&captured, &text_rx, "unavailable", Duration::from_secs(5));
+        let failed = wait_text(&captured, &text_rx, "zzqq", Duration::from_secs(5));
         let _ = master_write.write_all(b"q");
         let _ = master_write.flush();
         let (done_tx, done_rx) = mpsc::channel();

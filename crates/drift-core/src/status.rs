@@ -31,6 +31,23 @@ impl Status {
         }
     }
 
+    pub fn explain(self) -> &'static str {
+        match self {
+            Status::Unchanged => "Your file matches the shipped template.",
+            Status::UpstreamChanged => {
+                "The package changed this file and you did not, so taking the update is safe."
+            }
+            Status::LocalOverride => {
+                "You changed this file and the package did not. It stays as you have it."
+            }
+            Status::Conflict => {
+                "You and the package both changed this file. Review the diff to decide."
+            }
+            Status::UserOnly => "Only you have this file. The package does not ship it.",
+            Status::Missing => "The package ships this file but it is not on disk.",
+        }
+    }
+
     pub fn from_label(label: &str) -> Option<Status> {
         Status::ALL.into_iter().find(|s| s.label() == label)
     }
@@ -55,6 +72,18 @@ impl Badge {
             Badge::MergesCleanly => "merges cleanly",
             Badge::BaseUnknown => "base unknown",
             Badge::DeletedByYou => "deleted by you",
+        }
+    }
+
+    pub fn explain(self) -> &'static str {
+        match self {
+            Badge::MergesCleanly => {
+                "Your edits and the package's changes touch different lines, so they merge without a conflict."
+            }
+            Badge::BaseUnknown => {
+                "No earlier copy of the template is recorded, so Drift cannot tell which side changed what."
+            }
+            Badge::DeletedByYou => "You deleted this file, and the package still ships it.",
         }
     }
 }
@@ -177,5 +206,22 @@ mod tests {
             content_treatment(MAX_DIFF_BYTES + 1, false),
             Treatment::HashOnly(HashOnlyReason::NonUtf8)
         );
+    }
+
+    #[test]
+    fn every_status_and_badge_explains_itself_in_one_distinct_sentence() {
+        let mut seen = Vec::new();
+        for status in Status::ALL {
+            let text = status.explain();
+            assert!(text.ends_with('.') && text.len() > 20, "{status:?}");
+            assert!(!seen.contains(&text), "{status:?}");
+            seen.push(text);
+        }
+        for badge in Badge::ALL {
+            let text = badge.explain();
+            assert!(text.ends_with('.') && text.len() > 20, "{badge:?}");
+            assert!(!seen.contains(&text), "{badge:?}");
+            seen.push(text);
+        }
     }
 }

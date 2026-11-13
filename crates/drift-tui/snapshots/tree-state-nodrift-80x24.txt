@@ -1,8 +1,13 @@
- Drift  4.5.0-3  0 drifted                                                      
- 1 ✓ unchanged 0  2 ↓ upstream changed 0  3 ≠ local override 0                  
- 4 ✗ conflict 0  5 + user-only 0  6 ? missing 0                                 
- 0 of 0 files                                                                   
- No tracked files.                                                              
+ Drift  4.5.0-3  0 drifted  | update pending review: 4.4.0-1 -> 4.5.0-3         
+ 1 ✓ unchanged 2  2 ↓ upstream changed 0  3 ≠ local override 2                  
+ 4 ✗ conflict 0  5 + user-only 1  6 ? missing 0                                 
+ 5 of 5 files                                                                   
+ No drift                                                                       
+ Nothing needs review.                                                          
+ Of 5 tracked files: 2 unchanged, 2 local override, 1 user-only.                
+ Package 4.5.0-3 is waiting for review (last reviewed 4.4.0-1).                 
+                                                                                
+ Press 1 to 6 to list the files with one status, or open History to look back.  
                                                                                 
                                                                                 
                                                                                 
@@ -13,12 +18,7 @@
                                                                                 
                                                                                 
                                                                                 
---------------------------------------------------------------------------------
-Nothing selected.                                                               
                                                                                 
                                                                                 
                                                                                 
-                                                                                
-                                                                                
-                                                                                
-[Q] Quit  [?] Help  [:] Palette  [/] Search  [Enter] Open  [o] Keep  [t] Take   
+[Q] Quit  [?] Help  [:] Palette  [R] Rescan  [H] History                        

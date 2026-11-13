@@ -1,0 +1,24 @@
+ Drift  scan failed                                                             
+ 1 ✓ unchanged 0  2 ↓ upstream changed 0  3 ≠ local override 0                  
+ 4 ✗ conflict 0  5 + user-only 0  6 ? missing 0                                 
+ 0 of 0 files                                                                   
+ Scan failed                                                                    
+ /var/lib/pacman/local/omarchy-settings-4.5.0-3/files: Permission denied (os    
+ error 13)                                                                      
+                                                                                
+ Nothing was changed. Check that omarchy-settings is installed and that the     
+ package database and your config files can be read, then rescan.               
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+[Q] Quit  [?] Help  [:] Palette  [R] Rescan  [H] History                        

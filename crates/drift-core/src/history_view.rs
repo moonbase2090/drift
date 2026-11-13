@@ -98,7 +98,9 @@ impl HistoryView {
             ));
         }
         for id in &self.unreadable {
-            out.push_str(&format!("{id}  (manifest unreadable)\n"));
+            out.push_str(&format!(
+                "{id}  (backups/{id}/manifest.json could not be read)\n"
+            ));
         }
         out
     }
@@ -308,7 +310,7 @@ ID         TIME                  PACKAGE  FILES  ACTIONS
 resolve-2  2026-06-02T09:00:00Z  4.5.0-3      4  2 take upstream, 1 merge, 1 keep mine
 undo-1     2026-06-01T09:00:00Z  4.5.0-3      1  1 undo
 empty      2026-05-31T09:00:00Z  4.5.0-3      0  no file changes
-broken-1  (manifest unreadable)
+broken-1  (backups/broken-1/manifest.json could not be read)
 "
         );
         assert!(!view.is_empty());

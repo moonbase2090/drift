@@ -9,7 +9,7 @@ use lunatui_runtime::keymap::Keymap;
 
 use drift_core::{RowKind, ScanReport, Status, TreeRow, TreeView};
 
-use crate::commands::{global_keymap, press, tree_keymap, GlobalCommand, TreeCommand};
+use crate::commands::{chords_text, global_keymap, press, tree_keymap, GlobalCommand, TreeCommand};
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const WHEEL_STEP: usize = 3;
@@ -50,6 +50,14 @@ enum Mode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Panel {
+    Failed,
+    Untracked,
+    NoDrift,
+    NoMatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
     Caret,
     Checkbox,
@@ -80,7 +88,25 @@ pub struct TreeScreen {
     follow: bool,
     area: Option<Rect>,
     last_click: Option<(usize, Instant)>,
+    hover: Option<Status>,
 }
+
+const BARE_HINTS: &[(&str, KeyCode)] = &[
+    ("[Q] Quit", KeyCode::Char('q')),
+    ("[?] Help", KeyCode::Char('?')),
+    ("[:] Palette", KeyCode::Char(':')),
+    ("[R] Rescan", KeyCode::Char('r')),
+    ("[H] History", KeyCode::Char('H')),
+];
+
+const NO_MATCH_HINTS: &[(&str, KeyCode)] = &[
+    ("[Q] Quit", KeyCode::Char('q')),
+    ("[?] Help", KeyCode::Char('?')),
+    ("[:] Palette", KeyCode::Char(':')),
+    ("[/] Search", KeyCode::Char('/')),
+    ("[R] Rescan", KeyCode::Char('r')),
+    ("[H] History", KeyCode::Char('H')),
+];
 
 const HINTS: &[(&str, KeyCode)] = &[
     ("[Q] Quit", KeyCode::Char('q')),
@@ -114,6 +140,7 @@ impl TreeScreen {
             follow: true,
             area: None,
             last_click: None,
+            hover: None,
         }
     }
 
@@ -176,6 +203,9 @@ impl TreeScreen {
     }
 
     pub fn run(&mut self, command: TreeCommand) -> Option<Action> {
+        if self.panel() == Some(Panel::NoDrift) && acts_on_rows(command) {
+            return None;
+        }
         match command {
             TreeCommand::Quit => return Some(Action::Quit),
             TreeCommand::Rescan => return Some(Action::Rescan),
@@ -320,6 +350,14 @@ impl TreeScreen {
         let found = self.area.and_then(|area| self.layout(area))?;
         match kind {
             MouseKind::Down(MouseButton::Left) => self.click(&found, column, row, now),
+            MouseKind::Move => {
+                self.hover = found
+                    .counts
+                    .iter()
+                    .find(|(rect, _)| contains(*rect, column, row))
+                    .map(|(_, status)| *status);
+                None
+            }
             MouseKind::Scroll(Scroll::Down) => {
                 self.scroll = self.scroll.saturating_add(WHEEL_STEP);
                 self.follow = false;
@@ -350,7 +388,7 @@ impl TreeScreen {
         {
             return self.key(*code);
         }
-        if !contains(found.tree, column, row) {
+        if !contains(found.tree, column, row) || self.panel().is_some() {
             return None;
         }
         let index = self.scroll + usize::from(row - found.tree.y);
@@ -439,7 +477,7 @@ impl TreeScreen {
         };
         let mut hints = Vec::new();
         let mut x = area.x;
-        for (label, code) in HINTS {
+        for (label, code) in self.hints() {
             let cells = u16::try_from(width(label)).unwrap_or(u16::MAX);
             if x + cells > area.x + area.width {
                 break;
@@ -457,6 +495,130 @@ impl TreeScreen {
             hint,
             hints,
         })
+    }
+
+    fn panel(&self) -> Option<Panel> {
+        if self.error.is_some() {
+            return Some(Panel::Failed);
+        }
+        if self.view.entries().is_empty() {
+            return Some(Panel::Untracked);
+        }
+        if self.view.rows().is_empty() {
+            return Some(Panel::NoMatch);
+        }
+        let narrowed = !self.view.query().is_empty() || self.view.status_filter().is_some();
+        (self.view.drifted() == 0 && !narrowed).then_some(Panel::NoDrift)
+    }
+
+    fn hints(&self) -> &'static [(&'static str, KeyCode)] {
+        match self.panel() {
+            None => HINTS,
+            Some(Panel::NoMatch) => NO_MATCH_HINTS,
+            Some(_) => BARE_HINTS,
+        }
+    }
+
+    fn panel_lines(&self, panel: Panel) -> (String, Vec<String>) {
+        let total = self.view.entries().len();
+        match panel {
+            Panel::Failed => (
+                "Scan failed".to_string(),
+                vec![
+                    self.error.clone().unwrap_or_default(),
+                    String::new(),
+                    "Nothing was changed. Check that omarchy-settings is installed and that the package database and your config files can be read, then rescan."
+                        .to_string(),
+                ],
+            ),
+            Panel::Untracked => (
+                "No tracked files".to_string(),
+                vec![
+                    "The installed package lists no files for Drift to track.".to_string(),
+                    String::new(),
+                    "If you expected some, check that omarchy-settings is installed and up to date, then rescan."
+                        .to_string(),
+                ],
+            ),
+            Panel::NoDrift => {
+                let counts = self.view.counts();
+                let mut lines = vec!["Nothing needs review.".to_string()];
+                let parts: Vec<String> = Status::ALL
+                    .iter()
+                    .filter(|status| counts[status_index(**status)] > 0)
+                    .map(|status| format!("{} {}", counts[status_index(*status)], status.label()))
+                    .collect();
+                lines.push(format!("Of {total} tracked files: {}.", parts.join(", ")));
+                if let Some((from, to)) = &self.pending {
+                    lines.push(format!(
+                        "Package {to} is waiting for review (last reviewed {from})."
+                    ));
+                }
+                lines.push(String::new());
+                lines.push(
+                    "Press 1 to 6 to list the files with one status, or open History to look back."
+                        .to_string(),
+                );
+                ("No drift".to_string(), lines)
+            }
+            Panel::NoMatch => {
+                let mut lines = Vec::new();
+                if !self.view.query().is_empty() {
+                    lines.push(format!("Search: {}", self.view.query()));
+                }
+                if let Some(status) = self.view.status_filter() {
+                    lines.push(format!("Filter: {}", status.label()));
+                }
+                lines.push(String::new());
+                lines.push(format!(
+                    "Press {} to clear the search or filter.",
+                    chords_text(TreeCommand::Back.chords())
+                ));
+                ("No files match".to_string(), lines)
+            }
+        }
+    }
+
+    fn draw_panel(&self, cx: &mut RenderCx<'_>, rect: Rect, panel: Panel, base: Style, dim: Style) {
+        let (title, body) = self.panel_lines(panel);
+        let width = usize::from(rect.width.saturating_sub(2));
+        let title_style = match panel {
+            Panel::Failed => base
+                .fg(cx.token(Token::Fail))
+                .with_attrs(Attrs::new().set_bold(true)),
+            Panel::NoDrift => base
+                .fg(cx.token(Token::Ok))
+                .with_attrs(Attrs::new().set_bold(true)),
+            _ => base.with_attrs(Attrs::new().set_bold(true)),
+        };
+        let mut lines = vec![(title, title_style)];
+        let mut body = body;
+        if let Some(notice) = &self.notice {
+            body.push(String::new());
+            body.push(notice.clone());
+        }
+        for text in body {
+            if text.is_empty() {
+                lines.push((text, dim));
+            } else {
+                for part in wrap(&text, width) {
+                    lines.push((part, base));
+                }
+            }
+        }
+        for (offset, (text, style)) in lines.iter().take(usize::from(rect.height)).enumerate() {
+            put(
+                cx,
+                Rect::new(
+                    rect.x + 1,
+                    rect.y + offset as u16,
+                    rect.width.saturating_sub(1),
+                    1,
+                ),
+                text,
+                *style,
+            );
+        }
     }
 
     fn settle_scroll(&mut self, rows: usize) {
@@ -512,8 +674,8 @@ impl TreeScreen {
         if let Some((from, to)) = &self.pending {
             title.push_str(&format!("  | update pending review: {from} -> {to}"));
         }
-        if let Some(message) = &self.error {
-            title = format!(" Drift  scan failed: {message}");
+        if self.error.is_some() {
+            title = " Drift  scan failed".to_string();
         }
         put(&mut cx, found.title, &title, accent);
 
@@ -536,7 +698,7 @@ impl TreeScreen {
         put(&mut cx, found.info, &self.info_text(), dim);
         self.settle_scroll(usize::from(found.tree.height));
         self.draw_rows(&mut cx, &found, base, dim, selected_style);
-        if let Some(rect) = found.divider {
+        if let Some(rect) = found.divider.filter(|_| self.panel().is_none()) {
             let style = dim;
             if rect.width == 1 {
                 cx.fill(rect, style, '|');
@@ -544,8 +706,9 @@ impl TreeScreen {
                 cx.fill(rect, style, '-');
             }
         }
-        if let Some(rect) = found.summary {
-            self.draw_summary(&mut cx, rect, base, dim, bold);
+        let overflow = width(&self.info_text()) > usize::from(found.info.width);
+        if let Some(rect) = found.summary.filter(|_| self.panel().is_none()) {
+            self.draw_summary(&mut cx, rect, (base, dim, bold), overflow);
         }
         for (rect, _, label) in &found.hints {
             put(&mut cx, *rect, label, dim);
@@ -555,6 +718,9 @@ impl TreeScreen {
 
     fn info_text(&self) -> String {
         let mut parts = Vec::new();
+        if let Some(status) = self.hover {
+            parts.push(format!("{}: {}", status.label(), status.explain()));
+        }
         if let Some(notice) = &self.notice {
             parts.push(notice.clone());
         }
@@ -582,28 +748,11 @@ impl TreeScreen {
         dim: Style,
         selected_style: Style,
     ) {
-        let rows = self.view.rows();
-        if rows.is_empty() {
-            let text = if self.error.is_some() {
-                "Nothing was scanned."
-            } else if self.view.entries().is_empty() {
-                "No tracked files."
-            } else {
-                "No files match the search or filter."
-            };
-            put(
-                cx,
-                Rect::new(
-                    found.tree.x + 1,
-                    found.tree.y,
-                    found.tree.width.saturating_sub(1),
-                    1,
-                ),
-                text,
-                dim,
-            );
+        if let Some(panel) = self.panel() {
+            self.draw_panel(cx, found.tree, panel, base, dim);
             return;
         }
+        let rows = self.view.rows();
         for (offset, row) in rows
             .iter()
             .skip(self.scroll)
@@ -680,11 +829,17 @@ impl TreeScreen {
         &self,
         cx: &mut RenderCx<'_>,
         rect: Rect,
-        base: Style,
-        dim: Style,
-        bold: Style,
+        styles: (Style, Style, Style),
+        overflow: bool,
     ) {
+        let (base, dim, bold) = styles;
         let mut lines: Vec<(String, Style)> = Vec::new();
+        if let Some(notice) = self.notice.as_ref().filter(|_| overflow) {
+            for part in wrap(notice, usize::from(rect.width)) {
+                lines.push((part, bold));
+            }
+            lines.push((String::new(), dim));
+        }
         match self.view.selected_row() {
             Some(row) => match row.entry {
                 Some(index) => {
@@ -702,6 +857,12 @@ impl TreeScreen {
                     lines.push((format!("base: {}", entry.base.label()), base));
                     if let Some(badge) = entry.badge {
                         lines.push((format!("badge: {}", badge.label()), base));
+                        for part in wrap(badge.explain(), usize::from(rect.width)) {
+                            lines.push((part, dim));
+                        }
+                    }
+                    for part in wrap(entry.status.explain(), usize::from(rect.width)) {
+                        lines.push((part, dim));
                     }
                     if !entry.note.is_empty() {
                         lines.push((format!("note: {}", entry.note), dim));
@@ -800,6 +961,55 @@ fn status_style(cx: &RenderCx<'_>, base: Style, status: Status) -> Style {
             .fg(cx.token(Token::Warn))
             .with_attrs(Attrs::new().set_bold(true)),
     }
+}
+
+fn acts_on_rows(command: TreeCommand) -> bool {
+    matches!(
+        command,
+        TreeCommand::Open
+            | TreeCommand::Mark
+            | TreeCommand::MarkAll
+            | TreeCommand::Keep
+            | TreeCommand::Take
+            | TreeCommand::Merge
+            | TreeCommand::Ignore
+    )
+}
+
+pub(crate) fn wrap(text: &str, columns: usize) -> Vec<String> {
+    let columns = columns.max(1);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split(' ') {
+        let mut rest = word;
+        while width(rest) > columns {
+            if !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+            }
+            let head = clip_display_prefix(rest, u16::try_from(columns).unwrap_or(u16::MAX));
+            let cut = head
+                .len()
+                .max(rest.chars().next().map_or(1, char::len_utf8));
+            lines.push(rest[..cut].to_string());
+            rest = &rest[cut..];
+        }
+        let joined = if line.is_empty() {
+            width(rest)
+        } else {
+            width(&line) + 1 + width(rest)
+        };
+        if joined > columns && !line.is_empty() {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(rest);
+    }
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 fn put(cx: &mut RenderCx<'_>, rect: Rect, text: &str, style: Style) {
@@ -951,8 +1161,6 @@ mod tests {
             "tree-filtered-80x24" => include_str!("../snapshots/tree-filtered-80x24.txt"),
             "tree-search-120x36" => include_str!("../snapshots/tree-search-120x36.txt"),
             "tree-collapsed-80x24" => include_str!("../snapshots/tree-collapsed-80x24.txt"),
-            "tree-empty-80x24" => include_str!("../snapshots/tree-empty-80x24.txt"),
-            "tree-failed-80x24" => include_str!("../snapshots/tree-failed-80x24.txt"),
             _ => unreachable!(),
         }
     }
@@ -971,7 +1179,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_search_collapse_empty_and_failed_states_match_their_snapshots() {
+    fn filter_search_and_collapse_states_match_their_snapshots() {
         let mut screen = TreeScreen::new(&sample_report());
         let _ = text(&mut screen, 80, 24);
         press(&mut screen, "2");
@@ -987,18 +1195,6 @@ mod tests {
         press(&mut screen, "jjlhh");
         press(&mut screen, "h");
         assert_eq!(text(&mut screen, 80, 24), snapshot("tree-collapsed-80x24"));
-
-        let mut screen = TreeScreen::new(&ScanReport {
-            package_version: "4.5.0-3".to_string(),
-            reviewed_version: None,
-            entries: Vec::new(),
-            backups: Vec::new(),
-            ignored: 0,
-        });
-        assert_eq!(text(&mut screen, 80, 24), snapshot("tree-empty-80x24"));
-
-        let mut screen = TreeScreen::failed("no package database");
-        assert_eq!(text(&mut screen, 80, 24), snapshot("tree-failed-80x24"));
     }
 
     #[test]
@@ -1630,7 +1826,11 @@ mod tests {
         );
         let mut failed = Screen::failed("boom");
         let (grid, clusters) = render_once(&mut failed, 80, 24);
-        assert!(grid.display_text(&clusters).contains("scan failed: boom"));
+        let shown = grid.display_text(&clusters);
+        assert!(
+            shown.contains("scan failed") && shown.contains("boom"),
+            "{shown}"
+        );
     }
 
     #[test]
@@ -1645,5 +1845,288 @@ mod tests {
         press(&mut screen, "j");
         assert_eq!(screen.notice(), None);
         assert!(!text(&mut screen, 120, 36).contains("Applied 2 file(s)."));
+    }
+
+    macro_rules! state_snapshots {
+        ($($name:literal),* $(,)?) => {
+            &[$(($name, include_str!(concat!("../snapshots/", $name, ".txt")))),*]
+        };
+    }
+
+    const STATE_SNAPSHOTS: &[(&str, &str)] = state_snapshots![
+        "tree-state-nodrift-80x24",
+        "tree-state-nodrift-120x36",
+        "tree-state-nodrift-200x60",
+        "tree-state-untracked-80x24",
+        "tree-state-untracked-120x36",
+        "tree-state-untracked-200x60",
+        "tree-state-failed-80x24",
+        "tree-state-failed-120x36",
+        "tree-state-failed-200x60",
+        "tree-state-nomatch-80x24",
+        "tree-state-nomatch-120x36",
+        "tree-state-nomatch-200x60"
+    ];
+
+    fn state_snapshot(name: &str) -> &'static str {
+        STATE_SNAPSHOTS
+            .iter()
+            .find(|(known, _)| *known == name)
+            .map(|(_, text)| *text)
+            .unwrap_or_else(|| panic!("no snapshot {name}"))
+    }
+
+    fn calm_report() -> ScanReport {
+        let mut report = sample_report();
+        report
+            .entries
+            .retain(|entry| !drift_core::counts_as_drift(entry.status));
+        report
+    }
+
+    fn state_screen(state: &str) -> TreeScreen {
+        match state {
+            "nodrift" => TreeScreen::new(&calm_report()),
+            "untracked" => TreeScreen::new(&ScanReport {
+                package_version: "4.5.0-3".to_string(),
+                reviewed_version: None,
+                entries: Vec::new(),
+                backups: Vec::new(),
+                ignored: 0,
+            }),
+            "failed" => TreeScreen::failed(
+                "/var/lib/pacman/local/omarchy-settings-4.5.0-3/files: Permission denied (os error 13)",
+            ),
+            "nomatch" => {
+                let mut screen = TreeScreen::new(&sample_report());
+                let _ = text(&mut screen, 80, 24);
+                press(&mut screen, "/zzz");
+                screen
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn every_empty_and_error_state_matches_its_snapshot_at_three_sizes() {
+        for state in ["nodrift", "untracked", "failed", "nomatch"] {
+            for (columns, rows) in [(80, 24), (120, 36), (200, 60)] {
+                let mut screen = state_screen(state);
+                assert_eq!(
+                    text(&mut screen, columns, rows),
+                    state_snapshot(&format!("tree-state-{state}-{columns}x{rows}")),
+                    "{state} {columns}x{rows}"
+                );
+            }
+        }
+    }
+
+    fn last_row(screen: &mut TreeScreen, columns: u16, rows: u16) -> String {
+        text(screen, columns, rows)
+            .lines()
+            .last()
+            .unwrap_or_default()
+            .trim_end()
+            .to_string()
+    }
+
+    #[test]
+    fn the_no_drift_screen_offers_only_history_and_rescan() {
+        let mut screen = state_screen("nodrift");
+        assert_eq!(
+            last_row(&mut screen, 120, 36),
+            "[Q] Quit  [?] Help  [:] Palette  [R] Rescan  [H] History"
+        );
+        for code in ['o', 't', 'm', 'i', ' ', 'a'] {
+            assert_eq!(key(&mut screen, KeyCode::Char(code)), None, "{code:?}");
+        }
+        for command in crate::commands::TREE_COMMANDS
+            .iter()
+            .copied()
+            .filter(|command| acts_on_rows(*command))
+        {
+            assert_eq!(screen.run(command), None, "{command:?}");
+        }
+        assert_eq!(screen.view().marked_count(), 0);
+        assert_eq!(key(&mut screen, KeyCode::Enter), None);
+        let shown = text(&mut screen, 120, 36);
+        let index = screen
+            .view()
+            .rows()
+            .iter()
+            .position(|row| row.entry.is_some())
+            .unwrap();
+        let row = 3 + index as u16;
+        assert_eq!(screen.handle(&click_event(40, row)), None, "{shown}");
+        assert_eq!(screen.handle(&click_event(40, row)), None, "{shown}");
+        assert_eq!(key(&mut screen, KeyCode::Char('H')), Some(Action::History));
+        assert_eq!(key(&mut screen, KeyCode::Char('r')), Some(Action::Rescan));
+        let shown = text(&mut screen, 120, 36);
+        let rescan = row_of(&shown, "[R] Rescan");
+        let column = shown
+            .lines()
+            .nth(rescan as usize)
+            .unwrap()
+            .find("[R]")
+            .unwrap() as u16;
+        assert_eq!(
+            screen.handle(&click_event(column, rescan)),
+            Some(Action::Rescan)
+        );
+    }
+
+    #[test]
+    fn a_status_key_leaves_the_no_drift_screen_and_clearing_brings_it_back() {
+        let mut screen = state_screen("nodrift");
+        assert!(text(&mut screen, 120, 36).contains("Nothing needs review."));
+        press(&mut screen, "1");
+        let listed = text(&mut screen, 120, 36);
+        assert!(!listed.contains("Nothing needs review."), "{listed}");
+        assert!(listed.contains("[o] Keep"), "{listed}");
+        assert!(listed.contains("input.lua"), "{listed}");
+        press(&mut screen, "1");
+        assert!(text(&mut screen, 120, 36).contains("Nothing needs review."));
+        press(&mut screen, "/in");
+        assert!(text(&mut screen, 120, 36).contains("input.lua"));
+    }
+
+    #[test]
+    fn a_filter_with_no_files_names_the_filter_and_how_to_clear_it() {
+        let mut screen = TreeScreen::new(&calm_report());
+        press(&mut screen, "4");
+        let shown = text(&mut screen, 120, 36);
+        assert!(shown.contains("No files match"), "{shown}");
+        assert!(shown.contains("Filter: conflict"), "{shown}");
+        assert!(shown.contains("Press Esc to clear"), "{shown}");
+        assert!(last_row(&mut screen, 120, 36).contains("[/] Search"));
+        key(&mut screen, KeyCode::Esc);
+        assert!(text(&mut screen, 120, 36).contains("Nothing needs review."));
+    }
+
+    #[test]
+    fn a_failed_scan_shows_the_whole_reason_and_offers_rescan_and_history() {
+        let message =
+            "/var/lib/pacman/local/omarchy-settings-4.5.0-3/files: Permission denied (os error 13)";
+        for (columns, rows) in [(40, 14), (80, 24), (200, 60)] {
+            let mut screen = TreeScreen::failed(message);
+            let shown = text(&mut screen, columns, rows);
+            let squeezed: String = shown.split_whitespace().collect();
+            let wanted: String = message.split_whitespace().collect();
+            assert!(squeezed.contains(&wanted), "{columns}x{rows}\n{shown}");
+            assert!(shown.contains("Scan failed"), "{shown}");
+            if columns >= 80 {
+                assert!(shown.contains("[R] Rescan"), "{shown}");
+            }
+        }
+        let mut screen = TreeScreen::failed(message);
+        assert_eq!(key(&mut screen, KeyCode::Char('r')), Some(Action::Rescan));
+        assert_eq!(key(&mut screen, KeyCode::Char('H')), Some(Action::History));
+        assert_eq!(key(&mut screen, KeyCode::Char('o')), None);
+    }
+
+    #[test]
+    fn wrapping_keeps_every_character_and_splits_words_longer_than_the_line() {
+        let long = format!("{}/{}", "a".repeat(30), "b".repeat(30));
+        for columns in [1, 7, 20, 80] {
+            let lines = wrap(&format!("see {long} now 界界界 end"), columns);
+            for line in &lines {
+                assert!(width(line) <= columns.max(2), "{columns}: {line:?}");
+            }
+            let squeezed: String = lines.concat().split_whitespace().collect();
+            assert_eq!(squeezed, format!("see{long}now界界界end"), "{columns}");
+        }
+        assert_eq!(wrap("", 10), vec![String::new()]);
+    }
+
+    #[test]
+    fn the_summary_explains_the_status_and_the_badge_of_the_selected_file() {
+        let squeeze = |shown: &str| shown.split_whitespace().collect::<Vec<_>>().join(" ");
+        let wanted = |status: Status| {
+            status
+                .explain()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let mut screen = opened();
+        press(&mut screen, "4");
+        while screen.view().selected_entry().is_none() {
+            press(&mut screen, "j");
+        }
+        let shown = text(&mut screen, 200, 60);
+        let lines: Vec<&str> = shown.lines().collect();
+        assert!(
+            squeeze(&lines.join(" ")).contains(&wanted(Status::Conflict)),
+            "{shown}"
+        );
+        let mut narrow = TreeScreen::new(&sample_report());
+        press(&mut narrow, "4");
+        while narrow.view().selected_entry().is_none() {
+            press(&mut narrow, "j");
+        }
+        let shown = text(&mut narrow, 80, 24);
+        assert!(
+            squeeze(&shown).contains(
+                &wanted(Status::Conflict)
+                    .split(' ')
+                    .take(4)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn hovering_a_status_count_explains_it_on_the_info_line() {
+        let mut screen = opened();
+        let shown = text(&mut screen, 200, 60);
+        let row = row_of(&shown, "4 ✗ conflict");
+        let column = shown
+            .lines()
+            .nth(row as usize)
+            .unwrap()
+            .find("4 ✗")
+            .unwrap() as u16;
+        let hover = |column, row| Event::Mouse(MouseEvent::new(MouseKind::Move, column, row));
+        assert_eq!(screen.handle(&hover(column, row)), None);
+        let shown = text(&mut screen, 200, 60);
+        assert!(
+            shown.contains(&format!("conflict: {}", Status::Conflict.explain())),
+            "{shown}"
+        );
+        assert_eq!(screen.handle(&hover(0, 40)), None);
+        assert!(
+            !text(&mut screen, 200, 60).contains(Status::Conflict.explain().trim_end_matches('.'))
+        );
+    }
+
+    #[test]
+    fn a_notice_too_long_for_the_info_line_is_shown_in_full_beside_the_tree() {
+        let notice = "io error at /home/user/.local/share/drift/state/backups/resolve-1800000000123/manifest.json: Permission denied (os error 13)";
+        let wanted: String = notice.split_whitespace().collect();
+        for (columns, rows) in [(80, 24), (120, 36), (200, 60)] {
+            let mut screen = TreeScreen::new(&sample_report());
+            screen.set_notice(notice);
+            let shown = text(&mut screen, columns, rows);
+            let rebuilt: String = shown
+                .lines()
+                .map(|line| line.rsplit('|').next().unwrap_or(line))
+                .collect::<String>()
+                .split_whitespace()
+                .collect();
+            assert!(
+                shown.contains(notice) || rebuilt.contains(&wanted),
+                "{columns}x{rows}\n{shown}"
+            );
+        }
+        let mut calm = state_screen("nodrift");
+        calm.set_notice(notice);
+        let shown = text(&mut calm, 80, 24);
+        let squeezed: String = shown.split_whitespace().collect();
+        assert!(
+            squeezed.contains("manifest.json:Permissiondenied(oserror13)"),
+            "{shown}"
+        );
     }
 }

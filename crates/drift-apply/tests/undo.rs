@@ -729,11 +729,28 @@ fn foreign_locks_and_our_lock_refuse_the_undo() {
     fs::write(fix.root.join("runtime/omarchy-update.lock"), b"").unwrap();
     let error = undo(&fix.roots(), &request("txn-1", "undo-1")).unwrap_err();
     assert!(error.message.contains("omarchy"), "{}", error.message);
+    assert!(
+        error.message.contains(
+            &fix.root
+                .join("runtime/omarchy-update.lock")
+                .display()
+                .to_string()
+        ),
+        "{}",
+        error.message
+    );
     fs::remove_file(fix.root.join("runtime/omarchy-update.lock")).unwrap();
 
     fs::write(fix.root.join("pacman/db.lck"), b"").unwrap();
     let error = undo(&fix.roots(), &request("txn-1", "undo-1")).unwrap_err();
     assert!(error.message.contains("pacman"), "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains(&fix.root.join("pacman/db.lck").display().to_string()),
+        "{}",
+        error.message
+    );
     fs::remove_file(fix.root.join("pacman/db.lck")).unwrap();
 
     fs::write(fix.state("lock"), b"").unwrap();
