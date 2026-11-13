@@ -24,6 +24,8 @@ const QUIT: &str = "diff.quit";
 const LAYOUT: &str = "diff.layout";
 const NEXT: &str = "diff.next";
 const PREVIOUS: &str = "diff.previous";
+const NEXT_CONFLICT: &str = "diff.next-conflict";
+const PREVIOUS_CONFLICT: &str = "diff.previous-conflict";
 const FOCUS_NEXT: &str = "diff.focus-next";
 const FOCUS_PREVIOUS: &str = "diff.focus-previous";
 const WIDEN: &str = "diff.widen";
@@ -41,6 +43,9 @@ const HIGHLIGHT: Color = Color::Rgb(220, 160, 40);
 
 const QUIT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('q'), Modifiers::new())];
 const NEXT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('n'), Modifiers::new())];
+const NEXT_CONFLICT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('N'), Modifiers::new())];
+const PREVIOUS_CONFLICT_CHORDS: &[KeyChord] =
+    &[KeyChord::new(KeyCode::Char('P'), Modifiers::new())];
 const PREVIOUS_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('p'), Modifiers::new())];
 const FOCUS_NEXT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Tab, Modifiers::new())];
 const FOCUS_PREVIOUS_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Tab, Modifiers::new().shift())];
@@ -417,6 +422,35 @@ impl DiffScreen {
         self.scroll.scroll_to(self.hunk_scroll_row());
     }
 
+    fn jump_conflict(&mut self, forward: bool) {
+        let open: Vec<usize> = self
+            .merge
+            .hunks()
+            .enumerate()
+            .filter(|(index, hunk)| {
+                hunk.kind == HunkKind::Conflict && self.choices[*index].is_none()
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let target = if forward {
+            open.iter().copied().find(|index| *index > self.hunk)
+        } else {
+            open.iter().copied().rev().find(|index| *index < self.hunk)
+        };
+        self.revise();
+        match target {
+            Some(index) => {
+                self.notice = None;
+                self.hunk = index;
+                self.scroll.scroll_to(self.hunk_scroll_row());
+            }
+            None => {
+                let side = if forward { "after" } else { "before" };
+                self.notice = Some(format!("no unresolved conflict {side} this hunk"));
+            }
+        }
+    }
+
     fn stacked_unified(&self) -> bool {
         self.effective() == Layout::Stacked && !self.two_way
     }
@@ -600,6 +634,16 @@ pub(crate) fn diff_keymap() -> Keymap {
     map.register(Command::new(QUIT, "Quit", QUIT_CHORDS));
     map.register(Command::new(NEXT, "Next hunk", NEXT_CHORDS));
     map.register(Command::new(PREVIOUS, "Previous hunk", PREVIOUS_CHORDS));
+    map.register(Command::new(
+        NEXT_CONFLICT,
+        "Next unresolved conflict",
+        NEXT_CONFLICT_CHORDS,
+    ));
+    map.register(Command::new(
+        PREVIOUS_CONFLICT,
+        "Previous unresolved conflict",
+        PREVIOUS_CONFLICT_CHORDS,
+    ));
     map.register(Command::new(LAYOUT, "Layout", LAYOUT_CHORDS));
     map.register(Command::new(FOCUS_NEXT, "Next pane", FOCUS_NEXT_CHORDS));
     map.register(Command::new(
@@ -1206,6 +1250,14 @@ impl DiffScreen {
             }
             PREVIOUS => {
                 self.move_hunk(-1);
+                ControlFlow::Continue
+            }
+            NEXT_CONFLICT => {
+                self.jump_conflict(true);
+                ControlFlow::Continue
+            }
+            PREVIOUS_CONFLICT => {
+                self.jump_conflict(false);
                 ControlFlow::Continue
             }
             FOCUS_NEXT => {
@@ -3056,6 +3108,52 @@ mod tests {
             screen.result_text().unwrap(),
             "alpha\nours-middle\ntheirs-middle\nomega\n"
         );
+    }
+
+    fn four_hunks() -> DiffScreen {
+        let base = "a\n1\nb\n2\nc\n3\nd\n4\ne\n";
+        let ours = "a\nO1\nb\nO2\nc\nO3\nd\nO4\ne\n";
+        let theirs = "a\nT1\nb\n2\nc\nT3\nd\nT4\ne\n";
+        DiffScreen::new(base, ours, theirs)
+    }
+
+    #[test]
+    fn capital_n_and_p_visit_only_the_unresolved_conflicts() {
+        let mut screen = four_hunks();
+        assert_eq!(screen.hunk, 0);
+        press(&mut screen, 'N');
+        assert_eq!(screen.hunk, 2);
+        press(&mut screen, 'N');
+        assert_eq!(screen.hunk, 3);
+        press(&mut screen, 'N');
+        assert_eq!(screen.hunk, 3);
+        assert_eq!(
+            screen.notice(),
+            Some("no unresolved conflict after this hunk")
+        );
+        press(&mut screen, 'P');
+        assert_eq!(screen.hunk, 2);
+        assert_eq!(screen.notice(), None);
+        press(&mut screen, 'P');
+        assert_eq!(screen.hunk, 0);
+        press(&mut screen, 'P');
+        assert_eq!(screen.hunk, 0);
+        assert_eq!(
+            screen.notice(),
+            Some("no unresolved conflict before this hunk")
+        );
+    }
+
+    #[test]
+    fn a_resolved_conflict_is_skipped_by_the_conflict_keys() {
+        let mut screen = four_hunks();
+        press(&mut screen, 'N');
+        press(&mut screen, 'o');
+        press(&mut screen, 'p');
+        press(&mut screen, 'P');
+        assert_eq!(screen.hunk, 0);
+        press(&mut screen, 'N');
+        assert_eq!(screen.hunk, 3);
     }
 
     #[test]

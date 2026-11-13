@@ -308,6 +308,10 @@ impl Screen {
                 self.open_history();
                 return;
             }
+            Action::UndoLast => {
+                self.undo_last();
+                return;
+            }
             Action::Open(path) => {
                 self.open_diff(path);
                 return;
@@ -500,6 +504,20 @@ impl Screen {
             HistoryAction::Undo { target, force } => self.propose_undo(&target, force),
             HistoryAction::Help => self.open_help(),
             HistoryAction::Palette => self.open_palette(),
+        }
+    }
+
+    fn undo_last(&mut self) {
+        let Some(historian) = self.historian.as_mut() else {
+            self.action = Some(Action::UndoLast);
+            return;
+        };
+        match historian.rows() {
+            Ok(view) => match view.rows.first().map(|row| row.id.clone()) {
+                Some(id) => self.propose_undo(&id, false),
+                None => self.show("Nothing to undo: no transaction has been written yet."),
+            },
+            Err(message) => self.show(&message),
         }
     }
 
@@ -1814,6 +1832,31 @@ mod tests {
         assert!(text.contains("[+] undo          .config/a.conf"), "{text}");
         assert!(text.contains("restore the saved original"), "{text}");
         assert!(text.contains("[>Cancel<]"), "{text}");
+    }
+
+    #[test]
+    fn u_on_the_tree_proposes_undoing_the_newest_transaction_and_writes_nothing() {
+        let (fake, log) = historian(false, false, false, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "u");
+        assert_eq!(log.borrow().proposed, [("resolve-2".to_string(), false)]);
+        assert!(log.borrow().applied.is_empty());
+        assert!(screen.history().is_none());
+        let text = shown(&mut screen);
+        assert!(text.contains("Apply plan undo-9"), "{text}");
+        press(&mut screen, "y");
+        assert_eq!(log.borrow().applied.len(), 1);
+    }
+
+    #[test]
+    fn u_without_a_historian_or_with_a_failing_one_says_so() {
+        let (fake, _) = historian(true, false, false, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        press(&mut screen, "u");
+        assert_eq!(notice(&screen), "the state directory is unreadable");
+        assert!(!shown(&mut screen).contains("Apply plan"));
     }
 
     #[test]

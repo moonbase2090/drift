@@ -116,6 +116,7 @@ commands!(TreeCommand, TREE_COMMANDS, tree_keymap {
     Merge => ("tree.merge", "Merge", [key('m')]),
     Ignore => ("tree.ignore", "Ignore", [key('i')]),
     History => ("tree.history", "Open the history", [key('H')]),
+    UndoLast => ("tree.undo-last", "Undo the last transaction", [key('u')]),
     Back => ("tree.back", "Clear search, filter or marks", [plain(KeyCode::Esc)]),
 });
 

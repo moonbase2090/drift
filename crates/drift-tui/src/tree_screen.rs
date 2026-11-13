@@ -39,6 +39,7 @@ pub enum Action {
     Merge(Vec<String>),
     Ignore(Vec<String>),
     History,
+    UndoLast,
     Help,
     Palette,
 }
@@ -239,6 +240,7 @@ impl TreeScreen {
             TreeCommand::Merge => return self.act(Action::Merge),
             TreeCommand::Ignore => return self.act(Action::Ignore),
             TreeCommand::History => return Some(Action::History),
+            TreeCommand::UndoLast => return Some(Action::UndoLast),
             TreeCommand::Back => self.back(),
             filter => {
                 if let Some(status) = filter.status() {
