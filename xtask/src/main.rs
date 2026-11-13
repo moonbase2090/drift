@@ -142,6 +142,51 @@ fn no_comment(root: &Path) -> usize {
     failures
 }
 
+fn text_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if path.is_dir() {
+            if name != "target" && name != ".git" {
+                text_files(&path, out);
+            }
+        } else if path.is_file() {
+            out.push(path);
+        }
+    }
+}
+
+fn identifiers(root: &Path) -> usize {
+    let mut files = Vec::new();
+    text_files(root, &mut files);
+    let mut failures = 0;
+    let mut checked = 0;
+    for file in files {
+        let Ok(text) = fs::read_to_string(&file) else {
+            continue;
+        };
+        checked += 1;
+        for item in checks::identifier_violations(&text) {
+            eprintln!(
+                "{}:{}: tracker identifier or personal address `{}`",
+                relative(root, &file),
+                item.line,
+                item.what
+            );
+            failures += 1;
+        }
+    }
+    println!("identifiers: {checked} files checked, {failures} violations");
+    failures
+}
+
 fn main() -> ExitCode {
     let root = workspace_root();
     let command = std::env::args().nth(1);
@@ -150,14 +195,16 @@ fn main() -> ExitCode {
         Some("no-comment") => no_comment(&root),
         Some("fixtures-dependency") => fixtures_dependency(&root),
         Some("feature-policy") => feature_policy(&root),
+        Some("identifiers") => identifiers(&root),
         Some("check") => {
             write_check(&root)
                 + no_comment(&root)
                 + fixtures_dependency(&root)
                 + feature_policy(&root)
+                + identifiers(&root)
         }
         _ => {
-            eprintln!("Usage: cargo xtask <write-check|no-comment|fixtures-dependency|feature-policy|check>");
+            eprintln!("Usage: cargo xtask <write-check|no-comment|fixtures-dependency|feature-policy|identifiers|check>");
             return ExitCode::from(2);
         }
     };

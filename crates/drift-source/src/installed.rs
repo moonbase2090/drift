@@ -30,7 +30,7 @@ impl ReadPaths {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_OMARCHY_PATH));
-        Self::new("/", omarchy)
+        Self::new(system_root(), omarchy)
     }
 }
 
@@ -286,4 +286,14 @@ mod tests {
             installed.upgrades.len()
         );
     }
+}
+
+pub fn system_root() -> PathBuf {
+    std::env::var_os("DRIFT_ROOT")
+        .filter(|value| !value.is_empty())
+        .map_or_else(|| PathBuf::from("/"), PathBuf::from)
+}
+
+pub fn system_path(absolute: &str) -> PathBuf {
+    system_root().join(absolute.trim_start_matches('/'))
 }
