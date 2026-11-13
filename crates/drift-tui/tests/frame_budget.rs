@@ -3,34 +3,13 @@
 use std::time::Duration;
 
 use drift_core::{BaseProvenance, ScanEntry, ScanReport, Status};
+use drift_fixtures::{busy_for, cpu_cost};
 use drift_tui::TreeScreen;
 use lunatui::{render_once, App, ControlFlow};
 use lunatui_core::{ClusterTable, Grid, Rect};
 use lunatui_term::{Event, KeyCode, KeyEvent, MouseEvent, MouseKind, Scroll};
-use rustix::time::{clock_gettime, ClockId};
 
 const BUDGET: Duration = Duration::from_millis(8);
-
-fn thread_cpu_time() -> Duration {
-    let now = clock_gettime(ClockId::ThreadCPUTime);
-    Duration::new(
-        u64::try_from(now.tv_sec).unwrap_or(0),
-        u32::try_from(now.tv_nsec).unwrap_or(0),
-    )
-}
-
-fn cpu_cost(mut work: impl FnMut()) -> Duration {
-    let started = thread_cpu_time();
-    work();
-    thread_cpu_time().saturating_sub(started)
-}
-
-fn busy_for(cpu: Duration) {
-    let started = thread_cpu_time();
-    while thread_cpu_time().saturating_sub(started) < cpu {
-        std::hint::black_box(0u64);
-    }
-}
 
 struct Driver<'a>(&'a mut TreeScreen);
 

@@ -540,11 +540,11 @@ pub fn apply_decision(
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use drift_apply::{Payload, Request, Roots};
     use drift_core::{Action, FileContents, Plan, PlannedFile};
-    use drift_fixtures::{hash_tree, RootBuilder};
+    use drift_fixtures::{cpu_cost, hash_tree, RootBuilder};
     use lunatui::render_once;
     use lunatui_term::{KeyEvent, MouseEvent};
     use sha2::{Digest, Sha256};
@@ -1228,9 +1228,9 @@ mod tests {
                 if step % 2 == 0 {
                     dialog.handle(&key(KeyCode::Down));
                 }
-                let started = Instant::now();
-                let _ = render_once(&mut Wrapper(&mut dialog), columns, rows);
-                worst = worst.max(started.elapsed());
+                worst = worst.max(cpu_cost(|| {
+                    let _ = render_once(&mut Wrapper(&mut dialog), columns, rows);
+                }));
             }
             assert!(
                 worst < Duration::from_millis(8),
