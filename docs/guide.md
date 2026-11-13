@@ -107,7 +107,7 @@ Drift keeps everything it needs to put a file back.
 1. Remove the hook Drift added to Omarchy: delete `~/.config/omarchy/hooks/post-update.d/drift`, and the `drift` row in `~/.config/omarchy/extensions/omarchy-menu.jsonc` (both were added by `drift integrate`, which showed you the change first).
 2. Remove the bar widget: `drift widget remove` disables it and deletes your copy (do this before removing the binary).
 3. Stop the upgrade notice: `systemctl --user disable --now drift-notify.path` if you enabled the packaged user unit.
-4. Remove the package or binary. The pacman hooks and `/var/lib/drift/` (snapshots and the upgrade stamp) go with the package; `sudo rm -r /var/lib/drift` if you installed by hand.
+4. Remove the program. With the package, `sudo pacman -Rns omarchy-drift` removes the binary, the pacman hooks, the user units and the packaged plugin copy. If you installed by hand, delete the binary and whatever you copied, including the two hooks in `/usr/share/libalpm/hooks/` (`10-drift-snapshot.hook`, `20-drift-updated.hook`) if you added them. Either way, `/var/lib/drift/` (the template snapshots and the upgrade stamp) belongs to neither the package nor your home, so removing the package leaves it behind: delete it yourself with `sudo rm -r /var/lib/drift`.
 5. Optionally delete Drift's own data: `~/.local/state/drift` (backups, transaction records, notification setting) and `~/.local/share/drift` (recorded bases). Do this last: it is what undo reads, so after it Drift can no longer put files back.
 
 None of this touches your configuration files; they stay exactly as they are now.
