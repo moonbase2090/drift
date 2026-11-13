@@ -8,7 +8,7 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 
 ## Install
 
-The package name is `omarchy-drift`. [docs/install.md](docs/install.md) has the pacman repository snippet and the later AUR note.
+The package name is `omarchy-drift`. Follow [the signed pacman repository instructions](docs/install.md) to verify the public key and install it. [Release preparation and local signing tests](docs/releasing.md) are documented separately. AUR publishing is planned for later.
 
 ## Review screen
 
