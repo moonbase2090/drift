@@ -71,11 +71,13 @@ fn world() -> MaterializedRoot {
         .unwrap()
         .file("home/.config/omarchy/hooks/post-update.d/.keep", b"")
         .unwrap();
-    for name in ["bin/omarchy-notification-send"] {
-        builder
-            .file_with_mode(name, b"#!/bin/sh\nexit 0\n", 0o755)
-            .unwrap();
-    }
+    builder
+        .file_with_mode(
+            "bin/omarchy-notification-send",
+            b"#!/bin/sh\nexit 0\n",
+            0o755,
+        )
+        .unwrap();
     let mut listed = String::from("%FILES%\nusr/share/omarchy/config/\n");
     let mut mtree = String::from("#mtree\n/set type=file uid=0 gid=0 mode=644\n");
     for (rel, theirs, ours, base) in FILES {

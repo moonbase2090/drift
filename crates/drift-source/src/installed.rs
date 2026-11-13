@@ -246,6 +246,16 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
+pub fn system_root() -> PathBuf {
+    std::env::var_os("DRIFT_ROOT")
+        .filter(|value| !value.is_empty())
+        .map_or_else(|| PathBuf::from("/"), PathBuf::from)
+}
+
+pub fn system_path(absolute: &str) -> PathBuf {
+    system_root().join(absolute.trim_start_matches('/'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,14 +296,4 @@ mod tests {
             installed.upgrades.len()
         );
     }
-}
-
-pub fn system_root() -> PathBuf {
-    std::env::var_os("DRIFT_ROOT")
-        .filter(|value| !value.is_empty())
-        .map_or_else(|| PathBuf::from("/"), PathBuf::from)
-}
-
-pub fn system_path(absolute: &str) -> PathBuf {
-    system_root().join(absolute.trim_start_matches('/'))
 }

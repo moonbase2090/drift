@@ -214,3 +214,38 @@ fn main() -> ExitCode {
         ExitCode::FAILURE
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("xtask-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_identifier_walk_reads_text_files_and_skips_target_git_and_binaries() {
+        let root = scratch("walk");
+        let ticket = format!("see D{}", "R-5");
+        for (path, bytes) in [
+            ("docs/a.md", ticket.clone().into_bytes()),
+            ("target/b.md", ticket.clone().into_bytes()),
+            (".git/c", ticket.clone().into_bytes()),
+            ("bin.dat", vec![0xff, 0xfe, 0x00]),
+            ("clean.md", b"nothing here".to_vec()),
+        ] {
+            let file = root.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, bytes).unwrap();
+        }
+        let mut files = Vec::new();
+        text_files(&root, &mut files);
+        let names: Vec<String> = files.iter().map(|file| relative(&root, file)).collect();
+        assert_eq!(names, ["bin.dat", "clean.md", "docs/a.md"]);
+        assert_eq!(identifiers(&root), 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+}
