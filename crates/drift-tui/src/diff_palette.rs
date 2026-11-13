@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use lunatui_core::Color;
+use lunatui_theme::{Theme, Variant};
 
 const FALLBACK_BACKGROUND: [u8; 3] = [24, 24, 32];
 const ROW_PERCENT: u16 = 20;
@@ -79,6 +80,32 @@ impl DiffPalette {
             background,
         }
     }
+}
+
+pub(crate) fn variant_from_colors(source: &str) -> Variant {
+    let light = source.lines().any(|line| {
+        let line = line.split('#').next().unwrap_or(line);
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        key.trim() == "mode" && value.trim().trim_matches(['"', '\'']) == "light"
+    });
+    if light {
+        Variant::Light
+    } else {
+        Variant::Dark
+    }
+}
+
+pub(crate) fn active_variant() -> Variant {
+    colors_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map(|source| variant_from_colors(&source))
+        .unwrap_or(Variant::Dark)
+}
+
+pub(crate) fn active_theme() -> Theme {
+    Theme::builtin(active_variant())
 }
 
 impl Tints {
@@ -301,5 +328,27 @@ mod tests {
             Some(PathBuf::from("/home/me/.local/state").join(wanted))
         );
         assert_eq!(colors_path_in(None, None), None);
+    }
+
+    #[test]
+    fn a_light_omarchy_theme_selects_the_light_variant_and_everything_else_stays_dark() {
+        assert_eq!(
+            variant_from_colors("mode = \"light\"\nbackground = \"#ffffff\"\n"),
+            Variant::Light
+        );
+        assert_eq!(variant_from_colors("  mode = 'light'"), Variant::Light);
+        assert_eq!(variant_from_colors(TOKYO), Variant::Dark);
+        assert_eq!(variant_from_colors("mode = \"dark\"\n"), Variant::Dark);
+        assert_eq!(variant_from_colors("mode = \"LIGHT\"\n"), Variant::Dark);
+        assert_eq!(variant_from_colors("# mode = \"light\"\n"), Variant::Dark);
+        assert_eq!(variant_from_colors(""), Variant::Dark);
+        let light = Theme::builtin(Variant::Light);
+        let dark = Theme::builtin(Variant::Dark);
+        assert_eq!(light.variant(), Variant::Light);
+        assert_ne!(
+            light.resolve(lunatui_theme::Token::Surface0),
+            dark.resolve(lunatui_theme::Token::Surface0)
+        );
+        assert_eq!(active_theme().variant(), active_variant());
     }
 }

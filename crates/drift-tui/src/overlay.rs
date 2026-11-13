@@ -1,7 +1,7 @@
 use lunatui_core::{clip_display_prefix, Attrs, ClusterTable, Grid, Rect, Style};
 use lunatui_runtime::keymap::KeyChord;
 use lunatui_term::{Event, KeyCode, KeyEvent, KeyKind, MouseButton, MouseKind, Scroll};
-use lunatui_theme::{Theme, Token, Variant};
+use lunatui_theme::Token;
 use lunatui_widgets::{CommandPalette, PaletteEntry, RenderCx, SearchBox, Widget};
 
 use crate::commands::{chords_text, help_lines, keymap_of, Context, GlobalCommand};
@@ -77,7 +77,7 @@ impl Help {
     }
 
     pub fn render(&mut self, grid: &mut Grid, area: Rect, clusters: &mut ClusterTable) {
-        let theme = Theme::builtin(Variant::Dark);
+        let theme = crate::diff_palette::active_theme();
         let mut cx = RenderCx::new(grid, clusters, &theme);
         let base = Style::new()
             .fg(cx.token(Token::TextPrimary))
@@ -289,7 +289,7 @@ impl Palette {
 
     pub fn render(&mut self, grid: &mut Grid, area: Rect, clusters: &mut ClusterTable) {
         self.area = Some(area);
-        let theme = Theme::builtin(Variant::Dark);
+        let theme = crate::diff_palette::active_theme();
         let mut cx = RenderCx::new(grid, clusters, &theme);
         self.with_widget(true, |palette| palette.render(area, &mut cx));
     }
