@@ -188,7 +188,7 @@ impl Undoer<'_> {
 
 fn restored_message(preview: &UndoPreview, files: usize, bases: &Restored) -> String {
     let mut message = format!(
-        "Undid {} as transaction {}: {files} file(s) restored; {} reviewed base(s) restored.",
+        "Undid {} as {}: {files} file(s) and {} reviewed base(s) restored.",
         preview.target,
         preview.id,
         bases.restored.len()
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(run.result, Ok(0), "{}", run.err);
         assert!(
             run.out.contains(
-                "Undid resolve-1800000000123 as transaction undo-1800000100456: 1 file(s) restored; 1 reviewed base(s) restored."
+                "Undid resolve-1800000000123 as undo-1800000100456: 1 file(s) and 1 reviewed base(s) restored."
             ),
             "{}",
             run.out
@@ -671,7 +671,7 @@ mod tests {
                 .history()
                 .and_then(|history| history.notice())
                 .is_some_and(|notice| notice
-                    .starts_with("Undid resolve-1800000000123 as transaction undo-1800000100456")),
+                    .starts_with("Undid resolve-1800000000123 as undo-1800000100456")),
             "{:?}",
             screen.history().and_then(|history| history.notice())
         );

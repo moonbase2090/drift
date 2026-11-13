@@ -66,10 +66,14 @@ impl HistoryScreen {
 
     pub fn replace(&mut self, view: HistoryView) {
         let notice = self.notice.take();
+        let kept = self.selected_id().map(str::to_string);
         let selected = self.selected;
         *self = Self::new(view);
         self.notice = notice;
-        self.selected = selected.min(self.view.rows.len().saturating_sub(1));
+        let last = self.view.rows.len().saturating_sub(1);
+        self.selected = kept
+            .and_then(|id| self.view.rows.iter().position(|row| row.id == id))
+            .unwrap_or_else(|| selected.min(last));
     }
 
     pub fn set_notice(&mut self, text: &str) {
@@ -573,5 +577,24 @@ mod tests {
         assert_eq!(screen.selected_id(), Some("undo-1800000100456"));
         key(&mut screen, KeyCode::Char('j'));
         assert_eq!(screen.notice(), None);
+    }
+
+    #[test]
+    fn replace_keeps_the_same_transaction_selected_when_a_new_one_appears_above_it() {
+        let mut screen = HistoryScreen::new(sample());
+        key(&mut screen, KeyCode::Char('j'));
+        assert_eq!(screen.selected_id(), Some("resolve-1800000000123"));
+        let mut longer = sample();
+        longer.rows.insert(
+            0,
+            row("undo-1800000200000", "2026-11-12T10:33:20Z", 1, "1 undo"),
+        );
+        screen.replace(longer);
+        assert_eq!(screen.selected_id(), Some("resolve-1800000000123"));
+
+        let mut gone = sample();
+        gone.rows.retain(|row| row.id != "resolve-1800000000123");
+        screen.replace(gone);
+        assert_eq!(screen.selected_id(), Some("resolve-1799999000000"));
     }
 }

@@ -92,6 +92,24 @@ drift resolve "$HOME/.config/hypr/looknfeel.lua" --merge --yes
 
 Symlinks, files an app rewrites, files without a template and files already equal to upstream are skipped with a reason. A write under `~/.config/hypr` is followed by `hyprctl configerrors`, and Drift offers to undo the transaction if Hyprland reports errors.
 
+## History and undo
+
+```sh
+drift history
+drift history --json
+drift undo --dry-run
+drift undo resolve-1794539706581 --yes
+drift undo --force .config/hypr/a.lua
+```
+
+`history` lists the transactions Drift has written, newest first: id, time, package version, file count and what was done. `undo` previews what undoing a transaction (the newest by default) would restore or remove, and writes only after you answer `y`; `--yes` skips the question, `--dry-run` only prints the preview, and without a terminal nothing is written unless `--yes` is given. Undoing also puts back the reviewed bases the transaction replaced, so an undone take upstream reads as upstream changed again and an undone keep mine is no longer acknowledged. The undo is a transaction of its own and can be undone in turn.
+
+A file that changed after the transaction is left alone and named; `--force <path>` restores it anyway. Files the transaction left as they were are listed and skipped.
+
+On the tree screen `H` opens the same list. `Enter` asks to undo the selected transaction through the plan dialog, `U` also restores files that changed since, `r` reloads, and `q` goes back. The screen and the command write the same transaction. The capture below is the real `drift` binary running against a scratch home directory: it opens the history, selects a take upstream, reads the plan and confirms.
+
+![History and undo](docs/media/history.gif)
+
 ## Development
 
 Rust 1.99.1, pinned by `rust-toolchain.toml`. From this repository:
