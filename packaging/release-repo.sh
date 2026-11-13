@@ -2,7 +2,9 @@
 set -euo pipefail
 
 repo_name=omarchy-drift
-secret_name=DRIFT_PACKAGE_KEY
+secret_name=DRIFT_PACMAN_SIGNING_KEY
+key_id_name=DRIFT_PACMAN_SIGNING_KEY_ID
+published_fpr=F6365E856F3A896BABDAA4BD378705A414BF786C
 
 script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 root=$(CDPATH= cd -- "$script_dir/.." && pwd)
@@ -21,10 +23,38 @@ load_key() {
     if [ ! -f "$DRIFT_KEY_FILE" ]; then
       die "package signing key file is missing."
     fi
-    DRIFT_PACKAGE_KEY=$(cat "$DRIFT_KEY_FILE")
+    DRIFT_PACMAN_SIGNING_KEY=$(cat "$DRIFT_KEY_FILE")
   fi
-  if [ -z "${DRIFT_PACKAGE_KEY:-}" ]; then
+  if [ -z "${DRIFT_PACMAN_SIGNING_KEY:-}" ]; then
     die "Actions secret ${secret_name} is not set. Refusing to publish an unsigned repository."
+  fi
+  if [ -z "${DRIFT_PACMAN_SIGNING_KEY_ID:-}" ]; then
+    die "Actions secret ${key_id_name} is not set. Refusing to publish an unsigned repository."
+  fi
+  if [ "$DRIFT_PACMAN_SIGNING_KEY_ID" != "$published_fpr" ]; then
+    die "Actions secret ${key_id_name} does not match the published signing key."
+  fi
+}
+
+verify_published_key() {
+  local pub gnupg fpr
+  pub=$root/keys/drift-pacman-signing.pub.asc
+  if [ ! -f "$pub" ]; then
+    die "published signing key is missing."
+  fi
+  gnupg=$(mktemp -d)
+  chmod 700 "$gnupg"
+  if ! GNUPGHOME=$gnupg gpg --batch --import "$pub" >/dev/null 2>&1; then
+    rm -rf "$gnupg"
+    die "published signing key could not be imported."
+  fi
+  fpr=$(GNUPGHOME=$gnupg gpg --batch --with-colons --list-keys | awk -F: '$1 == "fpr" { print $10; exit }') || {
+    rm -rf "$gnupg"
+    exit 1
+  }
+  rm -rf "$gnupg"
+  if [ "$fpr" != "$published_fpr" ]; then
+    die "published signing key does not match the expected fingerprint."
   fi
 }
 
@@ -139,12 +169,6 @@ prepare_work() {
   if [ ! -f "$install_script" ]; then
     die "omarchy-drift.install is missing beside the PKGBUILD."
   fi
-  work=$(mktemp -d)
-  mkdir -p "$work/packaging"
-  if [ -d "$root/plugin" ]; then
-    mkdir -p "$work/plugin"
-    cp -a "$root/plugin/." "$work/plugin/"
-  fi
   if [ "$mode" = tag ]; then
     version=${DRIFT_VERSION:-}
     version=${version#v}
@@ -155,6 +179,14 @@ prepare_work() {
     if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
       die "refusing to publish version '${version}'."
     fi
+  fi
+  work=$(mktemp -d)
+  mkdir -p "$work/packaging"
+  if [ -d "$root/plugin" ]; then
+    mkdir -p "$work/plugin"
+    cp -a "$root/plugin/." "$work/plugin/"
+  fi
+  if [ "$mode" = tag ]; then
     git -C "$root" -c safe.directory="$root" archive \
       --format=tar.gz \
       --prefix="drift-${version}/" \
@@ -178,11 +210,22 @@ import_key() {
   load_key
   gnupg=$(mktemp -d)
   chmod 700 "$gnupg"
-  export GNUPGHOME=$gnupg
-  printf '%s\n' "$DRIFT_PACKAGE_KEY" | gpg --batch --import >/dev/null
-  fpr=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }') || exit 1
-  if [ -z "$fpr" ]; then
-    die "the package signing key imported no secret key."
+  printf '%s\n' 'allow-loopback-pinentry' > "$gnupg/gpg-agent.conf"
+  if ! printf '%s\n' "$DRIFT_PACMAN_SIGNING_KEY" | GNUPGHOME=$gnupg gpg --batch --pinentry-mode loopback --import >/dev/null 2>&1; then
+    rm -rf "$gnupg"
+    die "the package signing key could not be imported."
+  fi
+  fpr=$(GNUPGHOME=$gnupg gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }') || {
+    rm -rf "$gnupg"
+    exit 1
+  }
+  if [ -z "$fpr" ] || [ "$fpr" != "$published_fpr" ]; then
+    rm -rf "$gnupg"
+    die "imported signing key does not match the published fingerprint."
+  fi
+  if ! printf '%s:6:\n' "$fpr" | GNUPGHOME=$gnupg gpg --batch --import-ownertrust >/dev/null 2>&1; then
+    rm -rf "$gnupg"
+    die "the package signing key could not be trusted for signing."
   fi
   printf '%s\n' "$fpr" > "$gnupg/fpr"
   printf '%s\n' "$gnupg"
@@ -209,16 +252,21 @@ unsigned() {
 stage() {
   local dest=$1
   local work pkg gnupg fpr
+  verify_published_key
   load_key
   work=$(prepare_work tag) || exit 1
   run_makepkg "$work"
   pkg=$(built_package "$work") || exit 1
   gnupg=$(import_key) || exit 1
   fpr=$(cat "$gnupg/fpr")
+  if [ "$fpr" != "$published_fpr" ] || [ "$fpr" != "$DRIFT_PACMAN_SIGNING_KEY_ID" ]; then
+    rm -rf "$gnupg"
+    die "imported signing key does not match the published fingerprint."
+  fi
   export GNUPGHOME=$gnupg
-  gpg --batch --yes --local-user "$fpr" --detach-sign --output "${pkg}.sig" "$pkg"
-  add_repo "$dest" "$pkg" "$fpr"
-  printf '%s\n' "$fpr" > "$dest/FINGERPRINT"
+  gpg --batch --yes --pinentry-mode loopback --local-user "$DRIFT_PACMAN_SIGNING_KEY_ID" --detach-sign --output "${pkg}.sig" "$pkg"
+  add_repo "$dest" "$pkg" "$DRIFT_PACMAN_SIGNING_KEY_ID"
+  printf '%s\n' "$published_fpr" > "$dest/FINGERPRINT"
   chmod a+rX "$dest/FINGERPRINT"
   rm -rf "$work"
   cleanup_gpg
@@ -230,7 +278,15 @@ trap cleanup_gpg EXIT
 cmd=${1:-}
 case $cmd in
   check-key)
+    verify_published_key
     load_key
+    gnupg=$(import_key) || exit 1
+    fpr=$(cat "$gnupg/fpr")
+    export GNUPGHOME=$gnupg
+    if [ "$fpr" != "$published_fpr" ] || [ "$fpr" != "$DRIFT_PACMAN_SIGNING_KEY_ID" ]; then
+      die "imported signing key does not match the published fingerprint."
+    fi
+    cleanup_gpg
     printf '%s\n' "package signing key is present"
     ;;
   unsigned)

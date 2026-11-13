@@ -12,15 +12,15 @@ Server = https://github.com/moonbase2090/drift/releases/download/pacman-repo
 SigLevel = Required DatabaseRequired
 ```
 
-The repository database and the package are signed. The fingerprint is the `FINGERPRINT` file on that release. It is published when the signing key is configured. Trust it once, then install:
+The repository database and the package are signed. The public key is [`keys/drift-pacman-signing.pub.asc`](../keys/drift-pacman-signing.pub.asc). Trust it once, then install:
 
 ```
-sudo pacman-key --recv-keys <fingerprint>
-sudo pacman-key --lsign-key <fingerprint>
+sudo pacman-key --add keys/drift-pacman-signing.pub.asc
+sudo pacman-key --lsign-key F6365E856F3A896BABDAA4BD378705A414BF786C
 sudo pacman -Syu omarchy-drift
 ```
 
-A version tag replaces the assets on the `pacman-repo` release. The signing key is the Actions secret `DRIFT_PACKAGE_KEY`. It is not committed. A publish without that secret stops before it uploads anything.
+A version tag replaces the assets on the `pacman-repo` release. The signing key is the Actions secret `DRIFT_PACMAN_SIGNING_KEY`. The key id is the Actions secret `DRIFT_PACMAN_SIGNING_KEY_ID`. Neither secret is committed. A publish without the signing secret stops before it uploads anything.
 
 ## AUR
 

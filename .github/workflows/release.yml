@@ -16,23 +16,26 @@ jobs:
 
       - name: Refuse to publish without the package signing key
         env:
-          DRIFT_PACKAGE_KEY: ${{ secrets.DRIFT_PACKAGE_KEY }}
+          DRIFT_PACMAN_SIGNING_KEY: ${{ secrets.DRIFT_PACMAN_SIGNING_KEY }}
+          DRIFT_PACMAN_SIGNING_KEY_ID: ${{ secrets.DRIFT_PACMAN_SIGNING_KEY_ID }}
         run: packaging/release-repo.sh check-key
 
       - name: Build and sign the package repository
         env:
-          DRIFT_PACKAGE_KEY: ${{ secrets.DRIFT_PACKAGE_KEY }}
+          DRIFT_PACMAN_SIGNING_KEY: ${{ secrets.DRIFT_PACMAN_SIGNING_KEY }}
+          DRIFT_PACMAN_SIGNING_KEY_ID: ${{ secrets.DRIFT_PACMAN_SIGNING_KEY_ID }}
           DRIFT_VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           umask 0077
-          printf '%s\n' "$DRIFT_PACKAGE_KEY" > "$RUNNER_TEMP/package-key.asc"
+          printf '%s\n' "$DRIFT_PACMAN_SIGNING_KEY" > "$RUNNER_TEMP/package-key.asc"
           version="${DRIFT_VERSION#v}"
           docker run --rm \
             -v "$PWD:/src" \
             -v "$RUNNER_TEMP/package-key.asc:/run/package-key.asc:ro" \
             -w /src \
             -e DRIFT_KEY_FILE=/run/package-key.asc \
+            -e DRIFT_PACMAN_SIGNING_KEY_ID="$DRIFT_PACMAN_SIGNING_KEY_ID" \
             -e DRIFT_VERSION="$version" \
             archlinux:base-devel \
             bash -lc 'pacman-key --init && pacman-key --populate archlinux && pacman -Syu --noconfirm --needed base-devel git rust sudo patchelf && bash packaging/release-repo.sh stage /src/repo-out'
