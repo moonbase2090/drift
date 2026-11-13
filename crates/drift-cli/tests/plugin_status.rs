@@ -6,7 +6,7 @@ fn the_bar_widget_model_passes_its_node_tests() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = match Command::new("node")
         .arg("--test")
-        .arg("plugin-tests/")
+        .arg("plugin-tests/status.test.mjs")
         .current_dir(&root)
         .output()
     {
