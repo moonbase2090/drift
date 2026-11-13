@@ -5,7 +5,11 @@ use lunatui_term::{Event, KeyCode, KeyKind, MouseButton, MouseKind, Scroll};
 use lunatui_theme::{Theme, Token, Variant};
 use lunatui_widgets::RenderCx;
 
+use lunatui_runtime::keymap::Keymap;
+
 use drift_core::{RowKind, ScanReport, Status, TreeRow, TreeView};
+
+use crate::commands::{global_keymap, press, tree_keymap, GlobalCommand, TreeCommand};
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const WHEEL_STEP: usize = 3;
@@ -35,6 +39,8 @@ pub enum Action {
     Merge(Vec<String>),
     Ignore(Vec<String>),
     History,
+    Help,
+    Palette,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +74,8 @@ pub struct TreeScreen {
     error: Option<String>,
     notice: Option<String>,
     mode: Mode,
+    keymap: Keymap,
+    globals: Keymap,
     scroll: usize,
     follow: bool,
     area: Option<Rect>,
@@ -76,14 +84,13 @@ pub struct TreeScreen {
 
 const HINTS: &[(&str, KeyCode)] = &[
     ("[Q] Quit", KeyCode::Char('q')),
+    ("[?] Help", KeyCode::Char('?')),
+    ("[:] Palette", KeyCode::Char(':')),
     ("[/] Search", KeyCode::Char('/')),
-    ("[1-6] Filter", KeyCode::Char('1')),
-    ("[Space] Mark", KeyCode::Char(' ')),
     ("[Enter] Open", KeyCode::Enter),
     ("[o] Keep", KeyCode::Char('o')),
     ("[t] Take", KeyCode::Char('t')),
     ("[m] Merge", KeyCode::Char('m')),
-    ("[r] Rescan", KeyCode::Char('r')),
     ("[H] History", KeyCode::Char('H')),
 ];
 
@@ -101,6 +108,8 @@ impl TreeScreen {
             error: None,
             notice: None,
             mode: Mode::Normal,
+            keymap: tree_keymap(),
+            globals: global_keymap(),
             scroll: 0,
             follow: true,
             area: None,
@@ -155,45 +164,57 @@ impl TreeScreen {
         if self.mode == Mode::Search {
             return self.search_key(code);
         }
-        match code {
-            KeyCode::Char('q') => return Some(Action::Quit),
-            KeyCode::Char('r') => return Some(Action::Rescan),
-            KeyCode::Char('j') | KeyCode::Down => self.move_by(1),
-            KeyCode::Char('k') | KeyCode::Up => self.move_by(-1),
-            KeyCode::Char('h') | KeyCode::Left => {
+        let event = press(code);
+        if let Some(id) = self.globals.dispatch(&event) {
+            return match GlobalCommand::from_id(id)? {
+                GlobalCommand::Help => Some(Action::Help),
+                GlobalCommand::Palette => Some(Action::Palette),
+            };
+        }
+        let id = self.keymap.dispatch(&event)?;
+        self.run(TreeCommand::from_id(id)?)
+    }
+
+    pub fn run(&mut self, command: TreeCommand) -> Option<Action> {
+        match command {
+            TreeCommand::Quit => return Some(Action::Quit),
+            TreeCommand::Rescan => return Some(Action::Rescan),
+            TreeCommand::Down => self.move_by(1),
+            TreeCommand::Up => self.move_by(-1),
+            TreeCommand::Collapse => {
                 self.view.collapse_or_parent();
                 self.follow = true;
             }
-            KeyCode::Char('l') | KeyCode::Right => {
+            TreeCommand::Expand => {
                 self.view.expand_or_child();
                 self.follow = true;
             }
-            KeyCode::Char('g') | KeyCode::Home => {
+            TreeCommand::Top => {
                 self.view.top();
                 self.follow = true;
             }
-            KeyCode::Char('G') | KeyCode::End => {
+            TreeCommand::Bottom => {
                 self.view.bottom();
                 self.follow = true;
             }
-            KeyCode::PageDown => self.move_by(self.page()),
-            KeyCode::PageUp => self.move_by(-self.page()),
-            KeyCode::Enter => return self.open(),
-            KeyCode::Char('/') => self.mode = Mode::Search,
-            KeyCode::Char(digit @ '1'..='6') => {
-                let status = Status::ALL[usize::from(digit as u8 - b'1')];
-                self.filter(status);
+            TreeCommand::PageDown => self.move_by(self.page()),
+            TreeCommand::PageUp => self.move_by(-self.page()),
+            TreeCommand::Open => return self.open(),
+            TreeCommand::Search => self.mode = Mode::Search,
+            TreeCommand::ClearFilter => self.view.set_status_filter(None),
+            TreeCommand::Mark => self.view.toggle_mark(self.view.selected()),
+            TreeCommand::MarkAll => self.view.mark_all_in_view(),
+            TreeCommand::Keep => return self.act(Action::Keep),
+            TreeCommand::Take => return self.act(Action::Take),
+            TreeCommand::Merge => return self.act(Action::Merge),
+            TreeCommand::Ignore => return self.act(Action::Ignore),
+            TreeCommand::History => return Some(Action::History),
+            TreeCommand::Back => self.back(),
+            filter => {
+                if let Some(status) = filter.status() {
+                    self.filter(status);
+                }
             }
-            KeyCode::Char('0') => self.view.set_status_filter(None),
-            KeyCode::Char(' ') => self.view.toggle_mark(self.view.selected()),
-            KeyCode::Char('a') => self.view.mark_all_in_view(),
-            KeyCode::Char('o') => return self.act(Action::Keep),
-            KeyCode::Char('t') => return self.act(Action::Take),
-            KeyCode::Char('m') => return self.act(Action::Merge),
-            KeyCode::Char('i') => return self.act(Action::Ignore),
-            KeyCode::Char('H') => return Some(Action::History),
-            KeyCode::Esc => self.back(),
-            _ => {}
         }
         None
     }

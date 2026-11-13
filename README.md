@@ -48,6 +48,12 @@ Before anything is written, the plan dialog lists every file with its action, th
 
 ![Opening a diff](docs/media/open-diff.gif)
 
+## Help and the command palette
+
+`?` opens the help on any screen: every key of the current screen first, then the other screens and the keys that work everywhere, with `j`/`k`, `PageUp`/`PageDown` and `Home`/`End` to scroll and `Esc`, `q` or `?` to close. `:` opens the command palette: type part of an action's name, move with the arrow keys and press `Enter` to run it exactly as if you had pressed its key; the palette shows each action's keys beside it. Both are built from the same keymaps the screens use to handle keys, so a key that works is listed, and neither can drift from what the screens do. Both are unavailable while the first scan is still running and while you are typing a search, where `?` and `:` are ordinary characters. The capture below is the real `drift` binary on a scratch home directory: it opens the help, scrolls it, closes it, then opens the palette, filters to "filter loc" and runs the local override filter.
+
+![Help and palette](docs/media/help-palette.gif)
+
 ## Acting on files from the tree
 
 On the tree screen, `o` (keep mine), `t` (take upstream) and `m` (merge) act on the marked files, or on the selected file or directory when nothing is marked (`Space` marks, `a` marks everything in the filter). The action opens the plan dialog; nothing is written until you confirm, all the files in one go go into one transaction, and the screen rescans afterwards. Files that cannot be acted on are named in the notice line. The capture below is the real review screen running `cargo run -p drift-tui --example tree_actions` on a sample report; its resolver only reports what it would write. It marks two files, takes upstream, expands a diff, moves focus to Confirm and confirms.

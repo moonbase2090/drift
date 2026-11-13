@@ -21,4 +21,4 @@
 ✗ conflict 1                                                                    
 + user-only 1                                                                   
 ? missing 1                                                                     
-[Q] Quit  [/] Search  [1-6] Filter  [Space] Mark  [Enter] Open  [o] Keep        
+[Q] Quit  [?] Help  [:] Palette  [/] Search  [Enter] Open  [o] Keep  [t] Take   
