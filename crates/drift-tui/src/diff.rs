@@ -25,6 +25,8 @@ const QUIT: &str = "diff.quit";
 const LAYOUT: &str = "diff.layout";
 const NEXT: &str = "diff.next";
 const PREVIOUS: &str = "diff.previous";
+const NEXT_CONFLICT: &str = "diff.next-conflict";
+const PREVIOUS_CONFLICT: &str = "diff.previous-conflict";
 const FOCUS_NEXT: &str = "diff.focus-next";
 const FOCUS_PREVIOUS: &str = "diff.focus-previous";
 const WIDEN: &str = "diff.widen";
@@ -42,6 +44,9 @@ const HIGHLIGHT: Color = Color::Rgb(220, 160, 40);
 
 const QUIT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('q'), Modifiers::new())];
 const NEXT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('n'), Modifiers::new())];
+const NEXT_CONFLICT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('N'), Modifiers::new())];
+const PREVIOUS_CONFLICT_CHORDS: &[KeyChord] =
+    &[KeyChord::new(KeyCode::Char('P'), Modifiers::new())];
 const PREVIOUS_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('p'), Modifiers::new())];
 const FOCUS_NEXT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Tab, Modifiers::new())];
 const FOCUS_PREVIOUS_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Tab, Modifiers::new().shift())];
@@ -311,6 +316,11 @@ impl DiffScreen {
         self.plan.is_some()
     }
 
+    pub(crate) fn set_notice(&mut self, text: &str) {
+        self.revise();
+        self.notice = Some(text.to_string());
+    }
+
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
     }
@@ -416,6 +426,35 @@ impl DiffScreen {
         let next = self.hunk as isize + delta;
         self.hunk = next.clamp(0, count as isize - 1) as usize;
         self.scroll.scroll_to(self.hunk_scroll_row());
+    }
+
+    fn jump_conflict(&mut self, forward: bool) {
+        let open: Vec<usize> = self
+            .merge
+            .hunks()
+            .enumerate()
+            .filter(|(index, hunk)| {
+                hunk.kind == HunkKind::Conflict && self.choices[*index].is_none()
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let target = if forward {
+            open.iter().copied().find(|index| *index > self.hunk)
+        } else {
+            open.iter().copied().rev().find(|index| *index < self.hunk)
+        };
+        self.revise();
+        match target {
+            Some(index) => {
+                self.notice = None;
+                self.hunk = index;
+                self.scroll.scroll_to(self.hunk_scroll_row());
+            }
+            None => {
+                let side = if forward { "after" } else { "before" };
+                self.notice = Some(format!("no unresolved conflict {side} this hunk"));
+            }
+        }
     }
 
     fn stacked_unified(&self) -> bool {
@@ -601,6 +640,16 @@ pub(crate) fn diff_keymap() -> Keymap {
     map.register(Command::new(QUIT, "Quit", QUIT_CHORDS));
     map.register(Command::new(NEXT, "Next hunk", NEXT_CHORDS));
     map.register(Command::new(PREVIOUS, "Previous hunk", PREVIOUS_CHORDS));
+    map.register(Command::new(
+        NEXT_CONFLICT,
+        "Next unresolved conflict",
+        NEXT_CONFLICT_CHORDS,
+    ));
+    map.register(Command::new(
+        PREVIOUS_CONFLICT,
+        "Previous unresolved conflict",
+        PREVIOUS_CONFLICT_CHORDS,
+    ));
     map.register(Command::new(LAYOUT, "Layout", LAYOUT_CHORDS));
     map.register(Command::new(FOCUS_NEXT, "Next pane", FOCUS_NEXT_CHORDS));
     map.register(Command::new(
@@ -1035,6 +1084,28 @@ fn columns_to_bytes(text: &str, span: Span) -> Option<Range<usize>> {
     None
 }
 
+fn bottom_rows(
+    scroll: CodeViewState,
+    lines: &[Line],
+    window: u16,
+    rows: u16,
+    anchor: usize,
+) -> CodeViewState {
+    let visible = rows.max(1);
+    let mut fitted = scroll;
+    CodeView::new(lines).sync(Rect::new(0, 0, 8, visible), &mut fitted);
+    let window_rows = usize::from(window).max(1);
+    let result_rows = usize::from(visible);
+    let tall_top = scroll.top();
+    let tall_end = tall_top.saturating_add(window_rows);
+    let mut top = tall_top.saturating_add(window_rows.saturating_sub(result_rows));
+    if anchor >= tall_top && anchor < tall_end && anchor < top {
+        top = anchor;
+    }
+    fitted.scroll_to(top);
+    fitted
+}
+
 fn split_strip(body: Rect) -> (Rect, Rect) {
     let strip_height = if body.height <= 4 {
         1.min(body.height)
@@ -1209,6 +1280,14 @@ impl DiffScreen {
                 self.move_hunk(-1);
                 ControlFlow::Continue
             }
+            NEXT_CONFLICT => {
+                self.jump_conflict(true);
+                ControlFlow::Continue
+            }
+            PREVIOUS_CONFLICT => {
+                self.jump_conflict(false);
+                ControlFlow::Continue
+            }
             FOCUS_NEXT => {
                 self.move_focus(1);
                 ControlFlow::Continue
@@ -1337,7 +1416,8 @@ impl DiffScreen {
 
     fn render_two(&mut self, body: Rect, cx: &mut RenderCx<'_>, accent: Style, text: Style) {
         let (top, strip) = split_strip(body);
-        let scroll = self.prepare_scroll(top.height.saturating_sub(1));
+        let window = top.height.saturating_sub(1);
+        let scroll = self.prepare_scroll(window);
         let tints = self.palette.tints(cx.token(Token::Surface0));
         let (left, right) = split_pair(top);
         let ours = if self.focused() == "ours" {
@@ -1378,11 +1458,23 @@ impl DiffScreen {
         } else {
             text
         };
+        let result_rows = strip.height.saturating_sub(1);
+        let result_scroll = if result_rows < window {
+            bottom_rows(
+                scroll,
+                &self.aligned.result,
+                window,
+                result_rows,
+                self.hunk_scroll_row(),
+            )
+        } else {
+            scroll
+        };
         self.render_code(
             strip,
             ("result", result),
             &self.aligned.result,
-            scroll,
+            result_scroll,
             &tints,
             cx,
         );
@@ -3095,6 +3187,52 @@ mod tests {
         );
     }
 
+    fn four_hunks() -> DiffScreen {
+        let base = "a\n1\nb\n2\nc\n3\nd\n4\ne\n";
+        let ours = "a\nO1\nb\nO2\nc\nO3\nd\nO4\ne\n";
+        let theirs = "a\nT1\nb\n2\nc\nT3\nd\nT4\ne\n";
+        DiffScreen::new(base, ours, theirs)
+    }
+
+    #[test]
+    fn capital_n_and_p_visit_only_the_unresolved_conflicts() {
+        let mut screen = four_hunks();
+        assert_eq!(screen.hunk, 0);
+        press(&mut screen, 'N');
+        assert_eq!(screen.hunk, 2);
+        press(&mut screen, 'N');
+        assert_eq!(screen.hunk, 3);
+        press(&mut screen, 'N');
+        assert_eq!(screen.hunk, 3);
+        assert_eq!(
+            screen.notice(),
+            Some("no unresolved conflict after this hunk")
+        );
+        press(&mut screen, 'P');
+        assert_eq!(screen.hunk, 2);
+        assert_eq!(screen.notice(), None);
+        press(&mut screen, 'P');
+        assert_eq!(screen.hunk, 0);
+        press(&mut screen, 'P');
+        assert_eq!(screen.hunk, 0);
+        assert_eq!(
+            screen.notice(),
+            Some("no unresolved conflict before this hunk")
+        );
+    }
+
+    #[test]
+    fn a_resolved_conflict_is_skipped_by_the_conflict_keys() {
+        let mut screen = four_hunks();
+        press(&mut screen, 'N');
+        press(&mut screen, 'o');
+        press(&mut screen, 'p');
+        press(&mut screen, 'P');
+        assert_eq!(screen.hunk, 0);
+        press(&mut screen, 'N');
+        assert_eq!(screen.hunk, 3);
+    }
+
     #[test]
     fn an_unresolved_conflict_blocks_write_and_says_why() {
         let (base, ours, theirs) = conflict_files();
@@ -3297,5 +3435,116 @@ mod tests {
         }
         assert!(screen.run("diff.nope").is_none());
         assert_eq!(screen.run("diff.quit"), Some(ControlFlow::Break));
+    }
+
+    fn assert_last_line_above_the_hint(text: &str, marker: &str) {
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines.len() >= 2, "{text}");
+        let hint = lines[lines.len() - 1];
+        assert!(hint.contains("[Q]"), "{hint}");
+        assert!(!hint.contains(marker), "hint covers the last line: {hint}");
+        assert!(
+            lines[..lines.len() - 1]
+                .iter()
+                .any(|line| line.contains(marker)),
+            "last line {marker} is not visible\n{text}"
+        );
+    }
+
+    #[test]
+    fn the_result_and_stacked_panes_keep_their_last_line_above_the_hint() {
+        let mut screen = long_file();
+        let _ = render_text(&mut screen, 121, 33);
+        screen.scroll_by(10_000);
+        let (_, text) = render_text(&mut screen, 121, 33);
+        let lines: Vec<&str> = text.lines().collect();
+        let result = lines
+            .iter()
+            .position(|line| line.starts_with("result"))
+            .expect("result pane");
+        let result_pane = &lines[result + 1..lines.len() - 1];
+        assert!(
+            result_pane.iter().any(|line| line.contains("o79")),
+            "result pane hides its last line: {result_pane:?}"
+        );
+        assert!(!lines[lines.len() - 1].contains("o79"));
+        screen.run(LAYOUT);
+        let _ = render_text(&mut screen, 121, 33);
+        screen.scroll_by(10_000);
+        let (_, stacked) = render_text(&mut screen, 121, 33);
+        assert!(stacked.contains("stacked"), "{stacked}");
+        assert_last_line_above_the_hint(&stacked, "o79");
+
+        let mut narrow = long_file();
+        let _ = render_text(&mut narrow, 80, 24);
+        narrow.scroll_by(10_000);
+        let (_, text) = render_text(&mut narrow, 80, 24);
+        assert!(text.contains("stacked"), "{text}");
+        assert_last_line_above_the_hint(&text, "o79");
+
+        let mut lines = String::new();
+        for index in 0..40 {
+            lines.push_str(&format!("line{index:02}\n"));
+        }
+        let mut duo = DiffScreen::without_base(&lines, &lines.replace("line39", "ENDLINE"));
+        let _ = render_text(&mut duo, 80, 24);
+        duo.scroll_by(10_000);
+        let (_, text) = render_text(&mut duo, 80, 24);
+        assert!(text.contains("theirs"), "{text}");
+        assert_last_line_above_the_hint(&text, "ENDLINE");
+    }
+
+    fn result_strip(text: &str) -> String {
+        let lines: Vec<&str> = text.lines().collect();
+        let result = lines
+            .iter()
+            .position(|line| line.starts_with("result"))
+            .expect("result pane");
+        lines[result + 1..lines.len() - 1].join("\n")
+    }
+
+    #[test]
+    fn resolving_an_early_conflict_stays_visible_in_the_result_strip() {
+        let tail = (0..70)
+            .map(|index| format!("context{index:02}\n"))
+            .collect::<String>();
+        let mut screen = DiffScreen::new(
+            &format!("BASE_SELECTED\n{tail}"),
+            &format!("MINE_SELECTED\n{tail}"),
+            &format!("THEIRS_SELECTED\n{tail}"),
+        );
+        let _ = render_text(&mut screen, 121, 33);
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('o'))));
+        assert!(screen.result_text().unwrap().starts_with("MINE_SELECTED"));
+        let (_, text) = render_text(&mut screen, 121, 33);
+        let strip = result_strip(&text);
+        assert!(
+            strip.contains("MINE_SELECTED"),
+            "result strip hid the resolved line:\n{strip}"
+        );
+        assert!(text.contains("MINE_SELECTED"));
+        screen.scroll_by(10_000);
+        let (_, end) = render_text(&mut screen, 121, 33);
+        let end_strip = result_strip(&end);
+        assert!(
+            end_strip.contains("context69"),
+            "result strip hid the last line:\n{end_strip}"
+        );
+
+        let mut jumped = DiffScreen::new(
+            &format!("BASE_SELECTED\n{tail}END_BASE\n"),
+            &format!("MINE_SELECTED\n{tail}END_MINE\n"),
+            &format!("THEIRS_SELECTED\n{tail}END_THEIRS\n"),
+        );
+        let _ = render_text(&mut jumped, 121, 33);
+        jumped.update(&Event::Key(KeyEvent::press(KeyCode::Char('o'))));
+        jumped.update(&Event::Key(KeyEvent::press(KeyCode::Char('n'))));
+        let (_, jumped_text) = render_text(&mut jumped, 121, 33);
+        let jumped_strip = result_strip(&jumped_text);
+        assert!(
+            jumped_strip.contains("unresolved"),
+            "result strip hid the hunk jump:\n{jumped_strip}"
+        );
+        assert!(jumped_text.contains("END_MINE"), "{jumped_text}");
     }
 }

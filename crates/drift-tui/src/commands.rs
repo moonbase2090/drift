@@ -137,7 +137,7 @@ impl TreeCommand {
 commands!(HistoryCommand, HISTORY_COMMANDS, history_keymap {
     Back => ("history.back", "Back to the tree", [key('q'), plain(KeyCode::Esc)]),
     Refresh => ("history.refresh", "Reload the history", [key('r')]),
-    Undo => ("history.undo", "Undo the selected transaction", [plain(KeyCode::Enter), key('u')]),
+    Undo => ("history.undo", "Undo the selected transaction", [plain(KeyCode::Enter)]),
     UndoForce => ("history.undo-force", "Undo and restore changed files too", [key('U')]),
     Down => ("history.down", "Move down", [key('j'), plain(KeyCode::Down)]),
     Up => ("history.up", "Move up", [key('k'), plain(KeyCode::Up)]),
@@ -150,6 +150,7 @@ commands!(HistoryCommand, HISTORY_COMMANDS, history_keymap {
 commands!(GlobalCommand, GLOBAL_COMMANDS, global_keymap {
     Help => ("global.help", "Show the help", [key('?')]),
     Palette => ("global.palette", "Open the command palette", [key(':')]),
+    UndoLast => ("global.undo-last", "Undo the last transaction", [key('u')]),
 });
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
