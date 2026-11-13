@@ -5,7 +5,7 @@
     ▾ [ ] waybar/  (2 files, 0 drifted)                                 | .config/waybar/config.jsonc                   
 >       [ ] ✓ unchanged         config.jsonc                            | template: config/waybar/config.jsonc          
         [ ] ≠ local override    style.css  [base unknown]               | base: none                                    
-                                                                        |                                               
+                                                                        | Your file matches the shipped template.       
                                                                         |                                               
                                                                         |                                               
                                                                         |                                               
