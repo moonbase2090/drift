@@ -187,31 +187,36 @@ fn identifiers(root: &Path) -> usize {
     failures
 }
 
+type Check = fn(&Path) -> usize;
+
+const CHECKS: [(&str, Check); 5] = [
+    ("write-check", write_check),
+    ("no-comment", no_comment),
+    ("fixtures-dependency", fixtures_dependency),
+    ("feature-policy", feature_policy),
+    ("identifiers", identifiers),
+];
+
+fn failures_of(command: &str, root: &Path) -> Option<usize> {
+    if command == "check" {
+        return Some(CHECKS.iter().map(|(_, check)| check(root)).sum());
+    }
+    CHECKS
+        .iter()
+        .find(|(name, _)| *name == command)
+        .map(|(_, check)| check(root))
+}
+
 fn main() -> ExitCode {
     let root = workspace_root();
-    let command = std::env::args().nth(1);
-    let failures = match command.as_deref() {
-        Some("write-check") => write_check(&root),
-        Some("no-comment") => no_comment(&root),
-        Some("fixtures-dependency") => fixtures_dependency(&root),
-        Some("feature-policy") => feature_policy(&root),
-        Some("identifiers") => identifiers(&root),
-        Some("check") => {
-            write_check(&root)
-                + no_comment(&root)
-                + fixtures_dependency(&root)
-                + feature_policy(&root)
-                + identifiers(&root)
-        }
-        _ => {
+    let command = std::env::args().nth(1).unwrap_or_default();
+    match failures_of(&command, &root) {
+        Some(0) => ExitCode::SUCCESS,
+        Some(_) => ExitCode::FAILURE,
+        None => {
             eprintln!("Usage: cargo xtask <write-check|no-comment|fixtures-dependency|feature-policy|identifiers|check>");
-            return ExitCode::from(2);
+            ExitCode::from(2)
         }
-    };
-    if failures == 0 {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
     }
 }
 
@@ -246,6 +251,8 @@ mod tests {
         let names: Vec<String> = files.iter().map(|file| relative(&root, file)).collect();
         assert_eq!(names, ["bin.dat", "clean.md", "docs/a.md"]);
         assert_eq!(identifiers(&root), 1);
+        assert_eq!(failures_of("identifiers", &root), Some(1));
+        assert_eq!(failures_of("no-such-check", &root), None);
         let _ = fs::remove_dir_all(&root);
     }
 }
