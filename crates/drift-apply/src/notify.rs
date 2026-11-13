@@ -119,10 +119,17 @@ pub fn update_running(omarchy_lock: &Path, pacman_lock: &Path) -> bool {
 }
 
 fn update_running_from(omarchy_lock: &Path, pacman_lock: &Path, inherited: Option<i32>) -> bool {
+    if pacman_database_locked(pacman_lock) {
+        return true;
+    }
     if inherited_lock(omarchy_lock, inherited) {
         return false;
     }
-    foreign_lock(omarchy_lock) || foreign_lock(pacman_lock)
+    foreign_lock(omarchy_lock)
+}
+
+fn pacman_database_locked(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
 }
 
 fn inherited_lock(lock: &Path, inherited: Option<i32>) -> bool {
@@ -215,6 +222,8 @@ fn symlink_at(path: &Path) -> Result<bool, NotifyError> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::{CStr, CString};
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
 
     use super::*;
@@ -306,36 +315,70 @@ mod tests {
         let root = drift_fixtures::RootBuilder::new()
             .file("run/omarchy-update.lock", b"")
             .unwrap()
-            .file("db.lck", b"")
-            .unwrap()
             .materialize()
             .unwrap();
         let omarchy = root.path().join("run/omarchy-update.lock");
-        let pacman = root.path().join("db.lck");
         let absent = root.path().join("missing.lock");
         assert!(!update_running_from(&omarchy, &absent, None));
-        assert!(!update_running_from(&absent, &pacman, None));
         assert!(!update_running_from(&absent, &absent, None));
-        assert!(!update_running_from(&omarchy, &pacman, Some(-1)));
-        assert!(!update_running_from(&omarchy, &pacman, Some(1_000_000)));
+        assert!(!update_running_from(&omarchy, &absent, Some(-1)));
+        assert!(!update_running_from(&omarchy, &absent, Some(1_000_000)));
 
         {
             let _held = hold(&omarchy);
             assert!(update_running_from(&omarchy, &absent, None));
-            assert!(!update_running_from(&absent, &pacman, None));
+            assert!(!update_running_from(&absent, &absent, None));
         }
         assert!(!update_running_from(&omarchy, &absent, None));
-
-        {
-            let _held = hold(&pacman);
-            assert!(update_running_from(&absent, &pacman, None));
-            assert!(update_running_from(&omarchy, &pacman, None));
-        }
-        assert!(!update_running_from(&absent, &pacman, None));
     }
 
     #[test]
     fn the_post_update_hook_sends_while_its_lock_is_held() {
+        let root = drift_fixtures::RootBuilder::new()
+            .file("run/omarchy-update.lock", b"")
+            .unwrap()
+            .file("other.lock", b"")
+            .unwrap()
+            .materialize()
+            .unwrap();
+        let omarchy = root.path().join("run/omarchy-update.lock");
+        let absent = root.path().join("missing.lck");
+        let hook = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&omarchy)
+            .unwrap();
+        let fd = hook.as_raw_fd();
+        assert_eq!(unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) }, 0);
+        assert!(!update_running_from(&omarchy, &absent, Some(fd)));
+        drop(hook);
+        let other = OpenOptions::new()
+            .read(true)
+            .open(root.path().join("other.lock"))
+            .unwrap();
+        {
+            let _held = hold(&omarchy);
+            assert!(update_running_from(
+                &omarchy,
+                &absent,
+                Some(other.as_raw_fd())
+            ));
+        }
+        assert!(!update_running_from(&omarchy, &absent, None));
+        let inherited = OpenOptions::new().read(true).open(&omarchy).unwrap();
+        assert!(!update_running_from(
+            &omarchy,
+            &absent,
+            Some(inherited.as_raw_fd())
+        ));
+        drop(inherited);
+        assert!(!update_running_from(&omarchy, &absent, None));
+    }
+
+    #[test]
+    fn an_existing_pacman_lock_suppresses_even_for_the_hook() {
+        use std::os::unix::fs::PermissionsExt;
+
         let root = drift_fixtures::RootBuilder::new()
             .file("run/omarchy-update.lock", b"")
             .unwrap()
@@ -345,38 +388,55 @@ mod tests {
             .unwrap();
         let omarchy = root.path().join("run/omarchy-update.lock");
         let pacman = root.path().join("db.lck");
-        let hook = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&omarchy)
-            .unwrap();
+        let absent = root.path().join("missing.lock");
+        assert!(update_running_from(&absent, &pacman, None));
+        assert!(OpenOptions::new().read(true).open(&pacman).is_ok());
+        fs::set_permissions(&pacman, fs::Permissions::from_mode(0o0)).unwrap();
+        assert!(OpenOptions::new().read(true).open(&pacman).is_err());
+        assert!(update_running_from(&absent, &pacman, None));
+        let hook = OpenOptions::new().read(true).open(&omarchy).unwrap();
         let fd = hook.as_raw_fd();
         assert_eq!(unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) }, 0);
+        assert!(update_running_from(&omarchy, &pacman, Some(fd)));
+        fs::remove_file(&pacman).unwrap();
         assert!(!update_running_from(&omarchy, &pacman, Some(fd)));
-        {
-            let _held = hold(&pacman);
-            assert!(!update_running_from(&omarchy, &pacman, Some(fd)));
-            assert!(update_running_from(&omarchy, &pacman, None));
-        }
-        drop(hook);
-        let other = OpenOptions::new().read(true).open(&pacman).unwrap();
-        {
-            let _held = hold(&omarchy);
-            assert!(update_running_from(
-                &omarchy,
-                &pacman,
-                Some(other.as_raw_fd())
-            ));
-        }
-        assert!(!update_running_from(&omarchy, &pacman, None));
-        let inherited = OpenOptions::new().read(true).open(&omarchy).unwrap();
+        assert!(!update_running_from(&absent, &pacman, None));
+    }
+
+    #[test]
+    fn a_libalpm_transaction_suppresses_until_the_lock_is_removed() {
+        let root = drift_fixtures::RootBuilder::new().materialize().unwrap();
+        let db = root.path().join("db");
+        fs::create_dir(&db).unwrap();
+        let omarchy = root.path().join("missing.lock");
+        let lock = db.join("db.lck");
+        let mut alpm = Alpm::start(root.path(), &db);
+        let mode = fs::symlink_metadata(&lock).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0);
+        assert!(OpenOptions::new().read(true).open(&lock).is_err());
+        assert!(update_running_from(&omarchy, &lock, None));
+        let held = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.path().join("omarchy.lock"))
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        assert!(update_running_from(
+            &root.path().join("omarchy.lock"),
+            &lock,
+            Some(held.as_raw_fd())
+        ));
+        alpm.end();
+        assert!(fs::symlink_metadata(&lock).is_err());
         assert!(!update_running_from(
             &omarchy,
-            &pacman,
-            Some(inherited.as_raw_fd())
+            &lock,
+            Some(held.as_raw_fd())
         ));
-        drop(inherited);
-        assert!(!update_running_from(&omarchy, &pacman, None));
+        assert!(!update_running_from(&omarchy, &lock, None));
     }
 
     struct Held(std::process::Child);
@@ -415,5 +475,89 @@ mod tests {
 
     fn hold(path: &Path) -> Held {
         Held::at(path)
+    }
+
+    struct Alpm {
+        lib: *mut libc::c_void,
+        handle: *mut libc::c_void,
+        trans_release: unsafe extern "C" fn(*mut libc::c_void) -> i32,
+        release: unsafe extern "C" fn(*mut libc::c_void) -> i32,
+        open: bool,
+    }
+
+    impl Alpm {
+        fn start(root: &Path, db: &Path) -> Self {
+            let lib = open_alpm();
+            let initialize = load::<
+                unsafe extern "C" fn(
+                    *const libc::c_char,
+                    *const libc::c_char,
+                    *mut i32,
+                ) -> *mut libc::c_void,
+            >(lib, c"alpm_initialize");
+            let trans_init = load::<unsafe extern "C" fn(*mut libc::c_void, i32) -> i32>(
+                lib,
+                c"alpm_trans_init",
+            );
+            let trans_release =
+                load::<unsafe extern "C" fn(*mut libc::c_void) -> i32>(lib, c"alpm_trans_release");
+            let release =
+                load::<unsafe extern "C" fn(*mut libc::c_void) -> i32>(lib, c"alpm_release");
+            let root_text = CString::new(format!("{}/", root.display())).unwrap();
+            let db_text = CString::new(db.display().to_string()).unwrap();
+            let mut err = 0;
+            let handle = unsafe { initialize(root_text.as_ptr(), db_text.as_ptr(), &mut err) };
+            assert!(!handle.is_null(), "alpm_initialize failed: {err}");
+            let status = unsafe { trans_init(handle, 0) };
+            assert_eq!(status, 0, "alpm_trans_init failed");
+            Self {
+                lib,
+                handle,
+                trans_release,
+                release,
+                open: true,
+            }
+        }
+
+        fn end(&mut self) {
+            assert!(self.open);
+            let status = unsafe { (self.trans_release)(self.handle) };
+            assert_eq!(status, 0, "alpm_trans_release failed");
+            self.open = false;
+        }
+    }
+
+    impl Drop for Alpm {
+        fn drop(&mut self) {
+            unsafe {
+                if self.open {
+                    (self.trans_release)(self.handle);
+                }
+                (self.release)(self.handle);
+                libc::dlclose(self.lib);
+            }
+        }
+    }
+
+    fn open_alpm() -> *mut libc::c_void {
+        for name in [
+            c"libalpm.so",
+            c"libalpm.so.16",
+            c"libalpm.so.15",
+            c"libalpm.so.14",
+            c"libalpm.so.13",
+        ] {
+            let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW) };
+            if !handle.is_null() {
+                return handle;
+            }
+        }
+        panic!("libalpm is not available");
+    }
+
+    fn load<T>(lib: *mut libc::c_void, name: &CStr) -> T {
+        let found = unsafe { libc::dlsym(lib, name.as_ptr()) };
+        assert!(!found.is_null(), "missing {name:?}");
+        unsafe { std::mem::transmute_copy(&found) }
     }
 }

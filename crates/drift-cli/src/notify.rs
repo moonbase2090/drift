@@ -235,6 +235,24 @@ mod tests {
         assert_eq!(code.unwrap(), 0);
         assert_eq!(sent, ["1 config drifted"]);
 
+        let locked = world(&[("hypr/a.lua", b"new\n", b"")], &[("db.lck", "")]);
+        let scanned = paths(&locked);
+        let mut blocked = Vec::new();
+        let code = run_with(
+            &scanned,
+            &scanned.resolve.state,
+            &locked.path().join("absent.lock"),
+            &locked.path().join("db.lck"),
+            Request::Send,
+            &mut Vec::new(),
+            |notice| {
+                blocked.push(notice.headline.clone());
+                Ok(())
+            },
+        );
+        assert_eq!(code.unwrap(), 0);
+        assert!(blocked.is_empty());
+
         let again = world(&[("hypr/a.lua", b"new\n", b"")], &[]);
         let (code, out, _) = drive(&again, Request::Disable);
         assert_eq!(code.unwrap(), 0);
