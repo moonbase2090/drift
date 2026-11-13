@@ -4,8 +4,8 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use drift_apply::{
-    execute, pending_prune, undo, undo_with_bases, undo_with_bases_probed, HyprlandCheck,
-    HyprlandStatus, Roots, UndoOutcome, UndoRequest, WriteFollowup,
+    execute, pending_prune, recorded_bases, undo, undo_with_bases, undo_with_bases_probed,
+    HyprlandCheck, HyprlandStatus, Roots, UndoOutcome, UndoRequest, WriteFollowup,
 };
 use drift_core::{prepare, Action, Prepared, Registry, RelPath, ScanReport, Status};
 use drift_fixtures::{hash_tree, MaterializedRoot, RootBuilder};
@@ -809,4 +809,24 @@ fn undoing_the_oldest_kept_transaction_still_restores_its_bases_when_the_undo_pr
         base(&world, "hypr/a.lua").as_deref(),
         Some("upstream new\n")
     );
+}
+
+#[test]
+fn the_recorded_bases_of_a_transaction_are_listed_and_empty_without_a_record() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "new\n", Some("mine\n"), Some("old\n"));
+    builder.file("hypr/b.lua", "new b\n", Some("mine b\n"), Some("old b\n"));
+    let world = builder.build();
+    let (prepared, _) = world.prepared(
+        Action::KeepMine,
+        "txn-1",
+        &[".config/hypr/a.lua", ".config/hypr/b.lua"],
+    );
+    execute(&world.roots(), &world.share(), &prepared, &Quiet).unwrap();
+    let mut listed = recorded_bases(&world.path("state"), "txn-1").unwrap();
+    listed.sort();
+    assert_eq!(listed, ["config/hypr/a.lua", "config/hypr/b.lua"]);
+    assert!(recorded_bases(&world.path("state"), "missing")
+        .unwrap()
+        .is_empty());
 }

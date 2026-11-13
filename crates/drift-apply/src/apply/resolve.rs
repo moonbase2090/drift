@@ -165,6 +165,14 @@ fn remove_base(share: &Path, root: &str, rel: &RelPath) -> bool {
     }
 }
 
+pub fn recorded_bases(state: &Path, target: &str) -> Result<Vec<String>, ApplyError> {
+    Ok(load_previous(state, target)?
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(root, rel, _)| format!("{root}/{}", rel.as_str()))
+        .collect())
+}
+
 pub fn restore_reviewed_bases(
     share: &Path,
     state: &Path,

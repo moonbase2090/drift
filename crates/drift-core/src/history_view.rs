@@ -129,6 +129,7 @@ pub struct UndoPreview {
     pub time: String,
     pub package_version: String,
     pub lines: Vec<UndoLine>,
+    pub bases: Vec<String>,
 }
 
 fn short(hash: Option<&String>) -> String {
@@ -191,6 +192,9 @@ impl UndoPreview {
             };
             out.push_str(&text);
         }
+        for base in &self.bases {
+            out.push_str(&format!("reviewed base    {base}  (put back as it was)\n"));
+        }
         out
     }
 
@@ -233,6 +237,15 @@ impl UndoPreview {
                     diff_truncated: false,
                 }
             })
+            .chain(self.bases.iter().map(|base| FileView {
+                path: format!("reviewed base {base}"),
+                action: Action::Undo,
+                backup: "none (only the reviewed base changes)".to_string(),
+                mode: None,
+                summary: DiffSummary::Text("put the reviewed base back".to_string()),
+                diff: Vec::new(),
+                diff_truncated: false,
+            }))
             .collect();
         PlanView {
             id: self.id.clone(),
@@ -339,6 +352,7 @@ broken-1  (manifest unreadable)
                     },
                 ),
             ],
+            bases: vec!["config/a".to_string()],
         }
     }
 
@@ -358,6 +372,7 @@ remove           .config/b
 already original .config/c
 kept             .config/d  (nothing was written)
 changed since    .config/e  (expected 73cb3858a687, found absent; left alone; --force .config/e restores it anyway)
+reviewed base    config/a  (put back as it was)
 
 Dry run: nothing was written.
 "
@@ -382,14 +397,20 @@ Dry run: nothing was written.
         let view = preview().plan_view("STATE", &[]);
         assert_eq!(view.id, "undo-9");
         let paths: Vec<&str> = view.files.iter().map(|file| file.path.as_str()).collect();
-        assert_eq!(paths, [".config/a", ".config/b"]);
+        assert_eq!(paths, [".config/a", ".config/b", "reviewed base config/a"]);
         assert_eq!(view.files[0].action, Action::Undo);
         assert_eq!(view.files[0].backup, "STATE/backups/undo-9/.config/a");
         assert_eq!(view.files[0].summary.label(), "restore the saved original");
         assert_eq!(view.files[1].summary.label(), "remove the file");
+        assert_eq!(view.files[2].action, Action::Undo);
+        assert_eq!(view.files[2].summary.label(), "put the reviewed base back");
+        assert_eq!(
+            view.files[2].backup,
+            "none (only the reviewed base changes)"
+        );
 
         let forced = preview().plan_view("STATE", &[".config/e".to_string()]);
-        assert_eq!(forced.files.len(), 3);
+        assert_eq!(forced.files.len(), 4);
         assert_eq!(
             forced.files[2].summary.label(),
             "changed since; restored anyway"
@@ -398,5 +419,27 @@ Dry run: nothing was written.
             forced.files[2].diff,
             ["expected 73cb3858a687, found absent"]
         );
+    }
+
+    #[test]
+    fn a_keep_mine_undo_has_only_a_base_to_put_back_and_still_has_something_to_show() {
+        let view = UndoPreview {
+            target: "resolve-3".to_string(),
+            id: "undo-10".to_string(),
+            time: "2026-06-03T09:00:00Z".to_string(),
+            package_version: "4.5.0-3".to_string(),
+            lines: vec![UndoLine {
+                path: ".config/k".to_string(),
+                kind: UndoKind::Kept,
+            }],
+            bases: vec!["config/k".to_string()],
+        };
+        assert_eq!(view.changes(&[]), 0);
+        let plan = view.plan_view("STATE", &[]);
+        assert_eq!(plan.files.len(), 1);
+        assert_eq!(plan.files[0].path, "reviewed base config/k");
+        assert!(view
+            .render_body(&[])
+            .contains("reviewed base    config/k  (put back as it was)"));
     }
 }

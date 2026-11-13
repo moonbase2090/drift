@@ -2,7 +2,8 @@ use std::io::{BufRead, Write};
 use std::time::Duration;
 
 use drift_apply::{
-    history, inspect_undo, undo_with_bases, Restored, Roots, UndoOutcome, UndoRequest, UndoStatus,
+    history, inspect_undo, recorded_bases, undo_with_bases, Restored, Roots, UndoOutcome,
+    UndoRequest, UndoStatus,
 };
 use drift_core::{HistoryView, UndoKind, UndoLine, UndoPreview};
 use drift_source::{read_package, ScanPaths};
@@ -142,6 +143,7 @@ impl Undoer<'_> {
             time: utc_timestamp(elapsed.as_secs()),
             package_version,
             lines: items.into_iter().map(line_of).collect(),
+            bases: recorded_bases(&self.roots.state, target).map_err(|error| error.to_string())?,
         })
     }
 
@@ -268,6 +270,63 @@ pub fn run_undo(
     let done = undoer.perform(&preview, &forced)?;
     say(out, &format!("\n{}\n", done.message))?;
     Ok(0)
+}
+
+pub struct LiveHistorian {
+    paths: ScanPaths,
+    roots: Roots,
+    clock: fn() -> Duration,
+}
+
+pub fn system_clock() -> Duration {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}
+
+impl LiveHistorian {
+    pub fn new(paths: ScanPaths, roots: Roots, clock: fn() -> Duration) -> Self {
+        Self {
+            paths,
+            roots,
+            clock,
+        }
+    }
+
+    fn undoer(&self) -> Undoer<'_> {
+        Undoer {
+            roots: &self.roots,
+            paths: &self.paths,
+        }
+    }
+}
+
+impl drift_tui::Historian for LiveHistorian {
+    fn rows(&mut self) -> Result<HistoryView, String> {
+        self.undoer().view()
+    }
+
+    fn propose(&mut self, target: &str, force: bool) -> Result<drift_tui::UndoProposal, String> {
+        let preview = self.undoer().preview(target, (self.clock)())?;
+        let forced: Vec<String> = if force {
+            preview.diverged().into_iter().map(str::to_string).collect()
+        } else {
+            Vec::new()
+        };
+        let state = self.roots.state.display().to_string();
+        let view = preview.plan_view(&state, &forced);
+        Ok(drift_tui::UndoProposal {
+            preview,
+            view,
+            forced,
+        })
+    }
+
+    fn apply(&mut self, proposal: &drift_tui::UndoProposal) -> Result<String, String> {
+        self.undoer()
+            .perform(&proposal.preview, &proposal.forced)
+            .map(|done| done.message)
+    }
 }
 
 #[cfg(test)]
@@ -476,7 +535,8 @@ mod tests {
     fn a_file_changed_since_is_left_alone_unless_it_is_forced() {
         let root = resolved();
         let live = root.path().join("home/.config/hypr/a.lua");
-        fs::write(&live, "edited later\n").unwrap();
+        root.overwrite("home/.config/hypr/a.lua", "edited later\n")
+            .unwrap();
         let shown = undo_at(&root, &["--dry-run"], false, "", SECOND);
         assert!(
             shown.out.contains("changed since    .config/hypr/a.lua"),
@@ -568,5 +628,147 @@ mod tests {
         assert_eq!(run.result, Ok(0), "{}", run.err);
         assert_eq!(base(&root, "hypr/a.lua"), "old\n");
         assert_eq!(read(&root, "home/.config/hypr/a.lua"), "mine\n");
+    }
+
+    fn at_second() -> Duration {
+        Duration::from_millis(SECOND)
+    }
+
+    fn manifest(root: &MaterializedRoot, id: &str, file: &str) -> Vec<u8> {
+        fs::read(root.path().join(format!("state/backups/{id}/{file}"))).unwrap()
+    }
+
+    fn key(code: lunatui_term::KeyCode) -> lunatui_term::Event {
+        lunatui_term::Event::Key(lunatui_term::KeyEvent::press(code))
+    }
+
+    fn tree_report(root: &MaterializedRoot) -> drift_core::ScanReport {
+        crate::scan::build(&scan_paths(root)).unwrap()
+    }
+
+    #[test]
+    fn the_command_line_and_the_history_screen_write_identical_transactions() {
+        use lunatui::App as _;
+        use lunatui_term::KeyCode;
+
+        let cli = resolved();
+        let ran = undo_at(&cli, &["--yes"], false, "", SECOND);
+        assert_eq!(ran.result, Ok(0), "{}", ran.err);
+
+        let tui = resolved();
+        let paths = scan_paths(&tui);
+        let roots = roots_for(&paths, tui.path().join("runtime"));
+        let historian = LiveHistorian::new(paths, roots, at_second);
+        let mut screen =
+            drift_tui::Screen::with_report(&tree_report(&tui)).with_historian(Box::new(historian));
+        let (grid, clusters) = lunatui::render_once(&mut screen, 120, 36);
+        let _ = (grid, clusters);
+        for code in [KeyCode::Char('H'), KeyCode::Enter, KeyCode::Char('y')] {
+            let _ = screen.update(&key(code));
+        }
+        assert!(
+            screen
+                .history()
+                .and_then(|history| history.notice())
+                .is_some_and(|notice| notice
+                    .starts_with("Undid resolve-1800000000123 as transaction undo-1800000100456")),
+            "{:?}",
+            screen.history().and_then(|history| history.notice())
+        );
+
+        for file in ["manifest.json", "reviewed-bases.json"] {
+            assert_eq!(
+                manifest(&cli, "undo-1800000100456", file),
+                manifest(&tui, "undo-1800000100456", file),
+                "{file}"
+            );
+        }
+        assert_eq!(
+            read(&cli, "home/.config/hypr/a.lua").into_bytes(),
+            read(&tui, "home/.config/hypr/a.lua").into_bytes()
+        );
+        assert_eq!(base(&cli, "hypr/a.lua"), base(&tui, "hypr/a.lua"));
+        assert_eq!(read(&tui, "home/.config/hypr/a.lua"), "mine a\n");
+        assert_eq!(base(&tui, "hypr/a.lua"), "old a\n");
+    }
+
+    #[test]
+    fn cancelling_or_declining_in_the_history_screen_writes_nothing() {
+        use lunatui::App as _;
+        use lunatui_term::KeyCode;
+
+        let tui = resolved();
+        let before = hash_tree(tui.path()).unwrap();
+        let paths = scan_paths(&tui);
+        let roots = roots_for(&paths, tui.path().join("runtime"));
+        let mut screen = drift_tui::Screen::with_report(&tree_report(&tui))
+            .with_historian(Box::new(LiveHistorian::new(paths, roots, at_second)));
+        let _ = lunatui::render_once(&mut screen, 120, 36);
+        for code in [
+            KeyCode::Char('H'),
+            KeyCode::Enter,
+            KeyCode::Char('n'),
+            KeyCode::Enter,
+            KeyCode::Enter,
+        ] {
+            let _ = screen.update(&key(code));
+        }
+        assert_eq!(hash_tree(tui.path()).unwrap(), before);
+        assert_eq!(transactions(&tui), 1);
+    }
+
+    #[test]
+    fn a_keep_mine_undo_is_previewed_and_applied_from_both_surfaces() {
+        use lunatui::App as _;
+        use lunatui_term::KeyCode;
+
+        let make = || {
+            let root = world(&[("hypr/a.lua", "new\n", Some("mine\n"), Some("old\n"))]);
+            let kept = go_at(
+                &root,
+                &[".config/hypr/a.lua", "--keep", "--yes"],
+                false,
+                "",
+                &clean(),
+                FIRST,
+            );
+            assert_eq!(kept.result, Ok(0), "{}", kept.err);
+            root
+        };
+        let cli = make();
+        let shown = undo_at(&cli, &["--dry-run"], false, "", SECOND);
+        assert!(
+            shown
+                .out
+                .contains("reviewed base    config/hypr/a.lua  (put back as it was)"),
+            "{}",
+            shown.out
+        );
+        let ran = undo_at(&cli, &["--yes"], false, "", SECOND);
+        assert_eq!(ran.result, Ok(0), "{}", ran.err);
+
+        let tui = make();
+        let paths = scan_paths(&tui);
+        let roots = roots_for(&paths, tui.path().join("runtime"));
+        let mut screen = drift_tui::Screen::with_report(&tree_report(&tui))
+            .with_historian(Box::new(LiveHistorian::new(paths, roots, at_second)));
+        let _ = lunatui::render_once(&mut screen, 120, 36);
+        for code in [KeyCode::Char('H'), KeyCode::Enter] {
+            let _ = screen.update(&key(code));
+        }
+        let (grid, clusters) = lunatui::render_once(&mut screen, 120, 36);
+        let text = grid.display_text(&clusters);
+        assert!(text.contains("reviewed base config/hypr/a.lua"), "{text}");
+        assert!(text.contains("put the reviewed base back"), "{text}");
+        let _ = screen.update(&key(KeyCode::Char('y')));
+        assert_eq!(base(&tui, "hypr/a.lua"), "old\n");
+        assert_eq!(read(&tui, "home/.config/hypr/a.lua"), "mine\n");
+        for file in ["manifest.json", "reviewed-bases.json"] {
+            assert_eq!(
+                manifest(&cli, "undo-1800000100456", file),
+                manifest(&tui, "undo-1800000100456", file),
+                "{file}"
+            );
+        }
     }
 }

@@ -2,7 +2,7 @@ mod apply;
 mod seed;
 
 pub use apply::{
-    apply, apply_checked, execute, history, inspect_undo, integrate, pending_prune,
+    apply, apply_checked, execute, history, inspect_undo, integrate, pending_prune, recorded_bases,
     restore_reviewed_bases, touches_hypr_config, undo, undo_with_bases, undo_with_bases_probed,
     ApplyError, ApplyReport, CheckedApply, Divergence, Executed, FailAt, FileStep, History,
     Hyprctl, HyprlandCheck, HyprlandStatus, IntegrateMode, IntegrateOutcome, Payload, Request,

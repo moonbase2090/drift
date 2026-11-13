@@ -179,6 +179,11 @@ fn live_resolver(registry: &drift_core::Registry) -> resolve::LiveResolver {
     )
 }
 
+fn live_historian() -> history::LiveHistorian {
+    let (paths, roots) = state_roots();
+    history::LiveHistorian::new(paths, roots, history::system_clock)
+}
+
 fn open_review() -> std::io::Result<()> {
     if !std::io::stdout().is_terminal() {
         return drift_tui::launch();
@@ -194,7 +199,8 @@ fn open_review() -> std::io::Result<()> {
     let resolver = live_resolver(&registry);
     let worker = drift_tui::spawn_scan(move || scan::scan_report(&paths, &registry));
     let watcher = watch::arm(&watched, worker.changes());
-    let result = drift_tui::launch_worker_with(worker, Box::new(resolver));
+    let historian = live_historian();
+    let result = drift_tui::launch_worker_with(worker, Box::new(resolver), Box::new(historian));
     drop(watcher);
     result
 }

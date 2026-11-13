@@ -1,0 +1,8 @@
+ Drift  History  0 transactions                             
+ Newest first. Undo restores files and reviewed bases.      
+                                                            
+ No transactions yet.                                       
+                                                            
+                                                            
+                                                            
+[Q] Back  [Enter] Undo  [U] Undo and force  [r] Refresh     

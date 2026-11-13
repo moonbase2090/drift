@@ -1,0 +1,10 @@
+ Drift  History  3 transactions                                                                               
+ Undid resolve-1800000000123.                                                                                 
+ ID                     TIME                  PACKAGE  FILES  ACTIONS                                         
+>undo-1800000100456     2026-11-12T10:31:40Z  4.5.0-3      1  1 undo                                          
+ resolve-1800000000123  2026-11-12T10:30:00Z  4.5.0-3      3  2 take upstream, 1 keep mine                    
+ resolve-1799999000000  2026-11-12T10:13:20Z  4.5.0-3      1  1 merge                                         
+ broken-1  (manifest unreadable)                                                                              
+                                                                                                              
+                                                                                                              
+[Q] Back  [Enter] Undo  [U] Undo and force  [r] Refresh                                                       
