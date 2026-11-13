@@ -1,0 +1,9 @@
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = omarchy-settings
+
+[Action]
+Description = Saving Omarchy templates before the settings package upgrades
+When = PreTransaction
+Exec = /usr/bin/drift snapshot --pre
