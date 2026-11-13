@@ -66,44 +66,85 @@ fn hints_of(context: &str) -> &'static [(&'static str, KeyCode)] {
     }
 }
 
+const fn hint(c: char) -> Mouse {
+    Mouse::Hint(KeyCode::Char(c))
+}
+
+const COUNT: Mouse = Mouse::Click("Click the status count in the header");
+const ROW: Mouse = Mouse::Click("Click a row");
+const CARET: Mouse = Mouse::Click("Click the caret");
+const DIVIDER: Mouse = Mouse::Click("Drag the pane divider");
+const WHEEL: Mouse = Mouse::Click("Scroll the wheel");
+
+const TARGETS: &[(&str, &str, Mouse)] = &[
+    ("Everywhere", "global.help", hint('?')),
+    ("Everywhere", "global.palette", hint(':')),
+    ("Tree", "tree.quit", hint('q')),
+    ("Tree", "tree.down", ROW),
+    ("Tree", "tree.up", ROW),
+    ("Tree", "tree.collapse", CARET),
+    ("Tree", "tree.expand", CARET),
+    ("Tree", "tree.open", Mouse::Hint(KeyCode::Enter)),
+    ("Tree", "tree.search", hint('/')),
+    ("Tree", "tree.filter-unchanged", COUNT),
+    ("Tree", "tree.filter-upstream", COUNT),
+    ("Tree", "tree.filter-override", COUNT),
+    ("Tree", "tree.filter-conflict", COUNT),
+    ("Tree", "tree.filter-user-only", COUNT),
+    ("Tree", "tree.filter-missing", COUNT),
+    (
+        "Tree",
+        "tree.clear-filter",
+        Mouse::Click("Click the active status count again"),
+    ),
+    ("Tree", "tree.mark", Mouse::Click("Click the checkbox")),
+    ("Tree", "tree.keep", hint('o')),
+    ("Tree", "tree.take", hint('t')),
+    ("Tree", "tree.merge", hint('m')),
+    ("Tree", "tree.history", hint('H')),
+    ("History", "history.back", hint('q')),
+    ("History", "history.refresh", hint('r')),
+    ("History", "history.undo", Mouse::Hint(KeyCode::Enter)),
+    ("History", "history.undo-force", hint('U')),
+    ("History", "history.down", ROW),
+    ("History", "history.up", ROW),
+    ("Diff", "diff.quit", hint('q')),
+    ("Diff", "diff.next", hint('n')),
+    ("Diff", "diff.previous", hint('p')),
+    ("Diff", "diff.layout", hint('v')),
+    ("Diff", "diff.focus-next", Mouse::Hint(KeyCode::Tab)),
+    ("Diff", "diff.write", hint('w')),
+    ("Diff", "diff.widen", DIVIDER),
+    ("Diff", "diff.narrow", DIVIDER),
+    ("Diff", "diff.down", WHEEL),
+    ("Diff", "diff.up", WHEEL),
+    (
+        "Diff",
+        "diff.mine",
+        Mouse::Click("Click `[o]` in the header"),
+    ),
+    (
+        "Diff",
+        "diff.theirs",
+        Mouse::Click("Click `[t]` in the header"),
+    ),
+    (
+        "Diff",
+        "diff.both",
+        Mouse::Click("Click `[b]` in the header"),
+    ),
+    (
+        "Diff",
+        "diff.edit",
+        Mouse::Click("Click `[e]` in the header"),
+    ),
+];
+
 fn mouse_of(screen: &str, id: &str) -> Mouse {
-    let key = |c: char| Mouse::Hint(KeyCode::Char(c));
-    match (screen, id) {
-        ("Everywhere", "global.help") => key('?'),
-        ("Everywhere", "global.palette") => key(':'),
-        ("Tree", "tree.quit") => key('q'),
-        ("Tree", "tree.down" | "tree.up") => Mouse::Click("Click a row"),
-        ("Tree", "tree.collapse" | "tree.expand") => Mouse::Click("Click the caret"),
-        ("Tree", "tree.open") => Mouse::Hint(KeyCode::Enter),
-        ("Tree", "tree.search") => key('/'),
-        ("Tree", id) if id.starts_with("tree.filter-") => {
-            Mouse::Click("Click the status count in the header")
-        }
-        ("Tree", "tree.clear-filter") => Mouse::Click("Click the active status count again"),
-        ("Tree", "tree.mark") => Mouse::Click("Click the checkbox"),
-        ("Tree", "tree.keep") => key('o'),
-        ("Tree", "tree.take") => key('t'),
-        ("Tree", "tree.merge") => key('m'),
-        ("Tree", "tree.history") => key('H'),
-        ("History", "history.back") => key('q'),
-        ("History", "history.refresh") => key('r'),
-        ("History", "history.undo") => Mouse::Hint(KeyCode::Enter),
-        ("History", "history.undo-force") => key('U'),
-        ("History", "history.down" | "history.up") => Mouse::Click("Click a row"),
-        ("Diff", "diff.quit") => key('q'),
-        ("Diff", "diff.next") => key('n'),
-        ("Diff", "diff.previous") => key('p'),
-        ("Diff", "diff.layout") => key('v'),
-        ("Diff", "diff.focus-next") => Mouse::Hint(KeyCode::Tab),
-        ("Diff", "diff.write") => key('w'),
-        ("Diff", "diff.widen" | "diff.narrow") => Mouse::Click("Drag the pane divider"),
-        ("Diff", "diff.down" | "diff.up") => Mouse::Click("Scroll the wheel"),
-        ("Diff", "diff.mine") => Mouse::Click("Click `[o]` in the header"),
-        ("Diff", "diff.theirs") => Mouse::Click("Click `[t]` in the header"),
-        ("Diff", "diff.both") => Mouse::Click("Click `[b]` in the header"),
-        ("Diff", "diff.edit") => Mouse::Click("Click `[e]` in the header"),
-        _ => Mouse::Palette,
-    }
+    TARGETS
+        .iter()
+        .find(|(context, command, _)| *context == screen && *command == id)
+        .map_or(Mouse::Palette, |(_, _, mouse)| *mouse)
 }
 
 fn rows_of(screen: &'static str, keymap: &Keymap) -> Vec<Row> {
@@ -225,6 +266,18 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn every_declared_mouse_target_names_a_real_action_once() {
+        let rows = rows();
+        for (screen, id, _) in TARGETS {
+            let hits = rows
+                .iter()
+                .filter(|row| row.screen == *screen && row.id == *id)
+                .count();
+            assert_eq!(hits, 1, "{screen} {id}");
         }
     }
 
