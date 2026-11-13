@@ -1,5 +1,6 @@
 mod apply;
 mod edit;
+mod notify;
 mod seed;
 mod snapshot;
 
@@ -12,6 +13,10 @@ pub use apply::{
     UndoneWithBases, WriteFollowup,
 };
 pub use edit::edit_text;
+pub use notify::{
+    notice_for, notifications_enabled, send, set_notifications, should_send, update_running,
+    Notice, NotifyError, APP_NAME, CLICK, URGENCY,
+};
 pub use seed::{record_bases, scan, Recorded, Scan, StoreRoots};
 pub use snapshot::{snapshot_templates, SnapshotError, SnapshotReport};
 

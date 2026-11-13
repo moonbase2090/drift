@@ -26,6 +26,10 @@ The Omarchy menu opens Drift with app id `TUI.float`. Omarchy floats and centers
 
 ![Narrower diff layouts](docs/media/layout-cycle.gif)
 
+Changed lines are tinted across the whole row, like a git diff. In the two-pane view a line only ours has is green with a `+` in the gutter, a line only theirs has is red with a `-`, and a line changed on both sides is yellow with a `~`. The exact changed characters get a stronger tint of the same color. Where one side has no line, a blank filler row keeps the two panes level and takes no line number. Four-pane, stacked and result views use the same marks. The colors come from the active Omarchy theme (`colors.toml` in its state directory) and fall back to fixed readable colors when no theme is found.
+
+![Tinted diff rows](docs/media/diff-rows.gif)
+
 `o` keeps the selected hunk's ours text, `t` takes theirs, `b` keeps both, and `e` edits that hunk. The result pane updates immediately. `w` opens the plan once every conflict is chosen. An unresolved conflict stays in the result pane and `w` explains why it will not open the plan.
 
 ![Hunk choices](docs/media/hunk-resolver.gif)
@@ -95,6 +99,8 @@ Undoing a resolution restores the file and the reviewed base it replaced, so an 
 ## Using it
 
 Launch Drift from the Omarchy menu. The menu action is `omarchy-launch-or-focus-tui --app-id=TUI.float drift`, which opens the floating window, or focuses that window if it is already open. It is built for Omarchy 4.5 (Quattro), through the [Omarchy shell-plugin](https://github.com/basecamp/omarchy/blob/quattro/manual/32-shell-plugins.md) mechanism. Package templates are read from `/usr/share/omarchy`.
+
+`drift notify` scans and, when configuration has drifted, sends a notification through `omarchy-notification-send`. One drifted file reads `1 config drifted`; more than one reads `N configs drifted`. The urgency is normal, and clicking the notification runs `omarchy-launch-or-focus-tui --app-id=TUI.float drift`, which opens Drift or focuses the existing window. Nothing is sent when the count is zero, while another process holds the Omarchy update lock, while the pacman database lock exists, or after `drift notify off`. The post-update hook inherits the Omarchy lock and still sends, and it still checks the pacman lock. An Omarchy lock file left behind does not block a later notify. Pacman removes its database lock when the transaction ends. Notifications are on until turned off. `drift notify on` turns them back on, and that choice is kept in Drift's state.
 
 The bar widget in `plugin/` has id `drift.status`. It runs `drift status --bar` every five minutes. The JSON `text` field is the drifted count, and the widget hides when that field is empty. A click runs the same floating launcher. `omarchy plugin validate ./plugin` checks the folder. Place the folder in the user plugin directory as `drift.status`, then run `omarchy bar put drift.status`.
 

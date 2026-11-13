@@ -3,6 +3,7 @@ mod commands;
 #[cfg(test)]
 mod contrast;
 mod diff;
+mod diff_palette;
 mod differ;
 mod historian;
 mod history_screen;

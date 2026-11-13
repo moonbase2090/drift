@@ -151,6 +151,16 @@ impl TreeView {
         self.query = query.to_string();
         self.query_lower = query.to_lowercase();
         self.rebuild(keep);
+        if self.query_lower.is_empty() {
+            return;
+        }
+        if let Some(at) = self
+            .rows
+            .iter()
+            .position(|row| matches!(row.kind, RowKind::File))
+        {
+            self.selected = at;
+        }
     }
 
     pub fn toggle(&mut self, row: usize) {
@@ -693,27 +703,56 @@ mod tests {
     }
 
     #[test]
-    fn the_selected_row_follows_its_node_across_filters_and_searches() {
+    fn the_selected_row_follows_its_node_across_filters() {
         let mut view = sample();
         view.select(9);
         assert_eq!(
             view.selected_entry().unwrap().path,
             ".config/waybar/style.css"
         );
-        view.set_query("waybar");
+        view.set_status_filter(Some(Status::LocalOverride));
         assert_eq!(
             view.selected_entry().unwrap().path,
             ".config/waybar/style.css"
+        );
+        view.set_status_filter(None);
+        assert_eq!(
+            view.selected_entry().unwrap().path,
+            ".config/waybar/style.css"
+        );
+    }
+
+    #[test]
+    fn a_search_selects_the_first_matching_file() {
+        let mut view = sample();
+        view.set_query("monitors.lua");
+        assert_eq!(
+            view.selected_entry().unwrap().path,
+            ".config/hypr/monitors.lua"
+        );
+        view.set_query("waybar");
+        assert_eq!(
+            view.selected_entry().unwrap().path,
+            ".config/waybar/config.jsonc"
+        );
+        let style = view
+            .rows()
+            .iter()
+            .position(|row| row.name == "style.css")
+            .unwrap();
+        view.select(style);
+        view.set_query("wayb");
+        assert_eq!(
+            view.selected_entry().unwrap().path,
+            ".config/waybar/config.jsonc"
         );
         view.set_query("");
         assert_eq!(
             view.selected_entry().unwrap().path,
-            ".config/waybar/style.css"
+            ".config/waybar/config.jsonc"
         );
-        view.set_status_filter(Some(Status::Conflict));
-        assert!(view.selected() < view.rows().len());
-        view.set_status_filter(None);
-        assert!(view.selected() < view.rows().len());
+        view.set_query("zzz");
+        assert!(view.selected_row().is_none());
     }
 
     #[test]

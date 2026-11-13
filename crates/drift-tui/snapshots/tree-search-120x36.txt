@@ -1,10 +1,10 @@
  Drift  omarchy-settings 4.5.0-3  3 drifted  | update pending review: 4.4.0-1 -> 4.5.0-3                                
  1 ✓ unchanged 2  2 ↓ upstream changed 1  3 ≠ local override 2  4 ✗ conflict 1  5 + user-only 1  6 ? missing 1          
  search: wa_  |  2 of 8 files                                                                                           
-> ▾ [ ] .config/  (2 files, 0 drifted)                                  | .config/                                      
-    ▾ [ ] waybar/  (2 files, 0 drifted)                                 | ✓ unchanged 1                                 
-        [ ] ✓ unchanged         config.jsonc                            | ≠ local override 1                            
-        [ ] ≠ local override    style.css  [base unknown]               |                                               
+  ▾ [ ] .config/  (2 files, 0 drifted)                                  | ✓ unchanged                                   
+    ▾ [ ] waybar/  (2 files, 0 drifted)                                 | .config/waybar/config.jsonc                   
+>       [ ] ✓ unchanged         config.jsonc                            | template: config/waybar/config.jsonc          
+        [ ] ≠ local override    style.css  [base unknown]               | base: none                                    
                                                                         |                                               
                                                                         |                                               
                                                                         |                                               

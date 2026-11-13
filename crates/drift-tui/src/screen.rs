@@ -356,6 +356,7 @@ impl Screen {
         match differ
             .diff(&path)
             .and_then(|found| DiffScreen::from_file_diff(&found))
+            .map(|screen| screen.with_palette(crate::diff_palette::DiffPalette::active()))
         {
             Ok(screen) => self.diff = Some(screen),
             Err(message) => self.show(&message),
