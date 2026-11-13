@@ -297,7 +297,7 @@ impl PlanDialog {
         let writes = self.view.writes();
         let header = format!(
             "{} - package {} - {} of {} files will be written",
-            self.view.time,
+            shown_time(&self.view.time),
             self.view.package_version,
             writes,
             self.view.files.len()
@@ -545,6 +545,84 @@ pub fn apply_decision(
     }
 }
 
+fn shown_time(stored: &str) -> String {
+    utc_unix(stored)
+        .and_then(local_stamp)
+        .unwrap_or_else(|| stored.to_string())
+}
+
+fn utc_unix(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return None;
+    }
+    let year = number(&bytes[0..4])?;
+    let month = number(&bytes[5..7])?;
+    let day = number(&bytes[8..10])?;
+    let hour = number(&bytes[11..13])?;
+    let minute = number(&bytes[14..16])?;
+    let second = number(&bytes[17..19])?;
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+    let days = days_from_civil(year, month, day);
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+fn number(bytes: &[u8]) -> Option<i64> {
+    let mut value = 0i64;
+    for byte in bytes {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value * 10 + i64::from(byte - b'0');
+    }
+    Some(value)
+}
+
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = (year - era * 400) as u64;
+    let month_index = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * month_index + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year as u64;
+    era * 146_097 + day_of_era as i64 - 719_468
+}
+
+fn local_stamp(secs: i64) -> Option<String> {
+    let mut broken: libc::tm = unsafe { std::mem::zeroed() };
+    let clock = secs as libc::time_t;
+    if unsafe { libc::localtime_r(&clock, &mut broken) }.is_null() {
+        return None;
+    }
+    let mut buf = [0u8; 48];
+    let wrote = unsafe {
+        libc::strftime(
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            c"%Y-%m-%d %H:%M:%S %z".as_ptr(),
+            &broken,
+        )
+    };
+    if wrote == 0 {
+        return None;
+    }
+    std::str::from_utf8(&buf[..wrote]).ok().map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -650,8 +728,30 @@ mod tests {
     }
 
     fn text(dialog: &mut PlanDialog, columns: u16, rows: u16) -> String {
+        with_zone("UTC0", || paint(dialog, columns, rows))
+    }
+
+    fn paint(dialog: &mut PlanDialog, columns: u16, rows: u16) -> String {
         let (grid, clusters) = render_once(&mut Wrapper(dialog), columns, rows);
         grid.display_text(&clusters)
+    }
+
+    fn with_zone<T>(zone: &str, body: impl FnOnce() -> T) -> T {
+        unsafe extern "C" {
+            fn tzset();
+        }
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        let previous = std::env::var_os("TZ");
+        std::env::set_var("TZ", zone);
+        unsafe { tzset() };
+        let value = body();
+        match previous {
+            Some(zone) => std::env::set_var("TZ", zone),
+            None => std::env::remove_var("TZ"),
+        }
+        unsafe { tzset() };
+        value
     }
 
     struct Wrapper<'a>(&'a mut PlanDialog);
@@ -1264,18 +1364,45 @@ mod tests {
             let mut dialog = PlanDialog::new(many_files_view(40));
             dialog.handle(&character('d'));
             let mut worst = Duration::ZERO;
-            for step in 0..32 {
-                if step % 2 == 0 {
-                    dialog.handle(&key(KeyCode::Down));
+            with_zone("UTC0", || {
+                for step in 0..32 {
+                    if step % 2 == 0 {
+                        dialog.handle(&key(KeyCode::Down));
+                    }
+                    worst = worst.max(cpu_cost(|| {
+                        let _ = paint(&mut dialog, columns, rows);
+                    }));
                 }
-                worst = worst.max(cpu_cost(|| {
-                    let _ = render_once(&mut Wrapper(&mut dialog), columns, rows);
-                }));
-            }
+            });
             assert!(
                 worst < Duration::from_millis(8),
                 "{columns}x{rows} worst {worst:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_plan_dialog_shows_local_time_and_keeps_the_stored_utc_time() {
+        assert_eq!(utc_unix("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(utc_unix("2026-06-01T09:30:00Z"), Some(1_780_306_200));
+        assert_eq!(utc_unix("2026-11-13T03:02:30Z"), Some(1_794_538_950));
+        assert_eq!(utc_unix("2026-11-13T03:02:30+00:00"), None);
+        let stored = "2026-11-13T03:02:30Z";
+        with_zone("FOO7", || {
+            let mut dialog = PlanDialog::new(timed_view(stored));
+            assert_eq!(dialog.view().time, stored);
+            let shown = paint(&mut dialog, 120, 36);
+            assert!(!shown.contains(stored), "{shown}");
+            assert!(shown.contains("2026-11-12 20:02:30 -0700"), "{shown}");
+        });
+        let mut raw = PlanDialog::new(timed_view("not-utc"));
+        let shown = paint(&mut raw, 80, 24);
+        assert!(shown.contains("not-utc - package"), "{shown}");
+    }
+
+    fn timed_view(time: &str) -> PlanView {
+        let file = PlannedFile::new("config/a", Action::KeepMine, None, None, None, None).unwrap();
+        let plan = Plan::new("txn-1", time, "1", vec![file], &[]).unwrap();
+        PlanView::build(&plan, STATE, &[])
     }
 }
