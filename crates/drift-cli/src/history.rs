@@ -981,4 +981,39 @@ mod tests {
         assert!(!listed(&tui, false).contains(&oldest()));
         assert!(listed(&tui, false).contains("undo-1800001000123"));
     }
+
+    #[test]
+    fn undoing_a_keep_mine_at_the_retention_limit_deletes_what_the_preview_named() {
+        let root = full();
+        let kept = go_at(
+            &root,
+            &[".config/hypr/f100.lua", "--keep", "--yes"],
+            false,
+            "",
+            &clean(),
+            FIRST + 500_000,
+        );
+        assert_eq!(kept.result, Ok(0), "{}", kept.err);
+        assert_eq!(transactions(&root), FULL);
+        let second = format!("resolve-{}", FIRST + 1000);
+        let shown = undo_at(&root, &["--dry-run"], false, "", FIRST + 1_000_000);
+        assert!(
+            shown.out.contains(&format!("\nprune  {second}\n")),
+            "{}",
+            shown.out
+        );
+        assert!(
+            shown.out.contains("reviewed base    config/hypr/f100.lua"),
+            "{}",
+            shown.out
+        );
+        let run = undo_at(&root, &["--yes"], false, "", FIRST + 1_000_000);
+        assert_eq!(run.result, Ok(0), "{}", run.err);
+        assert_eq!(transactions(&root), FULL);
+        assert!(!listed(&root, false).contains(&second));
+        let manifest =
+            String::from_utf8(manifest(&root, "undo-1800001000123", "manifest.json")).unwrap();
+        assert!(manifest.contains(&second), "{manifest}");
+        assert_eq!(base(&root, "hypr/f100.lua"), "old 100\n");
+    }
 }

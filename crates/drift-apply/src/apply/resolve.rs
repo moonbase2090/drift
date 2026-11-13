@@ -237,10 +237,14 @@ fn ensure_transaction(
     if node_exists(&dir) {
         return Ok(());
     }
+    let prune = transactions_to_prune(state)?;
+    let prune_refs: Vec<&str> = prune.iter().map(String::as_str).collect();
     reserve_transaction(state, id)?;
-    let plan = Plan::new(id, time, package_version, Vec::new(), &[])
+    let plan = Plan::new(id, time, package_version, Vec::new(), &prune_refs)
         .map_err(|error| bare(error.to_string()))?;
-    write_manifest(state, &plan)
+    write_manifest(state, &plan)?;
+    remove_transactions(state, plan.prune())?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
