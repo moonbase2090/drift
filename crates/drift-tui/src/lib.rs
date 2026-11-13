@@ -1,4 +1,7 @@
+mod audit;
 mod commands;
+#[cfg(test)]
+mod contrast;
 mod diff;
 mod differ;
 mod historian;
@@ -12,6 +15,7 @@ mod tree_screen;
 mod wake;
 mod worker;
 
+pub use audit::input_map;
 pub use commands::{
     chord_text, chords_text, help_lines, help_sections, keymap_of, Context, GlobalCommand,
     HistoryCommand, TreeCommand, GLOBAL_COMMANDS, HISTORY_COMMANDS, TREE_COMMANDS,

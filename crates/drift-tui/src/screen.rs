@@ -420,6 +420,13 @@ impl Screen {
     }
 
     fn update_diff(&mut self, event: &Event) {
+        let pressed = match (event, self.diff.as_ref()) {
+            (Event::Mouse(mouse), Some(diff)) => diff.hint_press(mouse),
+            _ => None,
+        };
+        if let Some(pressed) = pressed {
+            return self.update_diff(&pressed);
+        }
         if let Event::Key(key) = event {
             if key.kind == KeyKind::Press {
                 match key.code {
@@ -2457,6 +2464,31 @@ mod tests {
         escape(&mut screen);
         let _ = screen.update(&click(column("[:] Palette"), row));
         assert!(screen.palette().is_some());
+    }
+
+    #[test]
+    fn the_diff_hint_bar_opens_help_and_the_palette_and_quits() {
+        let mut screen = at(Context::Diff);
+        let text = wide(&mut screen);
+        let row = text.lines().count() as u16 - 1;
+        let line = text.lines().last().unwrap();
+        let column = |needle: &str| line[..line.find(needle).unwrap()].chars().count() as u16 + 1;
+        let click = |column, row| {
+            Event::Mouse(MouseEvent::new(
+                MouseKind::Down(MouseButton::Left),
+                column,
+                row,
+            ))
+        };
+        let _ = screen.update(&click(column("[?] Help"), row));
+        assert!(screen.help().is_some());
+        escape(&mut screen);
+        assert!(screen.help().is_none() && screen.diff().is_some());
+        let _ = screen.update(&click(column("[:] Palette"), row));
+        assert!(screen.palette().is_some());
+        escape(&mut screen);
+        let _ = screen.update(&click(column("[Q] Quit"), row));
+        assert!(screen.diff().is_none());
     }
 
     #[test]
