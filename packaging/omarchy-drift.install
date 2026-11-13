@@ -1,0 +1,9 @@
+post_install() {
+  echo "==> As your user, not root:"
+  echo "      drift widget install"
+  echo "      systemctl --user enable --now drift-notify.path"
+}
+
+post_upgrade() {
+  post_install
+}
