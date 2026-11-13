@@ -109,7 +109,7 @@ Every action has a keyboard binding. Mouse is first-class and never required.
 | Plan | `y` confirm, `n`/`Esc` cancel, `Tab` between buttons, `d` expand a file's diff | Click Confirm or Cancel |
 | History | `j`/`k`, `Enter` details, `u` undo selected | Click row, click Undo |
 
-Layouts and widgets must remain usable at 80×24 (stacked unified view). The window Omarchy floats for `TUI.float` is 875×600. JetBrains Mono at 9pt with 14px of terminal padding fits 117×36 cells there, in the two-pane range, and users can maximize it for four panes. Drift does not ship its own window rule.
+Layouts and widgets must remain usable at 80×24 (stacked unified view). The window Omarchy floats for `TUI.float` is 875×600. Stock Foot, with JetBrains Mono at 9pt and 14px of padding, measures 121×33 cells there, in the two-pane range, and users can maximize it for four panes. Drift does not ship its own window rule.
 
 ### 6.3 Lunatui widgets used
 
@@ -239,7 +239,7 @@ The approach is verification, not mutation or complexity scoring. Tests are fixt
 5. **3-way diff widget.** **Decided:** build it inside Drift first, then upstream to Lunatui later.
 6. **Backup retention.** **Decided:** keep the last 100 transactions. Pruning is shown in the plan.
 7. **Theme.** **Decided:** follow the active Omarchy theme palette, falling back to Lunatui's built-in dark and light themes.
-8. **Floating window size.** **Decided:** 875×600 is enough. JetBrains Mono at 9pt with 14px of terminal padding yields 117×36 cells, which uses the two-pane layout. Drift does not ship its own window rule. Maximizing the window reaches four panes.
+8. **Floating window size.** **Decided:** 875×600 is enough. Stock Foot, with JetBrains Mono at 9pt and 14px of padding, measures 121×33 cells in that window, which uses the two-pane layout. Drift does not ship its own window rule. Maximizing the window reaches four panes.
 9. **Registry breadth.** **Decided:** v1 covers `config/` templates mapped to `~/.config` only. Secondary copy roots (applications, the Alacritty desktop file, Hyprland toggle flags) come later.
 10. **License and name.** **Decided:** MIT, to match Lunatui. Whether `drift` is free as a package name on the AUR is checked in the packaging ticket.
 11. **Plugin install path.** **Pending:** the owner's answer on whether the plugin should live in a separate small repository. For now, one repository.

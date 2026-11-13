@@ -1826,30 +1826,10 @@ mod tests {
         }
     }
 
-    fn floating_window_cells() -> (u16, u16) {
-        let window_px = (875_u32, 600_u32);
-        let padding_px = 14_u32;
-        let inner_w = window_px.0 - padding_px * 2;
-        let inner_h = window_px.1 - padding_px * 2;
-        let point_size = 9_u32;
-        let dpi = 96_u32;
-        let units_per_em = 1000_u32;
-        let digit_advance = 600_u32;
-        let ascender = 1020_u32;
-        let descender = 300_u32;
-        let line_gap = 0_u32;
-        let em_milli = point_size * dpi * 1000 / 72;
-        let cell_w_milli = em_milli * digit_advance / units_per_em;
-        let cell_h_milli = em_milli * (ascender + descender + line_gap) / units_per_em;
-        let columns = (inner_w * 1000 / cell_w_milli) as u16;
-        let rows = (inner_h * 1000 / cell_h_milli) as u16;
-        (columns, rows)
-    }
-
     #[test]
-    fn the_floating_window_uses_two_panes() {
-        let (columns, rows) = floating_window_cells();
-        assert_eq!((columns, rows), (117, 36));
+    fn the_measured_foot_float_uses_two_panes() {
+        let columns = 121;
+        let rows = 33;
         assert!(matches!(width_class(columns, rows), WidthClass::Medium));
         let mut screen = changed();
         let (grid, clusters) = render_once(&mut screen, columns, rows);

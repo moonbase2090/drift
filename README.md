@@ -22,7 +22,7 @@ A changed file opens in five columns once the window is at least 160 cells wide:
 
 Below 160 columns the same file uses fewer panes. From 100 columns it shows ours and theirs side by side, with the result underneath. Narrower than that, the rows stack in one column. A removed line keeps a minus mark, an added line keeps a plus mark, and a conflict shows ours and theirs. `v` cycles those layouts. A resize that crosses a width boundary follows the width again and keeps the selected hunk. A file with no base stays on two panes, and the header says the base is unknown.
 
-The Omarchy menu opens Drift with app id `TUI.float`. Omarchy floats and centers that class at 875×600. JetBrains Mono at 9pt with 14px of terminal padding fits 117×36 cells in that window, which is the two-pane layout. Maximizing reaches four panes at 160 columns. Drift does not add its own window rule.
+The Omarchy menu opens Drift with app id `TUI.float`. Omarchy floats and centers that class at 875×600. Stock Foot, with JetBrains Mono at 9pt and 14px of padding, measures 121×33 cells in that window, which is the two-pane layout. Maximizing reaches four panes at 160 columns. Drift does not add its own window rule.
 
 ![Narrower diff layouts](docs/media/layout-cycle.gif)
 
