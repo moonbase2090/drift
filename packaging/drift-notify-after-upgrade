@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+lock=${DRIFT_PACMAN_LOCK:-/var/lib/pacman/db.lck}
+limit=${DRIFT_LOCK_POLLS:-300}
+i=0
+while [ -e "$lock" ] && [ "$i" -lt "$limit" ]; do
+  i=$((i + 1))
+  sleep 0.2
+done
+exec drift notify

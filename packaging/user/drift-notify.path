@@ -1,0 +1,8 @@
+[Unit]
+Description=Notify after an Omarchy settings upgrade
+
+[Path]
+PathChanged=/var/lib/drift/updated
+
+[Install]
+WantedBy=default.target
