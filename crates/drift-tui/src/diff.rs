@@ -1,6 +1,10 @@
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use drift_core::{merge3, DiffRows, Hunk, HunkKind, Mark, Merge, Row, Span};
+use drift_core::{
+    merge3, Action, Choice, DiffContent, DiffRows, FileContents, FileDiff, Hunk, HunkKind, Mark,
+    Merge, Plan, PlanView, PlannedFile, Row, Span,
+};
 use lunatui::{App, ControlFlow};
 use lunatui_core::{clip_display_prefix, Attrs, Color, Grid, Rect, Style, CLUSTER_TAG};
 use lunatui_runtime::keymap::{Command, KeyChord, Keymap};
@@ -24,6 +28,11 @@ const WIDEN: &str = "diff.widen";
 const NARROW: &str = "diff.narrow";
 const DOWN: &str = "diff.down";
 const UP: &str = "diff.up";
+const MINE: &str = "diff.mine";
+const THEIRS: &str = "diff.theirs";
+const BOTH: &str = "diff.both";
+const EDIT: &str = "diff.edit";
+const WRITE: &str = "diff.write";
 const PANES: [&str; 5] = ["hunks", "base", "ours", "theirs", "result"];
 const LAYOUT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('v'), Modifiers::new())];
 const HIGHLIGHT: Color = Color::Rgb(220, 160, 40);
@@ -37,6 +46,11 @@ const WIDEN_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char(']'), Modifiers:
 const NARROW_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('['), Modifiers::new())];
 const DOWN_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Down, Modifiers::new())];
 const UP_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Up, Modifiers::new())];
+const MINE_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('o'), Modifiers::new())];
+const THEIRS_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('t'), Modifiers::new())];
+const BOTH_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('b'), Modifiers::new())];
+const EDIT_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('e'), Modifiers::new())];
+const WRITE_CHORDS: &[KeyChord] = &[KeyChord::new(KeyCode::Char('w'), Modifiers::new())];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Layout {
@@ -53,6 +67,12 @@ enum WidthClass {
 }
 
 pub struct DiffScreen {
+    merge: Merge,
+    choices: Vec<Option<Choice>>,
+    editor: Box<dyn FnMut(String) -> Result<String, String>>,
+    notice: Option<String>,
+    plan: Option<crate::PlanDialog>,
+    chips: Vec<Chip>,
     aligned: Aligned,
     scroll: CodeViewState,
     tree: SplitTree,
@@ -62,12 +82,22 @@ pub struct DiffScreen {
     pinned: Option<Layout>,
     class: Option<WidthClass>,
     two_way: bool,
+    title: Option<String>,
     keymap: Keymap,
     columns: u16,
     rows: u16,
     generation: u64,
     stacked_scroll: Option<bool>,
     painted: Option<Painted>,
+    force_redraw: AtomicBool,
+    redraw_phase: AtomicBool,
+}
+
+struct Chip {
+    command: &'static str,
+    x: u16,
+    y: u16,
+    width: u16,
 }
 
 struct Painted {
@@ -120,8 +150,16 @@ impl CodeHighlight for Hits<'_> {
 
 impl DiffScreen {
     pub fn new(base: &str, ours: &str, theirs: &str) -> Self {
-        let merge = merge3(base, ours, theirs);
-        Self::from_merge(&merge)
+        Self::from_merge(&merge3(base, ours, theirs))
+    }
+
+    pub fn with_editor(
+        base: &str,
+        ours: &str,
+        theirs: &str,
+        editor: impl FnMut(String) -> Result<String, String> + 'static,
+    ) -> Self {
+        Self::assemble(merge3(base, ours, theirs), Box::new(editor))
     }
 
     pub fn without_base(ours: &str, theirs: &str) -> Self {
@@ -130,7 +168,39 @@ impl DiffScreen {
         screen
     }
 
+    pub fn from_file_diff(diff: &FileDiff) -> Result<Self, String> {
+        let text = |content: &DiffContent, what: &str| match content {
+            DiffContent::Text { text, .. } => Ok(Some(text.clone())),
+            DiffContent::Absent => Ok(None),
+            DiffContent::Unreadable => Err(format!("{}: the {what} side is unreadable", diff.path)),
+            DiffContent::HashOnly { .. } => Err(format!(
+                "{}: the {what} side is not shown as text (not UTF-8 or over 1 MiB)",
+                diff.path
+            )),
+        };
+        let ours = text(&diff.ours, "live")?.unwrap_or_default();
+        let theirs = text(&diff.theirs, "template")?.unwrap_or_default();
+        let screen = match &diff.base {
+            DiffContent::Text { text, .. } => Self::new(text, &ours, &theirs),
+            DiffContent::Absent => Self::without_base(&ours, &theirs),
+            DiffContent::Unreadable | DiffContent::HashOnly { .. } => {
+                text(&diff.base, "base")?;
+                Self::without_base(&ours, &theirs)
+            }
+        };
+        Ok(screen.with_title(&diff.path))
+    }
+
+    pub fn with_title(mut self, title: &str) -> Self {
+        self.title = Some(title.to_string());
+        self
+    }
+
     pub fn from_merge(merge: &Merge) -> Self {
+        Self::assemble(merge.clone(), Box::new(default_editor))
+    }
+
+    fn assemble(merge: Merge, editor: Box<dyn FnMut(String) -> Result<String, String>>) -> Self {
         let (mut tree, hunks) = SplitTree::new();
         let base = tree
             .split(hunks, SplitAxis::Horizontal, 160)
@@ -142,8 +212,16 @@ impl DiffScreen {
         for index in 0..4 {
             tree.set_min(DividerId(index), 6, 6);
         }
+        let choices = vec![None; merge.hunk_count()];
+        let aligned = align(&merge, &choices);
         Self {
-            aligned: align(merge),
+            merge,
+            choices,
+            editor,
+            notice: None,
+            plan: None,
+            chips: Vec::new(),
+            aligned,
             scroll: CodeViewState::new(),
             tree,
             drag: SplitDrag::new(),
@@ -152,13 +230,28 @@ impl DiffScreen {
             pinned: None,
             class: None,
             two_way: false,
+            title: None,
             keymap: keymap(),
             columns: 0,
             rows: 0,
             generation: 0,
             stacked_scroll: None,
             painted: None,
+            force_redraw: AtomicBool::new(false),
+            redraw_phase: AtomicBool::new(false),
         }
+    }
+
+    pub fn result_text(&self) -> Result<String, drift_core::Error> {
+        self.merge.render(&self.choices)
+    }
+
+    pub fn plan_open(&self) -> bool {
+        self.plan.is_some()
+    }
+
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
     }
 
     pub fn scroll_top(&self) -> usize {
@@ -221,18 +314,22 @@ impl DiffScreen {
     }
 
     fn header_text(&self) -> String {
+        let name = match &self.title {
+            Some(title) => format!("Diff  {title}"),
+            None => "Diff".to_string(),
+        };
         if self.two_way {
             return match self.aligned.hunk_labels.get(self.hunk) {
-                Some(label) => format!("Diff  base unknown  {label}"),
-                None => "Diff  base unknown".to_string(),
+                Some(label) => format!("{name}  base unknown  {label}"),
+                None => format!("{name}  base unknown"),
             };
         }
         if self.effective() == Layout::Four {
-            return "Diff".to_string();
+            return name;
         }
         match self.aligned.hunk_labels.get(self.hunk) {
-            Some(label) => format!("Diff  {label}"),
-            None => "Diff".to_string(),
+            Some(label) => format!("{name}  {label}"),
+            None => name,
         }
     }
 
@@ -293,6 +390,149 @@ impl DiffScreen {
         };
         self.tree.resize(divider, delta, self.body());
     }
+
+    fn realign(&mut self) {
+        let hunk = self.hunk;
+        self.aligned = align(&self.merge, &self.choices);
+        let count = self.aligned.hunk_rows.len();
+        self.hunk = if count == 0 { 0 } else { hunk.min(count - 1) };
+        self.scroll.scroll_to(self.hunk_scroll_row());
+        self.revise();
+    }
+
+    fn choose(&mut self, choice: Choice) {
+        if self.hunk >= self.choices.len() {
+            return;
+        }
+        self.choices[self.hunk] = Some(choice);
+        self.notice = None;
+        self.realign();
+    }
+
+    fn edit_selected(&mut self) {
+        if self.hunk >= self.choices.len() {
+            return;
+        }
+        let current = self.choices[self.hunk].as_ref();
+        let seed = self
+            .merge
+            .hunk_text(self.hunk, current)
+            .or_else(|| {
+                self.merge
+                    .hunks()
+                    .nth(self.hunk)
+                    .map(|hunk| hunk.ours.clone())
+            })
+            .unwrap_or_default();
+        match (self.editor)(seed) {
+            Ok(text) => {
+                self.choices[self.hunk] = Some(Choice::Custom(text));
+                self.notice = None;
+                self.realign();
+            }
+            Err(error) => {
+                self.notice = Some(error);
+                self.revise();
+            }
+        }
+        self.force_redraw.store(true, Ordering::Relaxed);
+    }
+
+    fn write_plan(&mut self) {
+        self.revise();
+        let after = match self.merge.render(&self.choices) {
+            Ok(text) => text,
+            Err(_) => {
+                self.notice = Some(String::from("unresolved conflict blocks write"));
+                self.plan = None;
+                return;
+            }
+        };
+        let file = PlannedFile::new(
+            "config",
+            Action::Merge,
+            None,
+            None,
+            None,
+            Some("backup/config"),
+        )
+        .expect("plan path");
+        let plan = Plan::new("preview", "now", "0", vec![file], &[]).expect("plan");
+        let contents = [FileContents {
+            path: String::from("config"),
+            before: Some(ours_bytes(&self.merge)),
+            after: Some(after.into_bytes()),
+        }];
+        let view = PlanView::build(&plan, "state", &contents);
+        self.notice = None;
+        self.plan = Some(crate::PlanDialog::new(view));
+    }
+
+    fn header_line(&mut self, area: Rect) -> String {
+        self.chips.clear();
+        let mut line = self.header_text();
+        if let Some(notice) = &self.notice {
+            line.push_str("  ");
+            line.push_str(notice);
+        }
+        let chips = [
+            (MINE, " [o] mine"),
+            (THEIRS, " [t] theirs"),
+            (BOTH, " [b] both"),
+            (EDIT, " [e] edit"),
+        ];
+        let extra: usize = chips.iter().map(|(_, label)| label.len()).sum();
+        if line.len() + extra <= usize::from(area.width) {
+            for (command, label) in chips {
+                let start = line.len();
+                line.push_str(label);
+                let bracket = label.find('[').unwrap_or(0);
+                self.chips.push(Chip {
+                    command,
+                    x: area
+                        .x
+                        .saturating_add(u16::try_from(start + bracket).unwrap_or(0)),
+                    y: area.y,
+                    width: 3,
+                });
+            }
+        }
+        line
+    }
+
+    fn apply_chip(&mut self, column: u16, row: u16) -> bool {
+        let command = self
+            .chips
+            .iter()
+            .find(|chip| {
+                row == chip.y && column >= chip.x && column < chip.x.saturating_add(chip.width)
+            })
+            .map(|chip| chip.command);
+        match command {
+            Some(MINE) => self.choose(Choice::Mine),
+            Some(THEIRS) => self.choose(Choice::Theirs),
+            Some(BOTH) => self.choose(Choice::Both),
+            Some(EDIT) => self.edit_selected(),
+            Some(_) => return false,
+            None => return false,
+        }
+        true
+    }
+
+    fn select_hunk_at(&mut self, area: Rect, column: u16, row: u16) {
+        if !contains(area, column, row) || row <= area.y {
+            return;
+        }
+        let start = self.hunk.saturating_sub(1);
+        let index = start + usize::from(row - area.y - 1);
+        if index >= self.aligned.hunk_labels.len() {
+            return;
+        }
+        self.hunk = index;
+        if let Some(line) = self.aligned.hunk_rows.get(index).copied() {
+            self.scroll.scroll_to(line);
+        }
+    }
 }
 
 fn keymap() -> Keymap {
@@ -311,7 +551,30 @@ fn keymap() -> Keymap {
     map.register(Command::new(NARROW, "Narrow pane", NARROW_CHORDS));
     map.register(Command::new(DOWN, "Scroll down", DOWN_CHORDS));
     map.register(Command::new(UP, "Scroll up", UP_CHORDS));
+    map.register(Command::new(MINE, "Mine", MINE_CHORDS));
+    map.register(Command::new(THEIRS, "Theirs", THEIRS_CHORDS));
+    map.register(Command::new(BOTH, "Both", BOTH_CHORDS));
+    map.register(Command::new(EDIT, "Edit", EDIT_CHORDS));
+    map.register(Command::new(WRITE, "Write", WRITE_CHORDS));
     map
+}
+
+fn default_editor(text: String) -> Result<String, String> {
+    let Some(program) = std::env::var_os("EDITOR").filter(|program| !program.is_empty()) else {
+        return Err(String::from("editor is not set"));
+    };
+    crate::suspend::around_editor(|| drift_apply::edit_text(&text, &program))
+}
+
+fn ours_bytes(merge: &Merge) -> Vec<u8> {
+    let mut text = String::new();
+    for segment in merge.segments() {
+        match segment {
+            drift_core::Segment::Stable(part) => text.push_str(part),
+            drift_core::Segment::Hunk(hunk) => text.push_str(&hunk.ours),
+        }
+    }
+    text.into_bytes()
 }
 
 fn width_class(columns: u16, rows: u16) -> WidthClass {
@@ -356,7 +619,7 @@ fn next_layout(current: Layout, two_way: bool) -> Layout {
     }
 }
 
-fn align(merge: &Merge) -> Aligned {
+fn align(merge: &Merge, choices: &[Option<Choice>]) -> Aligned {
     let built = DiffRows::build(merge);
     let rows = built.rows();
     let mut at = 0;
@@ -391,12 +654,21 @@ fn align(merge: &Merge) -> Aligned {
                 }
             }
             drift_core::Segment::Hunk(hunk) => {
-                push_stacked(&mut aligned, hunk);
+                let choice = choices.get(hunk_index).and_then(Option::as_ref);
+                let chosen = choice.and_then(|_| merge.hunk_text(hunk_index, choice));
+                push_stacked(&mut aligned, hunk, chosen.as_deref());
                 let start = at;
                 while at < rows.len() && rows[at].hunk == Some(hunk_index) {
                     at += 1;
                 }
-                push_hunk(&mut aligned, hunk, hunk_index, &rows[start..at]);
+                push_hunk(
+                    &mut aligned,
+                    merge,
+                    hunk,
+                    hunk_index,
+                    &rows[start..at],
+                    choice,
+                );
                 hunk_index += 1;
             }
         }
@@ -404,7 +676,14 @@ fn align(merge: &Merge) -> Aligned {
     aligned
 }
 
-fn push_hunk(aligned: &mut Aligned, hunk: &Hunk, index: usize, rows: &[Row]) {
+fn push_hunk(
+    aligned: &mut Aligned,
+    merge: &Merge,
+    hunk: &Hunk,
+    index: usize,
+    rows: &[Row],
+    choice: Option<&Choice>,
+) {
     aligned.hunk_rows.push(aligned.base.len());
     aligned
         .hunk_labels
@@ -438,6 +717,11 @@ fn push_hunk(aligned: &mut Aligned, hunk: &Hunk, index: usize, rows: &[Row]) {
             let ours = or_raw(from_mark(rows, Mark::Added), &hunk.ours);
             (base, ours.clone(), ours.clone(), ours)
         }
+    };
+    let result = if choice.is_some() {
+        raw_lines(merge.hunk_text(index, choice).as_deref().unwrap_or(""))
+    } else {
+        result
     };
     let height = [base.len(), ours.len(), theirs.len(), result.len()]
         .into_iter()
@@ -599,8 +883,11 @@ fn split_pair(area: Rect) -> (Rect, Rect) {
     (left, right)
 }
 
-fn push_stacked(aligned: &mut Aligned, hunk: &Hunk) {
+fn push_stacked(aligned: &mut Aligned, hunk: &Hunk, chosen: Option<&str>) {
     aligned.stacked_hunk_rows.push(aligned.stacked.len());
+    if let Some(text) = chosen {
+        push_marked(&mut aligned.stacked, "= ", text);
+    }
     match hunk.kind {
         HunkKind::Conflict => {
             push_marked(&mut aligned.stacked, "- ", &hunk.base);
@@ -648,6 +935,22 @@ fn contains(area: Rect, column: u16, row: u16) -> bool {
 
 impl App for DiffScreen {
     fn update(&mut self, event: &Event) -> ControlFlow {
+        if self.plan.is_some() {
+            if let Event::Mouse(mouse) = event {
+                if mouse_quits(self.columns, self.rows, mouse) {
+                    return ControlFlow::Break;
+                }
+            }
+            let done = self
+                .plan
+                .as_mut()
+                .is_some_and(|plan| plan.handle(event).is_some());
+            if done {
+                self.plan = None;
+                self.revise();
+            }
+            return ControlFlow::Continue;
+        }
         if let Event::Mouse(mouse) = event {
             if mouse_quits(self.columns, self.rows, mouse) {
                 return ControlFlow::Break;
@@ -691,6 +994,26 @@ impl App for DiffScreen {
                 self.scroll_by(-1);
                 ControlFlow::Continue
             }
+            Some(MINE) => {
+                self.choose(Choice::Mine);
+                ControlFlow::Continue
+            }
+            Some(THEIRS) => {
+                self.choose(Choice::Theirs);
+                ControlFlow::Continue
+            }
+            Some(BOTH) => {
+                self.choose(Choice::Both);
+                ControlFlow::Continue
+            }
+            Some(EDIT) => {
+                self.edit_selected();
+                ControlFlow::Continue
+            }
+            Some(WRITE) => {
+                self.write_plan();
+                ControlFlow::Continue
+            }
             Some(LAYOUT) => {
                 self.cycle_layout();
                 ControlFlow::Continue
@@ -703,6 +1026,11 @@ impl App for DiffScreen {
         self.columns = area.width;
         self.rows = area.height;
         self.note_class();
+        if let Some(plan) = self.plan.as_mut() {
+            plan.render(grid, area, clusters);
+            self.painted = None;
+            return;
+        }
         if let Some(painted) = &self.painted {
             if painted.columns == area.width
                 && painted.rows == area.height
@@ -723,7 +1051,7 @@ impl App for DiffScreen {
         cx.fill(area, text, ' ');
         let (header, body, hint) = regions(area);
         if header.width > 0 && header.height > 0 {
-            let title = self.header_text();
+            let title = self.header_line(header);
             cx.put_str(
                 header.x,
                 header.y,
@@ -752,6 +1080,17 @@ impl App for DiffScreen {
             self.painted = None;
         }
     }
+
+    fn token_palette(&self) -> Option<&[Color]> {
+        if self.force_redraw.swap(false, Ordering::Relaxed) {
+            self.redraw_phase.fetch_xor(true, Ordering::Relaxed);
+        }
+        if self.redraw_phase.load(Ordering::Relaxed) {
+            Some(&[])
+        } else {
+            None
+        }
+    }
 }
 
 impl DiffScreen {
@@ -761,8 +1100,16 @@ impl DiffScreen {
         match mouse.kind {
             MouseKind::Down(MouseButton::Left) => {
                 self.revise();
-                self.drag
+                let pane = layout.panes.first().map(|pane| pane.rect);
+                let divider = self
+                    .drag
                     .press(&self.tree, &layout, mouse.column, mouse.row);
+                if divider || self.apply_chip(mouse.column, mouse.row) {
+                    return;
+                }
+                if let Some(area) = pane {
+                    self.select_hunk_at(area, mouse.column, mouse.row);
+                }
             }
             MouseKind::Drag(MouseButton::Left) => {
                 self.revise();
@@ -1640,6 +1987,83 @@ mod tests {
     }
 
     #[test]
+    fn a_choice_keeps_the_selected_stacked_hunk_visible() {
+        let mut base = String::new();
+        let mut ours = String::new();
+        let mut theirs = String::new();
+        for index in 0..30 {
+            let old = format!("OLD{index:02}\n");
+            let new = format!("NEW{index:02}\n");
+            base.push_str(&old);
+            ours.push_str(&old);
+            theirs.push_str(&new);
+        }
+        for index in 0..30 {
+            let line = format!("CTX{index:02}\n");
+            base.push_str(&line);
+            ours.push_str(&line);
+            theirs.push_str(&line);
+        }
+        base.push_str("SECOND_OLD\n");
+        ours.push_str("SECOND_OLD\n");
+        theirs.push_str("SECOND_NEW\n");
+        let mut screen = DiffScreen::new(&base, &ours, &theirs);
+        let _ = frame(&mut screen);
+        press(&mut screen, 'n');
+        let jumped = frame(&mut screen);
+        assert_eq!(screen.selected_hunk(), 1);
+        let top = screen.scroll_top();
+        assert!(jumped.contains("SECOND_OLD"), "{jumped}");
+        assert!(jumped.contains("SECOND_NEW"), "{jumped}");
+        press(&mut screen, 'o');
+        let chosen = frame(&mut screen);
+        assert_eq!(screen.selected_hunk(), 1);
+        assert_eq!(screen.scroll_top(), top);
+        let body = stacked_body(&chosen);
+        assert!(
+            body.iter().any(|line| line.contains("SECOND_OLD")),
+            "{chosen}"
+        );
+        assert!(
+            body.iter().any(|line| line.contains("= SECOND_OLD")),
+            "{chosen}"
+        );
+    }
+
+    #[test]
+    fn stacked_choices_show_the_result_without_resizing() {
+        let base = "alpha\nbase-line\nomega\n";
+        let ours = "alpha\nours-line\nomega\n";
+        let theirs = "alpha\ntheirs-line\nomega\n";
+        let mut screen =
+            DiffScreen::with_editor(base, ours, theirs, |_| Ok(String::from("CUSTOM_RESULT\n")));
+        let _ = frame(&mut screen);
+        press(&mut screen, 'o');
+        let mine = frame(&mut screen);
+        assert!(mine.contains("= ours-line"), "{mine}");
+        assert_eq!(screen.result_text().unwrap(), ours);
+        press(&mut screen, 't');
+        let taken = frame(&mut screen);
+        assert!(taken.contains("= theirs-line"), "{taken}");
+        assert_eq!(screen.result_text().unwrap(), theirs);
+        press(&mut screen, 'b');
+        let both = frame(&mut screen);
+        assert!(both.contains("= ours-line"), "{both}");
+        assert!(both.contains("= theirs-line"), "{both}");
+        assert_eq!(
+            screen.result_text().unwrap(),
+            "alpha\nours-line\ntheirs-line\nomega\n"
+        );
+        press(&mut screen, 'e');
+        let edited = frame(&mut screen);
+        assert!(edited.contains("= CUSTOM_RESULT"), "{edited}");
+        assert_eq!(
+            screen.result_text().unwrap(),
+            "alpha\nCUSTOM_RESULT\nomega\n"
+        );
+    }
+
+    #[test]
     fn width_picks_the_layout_and_keeps_the_hunk() {
         let mut screen = two_hunks();
         let _ = render_once(&mut screen, 160, 40);
@@ -1894,6 +2318,111 @@ mod tests {
         assert_eq!(columns_to_bytes("你", Span { start: 2, end: 4 }), None);
     }
 
+    fn press(screen: &mut DiffScreen, key: char) {
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char(key))));
+    }
+
+    fn conflict_files() -> (&'static str, &'static str, &'static str) {
+        (
+            include_str!("../../drift-fixtures/fixtures/status/conflict/base/hypr/looknfeel.lua"),
+            include_str!("../../drift-fixtures/fixtures/status/conflict/ours/hypr/looknfeel.lua"),
+            include_str!("../../drift-fixtures/fixtures/status/conflict/theirs/hypr/looknfeel.lua"),
+        )
+    }
+
+    #[test]
+    fn hunk_keys_build_the_fixture_result() {
+        let (base, ours, theirs) = conflict_files();
+        let mut screen = DiffScreen::new(base, ours, theirs);
+        press(&mut screen, 'o');
+        assert_eq!(screen.result_text().unwrap(), ours);
+        press(&mut screen, 't');
+        assert_eq!(screen.result_text().unwrap(), theirs);
+        press(&mut screen, 'b');
+        assert_eq!(
+            screen.result_text().unwrap(),
+            "alpha\nours-middle\ntheirs-middle\nomega\n"
+        );
+    }
+
+    #[test]
+    fn an_unresolved_conflict_blocks_write_and_says_why() {
+        let (base, ours, theirs) = conflict_files();
+        let mut screen = DiffScreen::new(base, ours, theirs);
+        press(&mut screen, 'w');
+        assert!(!screen.plan_open());
+        assert_eq!(screen.notice(), Some("unresolved conflict blocks write"));
+        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let text = grid.display_text(&clusters);
+        assert!(text.contains("unresolved conflict blocks write"), "{text}");
+        assert!(!screen.plan_open());
+    }
+
+    #[test]
+    fn a_clean_merge_opens_the_plan() {
+        let mut screen = DiffScreen::new(
+            include_str!(
+                "../../drift-fixtures/fixtures/status/merges-cleanly/base/hypr/looknfeel.lua"
+            ),
+            include_str!(
+                "../../drift-fixtures/fixtures/status/merges-cleanly/ours/hypr/looknfeel.lua"
+            ),
+            include_str!(
+                "../../drift-fixtures/fixtures/status/merges-cleanly/theirs/hypr/looknfeel.lua"
+            ),
+        );
+        assert_eq!(screen.result_text().unwrap(), "alpha\nours\ntheirs\n");
+        press(&mut screen, 'w');
+        assert!(screen.plan_open());
+        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let text = grid.display_text(&clusters);
+        assert!(text.contains("merge"), "{text}");
+        press(&mut screen, 'n');
+        assert!(!screen.plan_open());
+    }
+
+    #[test]
+    fn a_fake_editor_round_trips_into_the_result() {
+        let (base, ours, theirs) = conflict_files();
+        let mut screen =
+            DiffScreen::with_editor(base, ours, theirs, |_| Ok(String::from("custom-middle\n")));
+        press(&mut screen, 'e');
+        assert_eq!(
+            screen.result_text().unwrap(),
+            "alpha\ncustom-middle\nomega\n"
+        );
+    }
+
+    #[test]
+    fn a_click_selects_a_hunk_and_a_chip_keeps_ours() {
+        let mut screen = two_hunks();
+        let _ = render_once(&mut screen, 200, 40);
+        screen.update(&Event::Mouse(MouseEvent::new(
+            MouseKind::Down(MouseButton::Left),
+            2,
+            3,
+        )));
+        assert_eq!(screen.selected_hunk(), 1);
+        press(&mut screen, 'o');
+        assert!(screen.result_text().unwrap().ends_with("z\n"));
+
+        let mut replacement = DiffScreen::new("a\n", "a\n", "b\n");
+        let (grid, clusters) = render_once(&mut replacement, 200, 40);
+        let header = grid
+            .display_text(&clusters)
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+        let column = u16::try_from(header.find("[o]").expect("chip")).unwrap();
+        replacement.update(&Event::Mouse(MouseEvent::new(
+            MouseKind::Down(MouseButton::Left),
+            column,
+            0,
+        )));
+        assert_eq!(replacement.result_text().unwrap(), "a\n");
+    }
+
     fn fg_colors(snap: &str, row: usize) -> Vec<String> {
         let mut colors = Vec::new();
         let section = snap.split("@fg\n").nth(1).unwrap_or("");
@@ -1910,5 +2439,99 @@ mod tests {
             }
         }
         colors
+    }
+
+    fn content(text: &str) -> DiffContent {
+        DiffContent::Text {
+            sha256: "ab".repeat(32),
+            text: text.to_string(),
+        }
+    }
+
+    fn file_diff(base: DiffContent, ours: DiffContent, theirs: DiffContent) -> FileDiff {
+        FileDiff {
+            path: ".config/hypr/a.lua".to_string(),
+            status: drift_core::Status::Conflict,
+            badge: None,
+            provenance: drift_core::BaseProvenance::Reviewed,
+            note: String::new(),
+            base,
+            ours,
+            theirs,
+        }
+    }
+
+    #[test]
+    fn a_file_diff_opens_with_its_path_in_the_header_and_all_three_sides() {
+        let mut screen = DiffScreen::from_file_diff(&file_diff(
+            content("alpha\nhello\n"),
+            content("alpha\nHELLO\n"),
+            content("alpha\nhola\n"),
+        ))
+        .unwrap();
+        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let text = grid.display_text(&clusters);
+        assert!(
+            text.lines()
+                .next()
+                .unwrap()
+                .contains("Diff  .config/hypr/a.lua"),
+            "{text}"
+        );
+        for needle in ["hello", "HELLO", "hola"] {
+            assert!(text.contains(needle), "{needle}\n{text}");
+        }
+    }
+
+    #[test]
+    fn an_absent_base_is_two_way_and_an_absent_live_file_diffs_against_nothing() {
+        let mut two = DiffScreen::from_file_diff(&file_diff(
+            DiffContent::Absent,
+            content("mine\n"),
+            content("theirs\n"),
+        ))
+        .unwrap();
+        let (grid, clusters) = render_once(&mut two, 160, 40);
+        assert!(grid.display_text(&clusters).contains("base unknown"));
+        let mut missing = DiffScreen::from_file_diff(&file_diff(
+            DiffContent::Absent,
+            DiffContent::Absent,
+            content("new file\n"),
+        ))
+        .unwrap();
+        let (grid, clusters) = render_once(&mut missing, 160, 40);
+        assert!(grid.display_text(&clusters).contains("new file"));
+    }
+
+    #[test]
+    fn sides_that_are_not_text_are_refused_with_the_side_and_the_path() {
+        let hashed = DiffContent::HashOnly {
+            sha256: "cd".repeat(32),
+            len: 3,
+            reason: drift_core::HashOnlyReason::NonUtf8,
+        };
+        let error = DiffScreen::from_file_diff(&file_diff(
+            DiffContent::Absent,
+            hashed.clone(),
+            content("t\n"),
+        ))
+        .err()
+        .unwrap();
+        assert_eq!(
+            error,
+            ".config/hypr/a.lua: the live side is not shown as text (not UTF-8 or over 1 MiB)"
+        );
+        let error = DiffScreen::from_file_diff(&file_diff(
+            DiffContent::Absent,
+            content("o\n"),
+            DiffContent::Unreadable,
+        ))
+        .err()
+        .unwrap();
+        assert_eq!(error, ".config/hypr/a.lua: the template side is unreadable");
+        let error = DiffScreen::from_file_diff(&file_diff(hashed, content("o\n"), content("t\n")))
+            .err()
+            .unwrap();
+        assert!(error.contains("the base side"), "{error}");
     }
 }

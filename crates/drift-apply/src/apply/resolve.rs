@@ -165,6 +165,14 @@ fn remove_base(share: &Path, root: &str, rel: &RelPath) -> bool {
     }
 }
 
+pub fn recorded_bases(state: &Path, target: &str) -> Result<Vec<String>, ApplyError> {
+    Ok(load_previous(state, target)?
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(root, rel, _)| format!("{root}/{}", rel.as_str()))
+        .collect())
+}
+
 pub fn restore_reviewed_bases(
     share: &Path,
     state: &Path,
@@ -229,10 +237,14 @@ fn ensure_transaction(
     if node_exists(&dir) {
         return Ok(());
     }
+    let prune = transactions_to_prune(state)?;
+    let prune_refs: Vec<&str> = prune.iter().map(String::as_str).collect();
     reserve_transaction(state, id)?;
-    let plan = Plan::new(id, time, package_version, Vec::new(), &[])
+    let plan = Plan::new(id, time, package_version, Vec::new(), &prune_refs)
         .map_err(|error| bare(error.to_string()))?;
-    write_manifest(state, &plan)
+    write_manifest(state, &plan)?;
+    remove_transactions(state, plan.prune())?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,11 +261,30 @@ pub fn undo_with_bases(
     undo_with_bases_probed(roots, share, request, &mut || {})
 }
 
+pub fn undo_with_bases_expecting(
+    roots: &Roots,
+    share: &Path,
+    request: &UndoRequest<'_>,
+    prune: &[String],
+) -> Result<UndoneWithBases, ApplyError> {
+    undo_checked(roots, share, request, Some(prune), &mut || {})
+}
+
 #[doc(hidden)]
 pub fn undo_with_bases_probed(
     roots: &Roots,
     share: &Path,
     request: &UndoRequest<'_>,
+    between: &mut dyn FnMut(),
+) -> Result<UndoneWithBases, ApplyError> {
+    undo_checked(roots, share, request, None, between)
+}
+
+fn undo_checked(
+    roots: &Roots,
+    share: &Path,
+    request: &UndoRequest<'_>,
+    expected_prune: Option<&[String]>,
     between: &mut dyn FnMut(),
 ) -> Result<UndoneWithBases, ApplyError> {
     let mut bases = Restored {
@@ -263,7 +294,17 @@ pub fn undo_with_bases_probed(
     let outcome = undo_locked(
         roots,
         request,
-        || load_previous(&roots.state, request.target),
+        || {
+            if let Some(expected) = expected_prune {
+                let now = transactions_to_prune(&roots.state)?;
+                if !same_ids(expected, &now) {
+                    return Err(bare(
+                        "the transactions to prune changed since the preview; nothing was written",
+                    ));
+                }
+            }
+            load_previous(&roots.state, request.target)
+        },
         |previous, result| {
             let has_record = previous.is_some();
             let outcome = match result {

@@ -17,8 +17,8 @@ mod undo;
 use undo::undo_locked;
 
 pub use resolve::{
-    execute, restore_reviewed_bases, undo_with_bases, undo_with_bases_probed, Executed, Restored,
-    UndoneWithBases,
+    execute, recorded_bases, restore_reviewed_bases, undo_with_bases, undo_with_bases_expecting,
+    undo_with_bases_probed, Executed, Restored, UndoneWithBases,
 };
 
 pub fn pending_prune(state: &Path) -> Result<Vec<String>, ApplyError> {

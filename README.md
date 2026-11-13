@@ -26,6 +26,10 @@ The Omarchy menu opens Drift with app id `TUI.float`. Omarchy floats and centers
 
 ![Narrower diff layouts](docs/media/layout-cycle.gif)
 
+`o` keeps the selected hunk's ours text, `t` takes theirs, `b` keeps both, and `e` edits that hunk. The result pane updates immediately. `w` opens the plan once every conflict is chosen. An unresolved conflict stays in the result pane and `w` explains why it will not open the plan.
+
+![Hunk choices](docs/media/hunk-resolver.gif)
+
 ## Plan dialog
 
 Before anything is written, the plan dialog lists every file with its action, the backup location and a diff summary, and the old transactions that will be pruned. Focus starts on Cancel. `d` expands the selected file's diff, Tab moves between the buttons, `y` confirms, `n` or Escape cancels, and the mouse works on the buttons and rows. The capture below is the real program: `cargo run -p drift-tui --example plan_dialog` opens the dialog on a sample plan and writes nothing; here it expands the first diff, the second diff, moves focus to Confirm and confirms.
@@ -37,6 +41,12 @@ Before anything is written, the plan dialog lists every file with its action, th
 `drift` scans the installed package against your files and shows the result as a path tree. Every file has a glyph, its status label and a colour, so no status depends on colour alone; the header counts each status and doubles as the filter buttons. `j` and `k` move, `h` and `l` collapse and expand, `1`-`6` filter by status and `0` clears, `/` searches as you type, `Space` marks and `a` marks everything in the filter. The mouse selects, double-clicks to open, scrolls, toggles carets and checkboxes, and presses the header counts and the hint bar. The capture below is the real program: `cargo run -p drift-tui --example tree_screen` opens the screen on a sample report. It moves to a file (the summary pane shows its template and base), marks it, filters to upstream changes, then searches for `way`.
 
 ![Tree screen](docs/media/tree-screen.gif)
+
+## Opening a diff
+
+`Enter` on a file of the tree (or a double-click) opens its diff: base, yours and the package's side by side, with the hunks and the automatic result. `n` and `p` move between hunks, `Tab` moves between panes, `v` cycles the layouts (four panes, two panes, stacked), and `Esc` or `q` returns to the tree with the same selection. A file whose sides cannot be shown as text (not UTF-8, over 1 MiB or unreadable) is named in the notice line instead. The capture below is the real `drift` binary running on a scratch home directory with one edited file: it filters to local overrides, selects the file, opens the diff, cycles the layouts and goes back.
+
+![Opening a diff](docs/media/open-diff.gif)
 
 ## Acting on files from the tree
 
@@ -93,6 +103,24 @@ drift resolve "$HOME/.config/hypr/looknfeel.lua" --merge --yes
 - `--merge` applies a three-way merge when it has no conflicting hunks. Files with conflicts, no known base, non-text content or only local changes are skipped and named.
 
 Symlinks, files an app rewrites, files without a template and files already equal to upstream are skipped with a reason. A write under `~/.config/hypr` is followed by `hyprctl configerrors`, and Drift offers to undo the transaction if Hyprland reports errors.
+
+## History and undo
+
+```sh
+drift history
+drift history --json
+drift undo --dry-run
+drift undo resolve-1794539706581 --yes
+drift undo --force .config/hypr/a.lua
+```
+
+`history` lists the transactions Drift has written, newest first: id, time, package version, file count and what was done. `undo` previews what undoing a transaction (the newest by default) would restore or remove, and writes only after you answer `y`; `--yes` skips the question, `--dry-run` only prints the preview, and without a terminal nothing is written unless `--yes` is given. Undoing also puts back the reviewed bases the transaction replaced, so an undone take upstream reads as upstream changed again and an undone keep mine is no longer acknowledged. The undo is a transaction of its own and can be undone in turn.
+
+A file that changed after the transaction is left alone and named; `--force <path>` restores it anyway. Files the transaction left as they were are listed and skipped.
+
+On the tree screen `H` opens the same list. `Enter` asks to undo the selected transaction through the plan dialog, `U` also restores files that changed since, `r` reloads, and `q` goes back. The screen and the command write the same transaction. The capture below is the real `drift` binary running against a scratch home directory: it opens the history, selects a take upstream, reads the plan and confirms.
+
+![History and undo](docs/media/history.gif)
 
 ## Package snapshot
 

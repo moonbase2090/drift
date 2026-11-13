@@ -34,6 +34,7 @@ pub enum Action {
     Take(Vec<String>),
     Merge(Vec<String>),
     Ignore(Vec<String>),
+    History,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,13 +78,13 @@ const HINTS: &[(&str, KeyCode)] = &[
     ("[Q] Quit", KeyCode::Char('q')),
     ("[/] Search", KeyCode::Char('/')),
     ("[1-6] Filter", KeyCode::Char('1')),
-    ("[0] Clear", KeyCode::Char('0')),
     ("[Space] Mark", KeyCode::Char(' ')),
     ("[Enter] Open", KeyCode::Enter),
     ("[o] Keep", KeyCode::Char('o')),
     ("[t] Take", KeyCode::Char('t')),
     ("[m] Merge", KeyCode::Char('m')),
     ("[r] Rescan", KeyCode::Char('r')),
+    ("[H] History", KeyCode::Char('H')),
 ];
 
 impl TreeScreen {
@@ -190,6 +191,7 @@ impl TreeScreen {
             KeyCode::Char('t') => return self.act(Action::Take),
             KeyCode::Char('m') => return self.act(Action::Merge),
             KeyCode::Char('i') => return self.act(Action::Ignore),
+            KeyCode::Char('H') => return Some(Action::History),
             KeyCode::Esc => self.back(),
             _ => {}
         }
@@ -1451,6 +1453,18 @@ mod tests {
         let mut sorted = paths.clone();
         sorted.sort();
         assert_eq!(paths, sorted);
+        assert_eq!(
+            screen.handle_at(&click_event(column_of("[H] History"), row), Instant::now()),
+            Some(Action::History)
+        );
+    }
+
+    #[test]
+    fn a_capital_h_asks_for_the_history_and_a_lowercase_h_still_collapses() {
+        let mut screen = opened();
+        assert_eq!(key(&mut screen, KeyCode::Char('H')), Some(Action::History));
+        assert_eq!(key(&mut screen, KeyCode::Char('h')), None);
+        assert!(text(&mut screen, 120, 36).contains("[H] History"));
     }
 
     #[test]

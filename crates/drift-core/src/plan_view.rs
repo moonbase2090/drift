@@ -27,12 +27,14 @@ pub enum DiffSummary {
     Unchanged,
     Changed { added: usize, removed: usize },
     HashOnly(HashOnly),
+    Text(String),
 }
 
 impl DiffSummary {
     pub fn label(&self) -> String {
         match self {
             DiffSummary::NotWritten => "not written".to_string(),
+            DiffSummary::Text(text) => text.clone(),
             DiffSummary::NewFile { lines } => format!("new file, {lines} lines"),
             DiffSummary::Unchanged => "no content change".to_string(),
             DiffSummary::Changed { added, removed } => format!("+{added} -{removed}"),
