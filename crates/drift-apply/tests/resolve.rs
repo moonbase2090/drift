@@ -178,6 +178,20 @@ impl HyprlandCheck for Broken {
     }
 }
 
+struct Interleaved<'a> {
+    base: PathBuf,
+    seen: std::cell::RefCell<Option<String>>,
+    other: &'a dyn Fn(),
+}
+
+impl HyprlandCheck for Interleaved<'_> {
+    fn config_errors(&self) -> HyprlandStatus {
+        *self.seen.borrow_mut() = std::fs::read_to_string(&self.base).ok();
+        (self.other)();
+        HyprlandStatus::Clean
+    }
+}
+
 fn status_of(report: &ScanReport, path: &str) -> (Status, String) {
     let entry = report
         .entries
@@ -421,6 +435,32 @@ fn unknown_and_unsupported_files_are_reported_and_do_not_stop_the_rest() {
         error.message
     );
     assert!(transactions(&world).is_empty());
+}
+
+#[test]
+fn the_base_is_committed_with_the_file_before_the_hyprland_check_so_a_concurrent_acknowledgement_wins(
+) {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "new\n", Some("mine\n"), Some("old\n"));
+    builder.file("hypr/b.lua", "new b\n", Some("mine b\n"), Some("old b\n"));
+    let world = builder.build();
+    let (prepared, _) = world.prepared(Action::TakeUpstream, "txn-1", &[".config/hypr/a.lua"]);
+    let base = world.path("home/.local/share/drift/bases/config/hypr/a.lua");
+    let other = || {
+        let (second, _) = world.prepared(Action::KeepMine, "txn-2", &[".config/hypr/b.lua"]);
+        execute(&world.roots(), &world.share(), &second, &Quiet)
+            .expect("the apply lock must be free while the checker runs");
+        std::fs::write(&base, "newer\n").unwrap();
+    };
+    let checker = Interleaved {
+        base: base.clone(),
+        seen: std::cell::RefCell::new(None),
+        other: &other,
+    };
+    let done = execute(&world.roots(), &world.share(), &prepared, &checker).unwrap();
+    assert!(done.unrecorded.is_empty());
+    assert_eq!(checker.seen.borrow().as_deref(), Some("new\n"));
+    assert_eq!(std::fs::read_to_string(&base).unwrap(), "newer\n");
 }
 
 #[test]
