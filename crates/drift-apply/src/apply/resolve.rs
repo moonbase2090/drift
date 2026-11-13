@@ -4,7 +4,7 @@ use drift_core::{BaseRecord, Plan, Prepared, RelPath};
 use drift_source::{base_path, read_base};
 
 use super::*;
-use crate::seed::record_bases;
+use crate::seed::{record_bases, Recorded};
 
 const RECORD: &str = "reviewed-bases.json";
 
@@ -109,32 +109,39 @@ pub fn execute(
             allow_symlink: false,
         })
         .collect();
-    let checked = apply_checked(
+    let mut recorded = Recorded {
+        recorded: Vec::new(),
+        failed: Vec::new(),
+    };
+    let report = apply_locked(
         roots,
         &Request {
             plan,
             files: &payloads,
             fail_at: None,
         },
-        checker,
+        &mut |_| {
+            let previous: Previous = prepared
+                .bases
+                .iter()
+                .map(|record| {
+                    (
+                        record.root.clone(),
+                        record.rel.clone(),
+                        read_base(share, &record.root, &record.rel),
+                    )
+                })
+                .collect();
+            recorded = record_bases(share, &prepared.bases);
+            if save_previous(&roots.state, plan.id(), &previous).is_err() {
+                recorded
+                    .failed
+                    .push("the previous reviewed bases (undo will not restore them)".to_string());
+            }
+        },
     )?;
-    let previous: Previous = prepared
-        .bases
-        .iter()
-        .map(|record| {
-            (
-                record.root.clone(),
-                record.rel.clone(),
-                read_base(share, &record.root, &record.rel),
-            )
-        })
-        .collect();
-    let mut recorded = record_bases(share, &prepared.bases);
-    if save_previous(&roots.state, plan.id(), &previous).is_err() {
-        recorded
-            .failed
-            .push("the previous reviewed bases (undo will not restore them)".to_string());
-    }
+    let followup = hypr::follow_write(plan, &report.applied, checker);
+    let checked = CheckedApply { report, followup };
     Ok(Executed {
         checked,
         recorded: recorded.recorded,

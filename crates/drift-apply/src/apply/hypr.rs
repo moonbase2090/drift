@@ -99,7 +99,11 @@ pub fn apply_checked(
     Ok(CheckedApply { report, followup })
 }
 
-fn follow_write(plan: &Plan, applied: &[String], checker: &dyn HyprlandCheck) -> WriteFollowup {
+pub(super) fn follow_write(
+    plan: &Plan,
+    applied: &[String],
+    checker: &dyn HyprlandCheck,
+) -> WriteFollowup {
     if !wrote_hypr(plan, applied) {
         return WriteFollowup::Clear;
     }
