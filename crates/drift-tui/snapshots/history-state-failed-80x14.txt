@@ -1,0 +1,14 @@
+ Drift  History  could not be read                                              
+ Newest first. Undo restores files and reviewed bases.                          
+                                                                                
+ Could not read the history.                                                    
+ could not read /home/user/.local/share/drift/state/backups: Permission denied  
+ (os error 13)                                                                  
+                                                                                
+ Nothing was changed. Press r to try again.                                     
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+[Q] Back  [?] Help  [:] Palette  [r] Refresh                                    

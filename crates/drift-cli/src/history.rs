@@ -133,7 +133,7 @@ impl Undoer<'_> {
             .iter()
             .find(|plan| plan.id() == target)
             .ok_or_else(|| format!("no readable transaction '{target}'"))?;
-        let items = inspect_undo(self.roots, target).map_err(|error| error.to_string())?;
+        let items = inspect_undo(self.roots, target).map_err(|error| error.describe())?;
         let package_version = read_package(&self.paths.source.package)
             .map(|package| package.version)
             .unwrap_or_else(|_| plan.package_version().to_string());
@@ -175,7 +175,7 @@ impl Undoer<'_> {
             &request,
             &preview.prune,
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.describe())?;
         match done.outcome {
             UndoOutcome::Restored(report) => Ok(Undone {
                 message: restored_message(preview, report.applied.len(), &done.bases),

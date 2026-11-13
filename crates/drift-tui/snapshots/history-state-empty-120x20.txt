@@ -1,0 +1,20 @@
+ Drift  History  0 transactions                                                                                         
+ Newest first. Undo restores files and reviewed bases.                                                                  
+                                                                                                                        
+ No transactions yet.                                                                                                   
+                                                                                                                        
+ Keep, Take and Merge in the tree record a transaction here, and Undo restores it.                                      
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+[Q] Back  [?] Help  [:] Palette  [r] Refresh                                                                            

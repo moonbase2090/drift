@@ -7,7 +7,10 @@ use lunatui_runtime::keymap::Keymap;
 
 use drift_core::HistoryView;
 
-use crate::commands::{global_keymap, history_keymap, press, GlobalCommand, HistoryCommand};
+use crate::commands::{
+    chords_text, global_keymap, history_keymap, press, GlobalCommand, HistoryCommand,
+};
+use crate::tree_screen::wrap;
 
 const WHEEL_STEP: usize = 3;
 
@@ -26,6 +29,13 @@ const HINTS: &[(&str, KeyCode)] = &[
     ("[:] Palette", KeyCode::Char(':')),
     ("[Enter] Undo", KeyCode::Enter),
     ("[U] Undo and force", KeyCode::Char('U')),
+    ("[r] Refresh", KeyCode::Char('r')),
+];
+
+const BARE_HINTS: &[(&str, KeyCode)] = &[
+    ("[Q] Back", KeyCode::Char('q')),
+    ("[?] Help", KeyCode::Char('?')),
+    ("[:] Palette", KeyCode::Char(':')),
     ("[r] Refresh", KeyCode::Char('r')),
 ];
 
@@ -151,7 +161,7 @@ impl HistoryScreen {
 
     fn page(&self) -> isize {
         self.area
-            .and_then(layout)
+            .and_then(|area| layout(area, self.view.is_empty()))
             .map_or(10, |found| (found.body.height / 2).max(1) as isize)
     }
 
@@ -161,7 +171,9 @@ impl HistoryScreen {
     }
 
     fn mouse(&mut self, kind: MouseKind, column: u16, row: u16) -> Option<HistoryAction> {
-        let found = self.area.and_then(layout)?;
+        let found = self
+            .area
+            .and_then(|area| layout(area, self.view.is_empty()))?;
         match kind {
             MouseKind::Down(MouseButton::Left) => {
                 if let Some((_, code, _)) = found
@@ -215,7 +227,7 @@ impl HistoryScreen {
             .fg(cx.token(Token::TextPrimary))
             .bg(cx.token(Token::Surface0));
         cx.fill(area, base, ' ');
-        let Some(found) = layout(area) else {
+        let Some(found) = layout(area, self.view.is_empty()) else {
             put(
                 &mut cx,
                 Rect::new(area.x, area.y, area.width, 1),
@@ -235,7 +247,7 @@ impl HistoryScreen {
 
         let count = self.view.rows.len();
         let title = match &self.error {
-            Some(message) => format!(" Drift  history failed: {message}"),
+            Some(_) => " Drift  History  could not be read".to_string(),
             None => format!(
                 " Drift  History  {count} transaction{}",
                 if count == 1 { "" } else { "s" }
@@ -249,21 +261,51 @@ impl HistoryScreen {
         put(&mut cx, found.info, &info, dim);
 
         if self.view.is_empty() {
-            put(
-                &mut cx,
-                Rect::new(
-                    found.body.x + 1,
-                    found.body.y,
-                    found.body.width.saturating_sub(1),
-                    1,
-                ),
-                if self.error.is_some() {
-                    "Nothing was loaded."
-                } else {
-                    "No transactions yet."
-                },
-                dim,
-            );
+            let mut lines: Vec<(String, Style)> = Vec::new();
+            let width = usize::from(found.body.width.saturating_sub(2));
+            match &self.error {
+                Some(message) => {
+                    lines.push(("Could not read the history.".to_string(), bold));
+                    for part in wrap(message, width) {
+                        lines.push((part, base));
+                    }
+                    lines.push((String::new(), dim));
+                    let key = chords_text(HistoryCommand::Refresh.chords());
+                    for part in wrap(
+                        &format!("Nothing was changed. Press {key} to try again."),
+                        width,
+                    ) {
+                        lines.push((part, dim));
+                    }
+                }
+                None => {
+                    lines.push(("No transactions yet.".to_string(), bold));
+                    lines.push((String::new(), dim));
+                    for part in wrap(
+                        "Keep, Take and Merge in the tree record a transaction here, and Undo restores it.",
+                        width,
+                    ) {
+                        lines.push((part, dim));
+                    }
+                }
+            }
+            for (offset, (text, style)) in lines
+                .iter()
+                .take(usize::from(found.body.height))
+                .enumerate()
+            {
+                put(
+                    &mut cx,
+                    Rect::new(
+                        found.body.x + 1,
+                        found.body.y + offset as u16,
+                        found.body.width.saturating_sub(1),
+                        1,
+                    ),
+                    text,
+                    *style,
+                );
+            }
         } else {
             if let Some(line) = self.lines.first() {
                 put(&mut cx, found.header, &format!(" {line}"), bold);
@@ -303,14 +345,14 @@ impl HistoryScreen {
     }
 }
 
-fn layout(area: Rect) -> Option<Layout> {
+fn layout(area: Rect, bare: bool) -> Option<Layout> {
     if area.width < 20 || area.height < 6 {
         return None;
     }
     let hint_y = area.y + area.height - 1;
     let mut hints = Vec::new();
     let mut x = area.x;
-    for (label, code) in HINTS {
+    for (label, code) in if bare { BARE_HINTS } else { HINTS } {
         let cells = u16::try_from(width(label)).unwrap_or(u16::MAX);
         if x + cells > area.x + area.width {
             break;
@@ -422,19 +464,6 @@ mod tests {
         assert_eq!(
             text(&mut screen, 110, 10),
             include_str!("../snapshots/history-notice-110x10.txt")
-        );
-        let mut empty = HistoryScreen::new(HistoryView {
-            rows: Vec::new(),
-            unreadable: Vec::new(),
-        });
-        assert_eq!(
-            text(&mut empty, 60, 8),
-            include_str!("../snapshots/history-empty-60x8.txt")
-        );
-        let mut failed = HistoryScreen::failed("state directory is unreadable");
-        assert_eq!(
-            text(&mut failed, 60, 8),
-            include_str!("../snapshots/history-failed-60x8.txt")
         );
     }
 
@@ -619,5 +648,98 @@ mod tests {
         gone.rows.retain(|row| row.id != "resolve-1800000000123");
         screen.replace(gone);
         assert_eq!(screen.selected_id(), Some("resolve-1799999000000"));
+    }
+
+    macro_rules! state_snapshots {
+        ($($name:literal),* $(,)?) => {
+            &[$(($name, include_str!(concat!("../snapshots/", $name, ".txt")))),*]
+        };
+    }
+
+    const STATE_SNAPSHOTS: &[(&str, &str)] = state_snapshots![
+        "history-state-empty-60x10",
+        "history-state-empty-80x14",
+        "history-state-empty-120x20",
+        "history-state-failed-60x10",
+        "history-state-failed-80x14",
+        "history-state-failed-120x20"
+    ];
+
+    fn state_snapshot(name: &str) -> &'static str {
+        STATE_SNAPSHOTS
+            .iter()
+            .find(|(known, _)| *known == name)
+            .map(|(_, text)| *text)
+            .unwrap_or_else(|| panic!("no snapshot {name}"))
+    }
+
+    #[test]
+    fn the_empty_and_failed_states_match_their_snapshots_at_three_sizes() {
+        for (columns, rows) in [(60, 10), (80, 14), (120, 20)] {
+            let mut empty = HistoryScreen::new(HistoryView {
+                rows: Vec::new(),
+                unreadable: Vec::new(),
+            });
+            assert_eq!(
+                text(&mut empty, columns, rows),
+                state_snapshot(&format!("history-state-empty-{columns}x{rows}")),
+                "empty {columns}x{rows}"
+            );
+            let mut failed = HistoryScreen::failed(
+                "could not read /home/user/.local/share/drift/state/backups: Permission denied (os error 13)",
+            );
+            assert_eq!(
+                text(&mut failed, columns, rows),
+                state_snapshot(&format!("history-state-failed-{columns}x{rows}")),
+                "failed {columns}x{rows}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_or_failed_history_offers_refresh_and_no_undo() {
+        let bare = |screen: &mut HistoryScreen| {
+            text(screen, 80, 14)
+                .lines()
+                .last()
+                .unwrap_or_default()
+                .trim_end()
+                .to_string()
+        };
+        let mut empty = HistoryScreen::new(HistoryView {
+            rows: Vec::new(),
+            unreadable: Vec::new(),
+        });
+        assert_eq!(
+            bare(&mut empty),
+            "[Q] Back  [?] Help  [:] Palette  [r] Refresh"
+        );
+        assert_eq!(key(&mut empty, KeyCode::Enter), None);
+        assert_eq!(key(&mut empty, KeyCode::Char('U')), None);
+        assert_eq!(
+            key(&mut empty, KeyCode::Char('r')),
+            Some(HistoryAction::Refresh)
+        );
+        let reason = "could not read /home/user/.local/share/drift/state/backups: Permission denied (os error 13)";
+        for (columns, rows) in [(30, 10), (60, 10), (200, 40)] {
+            let mut failed = HistoryScreen::failed(reason);
+            let shown = text(&mut failed, columns, rows);
+            let squeezed: String = shown.split_whitespace().collect();
+            let wanted: String = reason.split_whitespace().collect();
+            assert!(squeezed.contains(&wanted), "{columns}x{rows}\n{shown}");
+            assert!(shown.contains("Could not read the history."), "{shown}");
+        }
+        let mut listed = HistoryScreen::new(sample());
+        assert!(text(&mut listed, 120, 14).contains("[Enter] Undo"));
+    }
+
+    #[test]
+    fn an_unreadable_transaction_names_its_manifest_file() {
+        let mut screen = HistoryScreen::new(sample());
+        let shown = text(&mut screen, 100, 12);
+        assert!(
+            shown.contains("broken-1  (backups/broken-1/manifest.json could not be read)"),
+            "{shown}"
+        );
     }
 }

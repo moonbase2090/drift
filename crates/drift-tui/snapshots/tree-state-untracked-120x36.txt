@@ -1,0 +1,36 @@
+ Drift  omarchy-settings 4.5.0-3  0 drifted                                                                             
+ 1 ✓ unchanged 0  2 ↓ upstream changed 0  3 ≠ local override 0  4 ✗ conflict 0  5 + user-only 0  6 ? missing 0          
+ 0 of 0 files                                                                                                           
+ No tracked files                                                                                                       
+ The installed package lists no files for Drift to track.                                                               
+                                                                                                                        
+ If you expected some, check that omarchy-settings is installed and up                                                  
+ to date, then rescan.                                                                                                  
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+[Q] Quit  [?] Help  [:] Palette  [R] Rescan  [H] History                                                                

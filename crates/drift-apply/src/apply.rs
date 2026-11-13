@@ -88,6 +88,32 @@ pub struct ApplyError {
     pub unapplied: Vec<Unapplied>,
 }
 
+impl ApplyError {
+    pub fn describe(&self) -> String {
+        if self.unapplied.is_empty() {
+            return self.message.clone();
+        }
+        if self
+            .unapplied
+            .iter()
+            .all(|file| file.reason == self.message)
+        {
+            let paths: Vec<&str> = self
+                .unapplied
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect();
+            return format!("{}: {}", self.message, paths.join(", "));
+        }
+        let files: Vec<String> = self
+            .unapplied
+            .iter()
+            .map(|file| format!("{}: {}", file.path, file.reason))
+            .collect();
+        format!("{} ({})", self.message, files.join("; "))
+    }
+}
+
 impl std::fmt::Display for ApplyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
@@ -112,10 +138,22 @@ fn apply_locked(
     committed: &mut dyn FnMut(&ApplyReport),
 ) -> Result<ApplyReport, ApplyError> {
     if node_exists(&roots.omarchy_lock) {
-        return Err(refused(request.plan, "omarchy update lock is held"));
+        return Err(refused(
+            request.plan,
+            format!(
+                "omarchy update lock is held ({})",
+                roots.omarchy_lock.display()
+            ),
+        ));
     }
     if node_exists(&roots.pacman_lock) {
-        return Err(refused(request.plan, "pacman database lock is held"));
+        return Err(refused(
+            request.plan,
+            format!(
+                "pacman database lock is held ({})",
+                roots.pacman_lock.display()
+            ),
+        ));
     }
     let _lock = match DriftLock::take(&roots.state) {
         Ok(lock) => lock,

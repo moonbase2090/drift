@@ -1,8 +1,11 @@
- Drift  scan failed: no package database                                        
- 1 ✓ unchanged 0  2 ↓ upstream changed 0  3 ≠ local override 0                  
- 4 ✗ conflict 0  5 + user-only 0  6 ? missing 0                                 
- 0 of 0 files                                                                   
- Nothing was scanned.                                                           
+ Drift  4.5.0-3  3 drifted  | update pending review: 4.4.0-1 -> 4.5.0-3         
+ 1 ✓ unchanged 2  2 ↓ upstream changed 1  3 ≠ local override 2                  
+ 4 ✗ conflict 1  5 + user-only 1  6 ? missing 1                                 
+ search: zzz_  |  0 of 8 files                                                  
+ No files match                                                                 
+ Search: zzz                                                                    
+                                                                                
+ Press Esc to clear the search or filter.                                       
                                                                                 
                                                                                 
                                                                                 
@@ -13,12 +16,9 @@
                                                                                 
                                                                                 
                                                                                 
---------------------------------------------------------------------------------
-Nothing selected.                                                               
                                                                                 
                                                                                 
                                                                                 
                                                                                 
                                                                                 
-                                                                                
-[Q] Quit  [?] Help  [:] Palette  [/] Search  [Enter] Open  [o] Keep  [t] Take   
+[Q] Quit  [?] Help  [:] Palette  [/] Search  [R] Rescan  [H] History            
