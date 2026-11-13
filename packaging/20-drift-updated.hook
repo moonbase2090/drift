@@ -1,0 +1,9 @@
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = omarchy-settings
+
+[Action]
+Description = Recording that Omarchy templates were upgraded
+When = PostTransaction
+Exec = /usr/bin/drift-mark-updated

@@ -569,6 +569,33 @@ AbortOnFail
 }
 
 #[test]
+fn the_post_transaction_hook_marks_the_upgrade_and_does_not_abort() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packaging/20-drift-updated.hook");
+    assert_eq!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("20-drift-updated.hook")
+    );
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("AbortOnFail"), "{text}");
+    assert!(!text.contains("NeedsTargets"), "{text}");
+    let hook = parse_hook(&text).unwrap();
+    assert_eq!(hook.triggers.len(), 1);
+    assert_eq!(hook.triggers[0].operations, vec!["Upgrade".to_string()]);
+    assert_eq!(hook.triggers[0].kind.as_deref(), Some("Package"));
+    assert_eq!(
+        hook.triggers[0].targets,
+        vec!["omarchy-settings".to_string()]
+    );
+    assert_eq!(hook.when, "PostTransaction");
+    assert_eq!(hook.exec, "/usr/bin/drift-mark-updated");
+    assert!(hook.description.is_some());
+    assert!(hook.depends.is_empty());
+    assert!(!hook.abort_on_fail);
+    assert!(!hook.needs_targets);
+}
+
+#[test]
 fn messages_name_a_rejected_version() {
     let error = SnapshotError::Version("a/b".to_string());
     assert!(error.to_string().contains("a/b"));
