@@ -2159,7 +2159,7 @@ mod tests {
     }
 
     fn wide(screen: &mut Screen) -> String {
-        let (grid, clusters) = render_once(screen, 160, 40);
+        let (grid, clusters) = render_once(screen, 200, 40);
         grid.display_text(&clusters)
     }
 

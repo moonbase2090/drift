@@ -18,7 +18,8 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::diff_palette::{DiffPalette, RowKind, Tints};
 
-const WIDE: u16 = 160;
+const MIN_TEXT_PANE: u16 = 40;
+const WIDE: u16 = MIN_TEXT_PANE * 5;
 const MEDIUM: u16 = 100;
 const QUIT: &str = "diff.quit";
 const LAYOUT: &str = "diff.layout";
@@ -2146,7 +2147,7 @@ mod tests {
         text.lines().position(|line| line.contains(needle))
     }
 
-    const SIZES: [(u16, u16); 2] = [(160, 40), (200, 60)];
+    const SIZES: [(u16, u16); 2] = [(200, 40), (200, 60)];
 
     fn changed() -> DiffScreen {
         DiffScreen::new(
@@ -2438,7 +2439,7 @@ mod tests {
             let colors = fg_colors(&snap, world);
             assert!(colors.len() > 1, "{columns} {colors:?}");
             let expected = match (columns, rows) {
-                (160, 40) => include_str!("../snapshots/diff-160x40.txt"),
+                (200, 40) => include_str!("../snapshots/diff-200x40.txt"),
                 (200, 60) => include_str!("../snapshots/diff-200x60.txt"),
                 _ => unreachable!(),
             };
@@ -2447,8 +2448,43 @@ mod tests {
     }
 
     #[test]
+    fn four_panes_are_chosen_only_when_every_text_pane_is_useful() {
+        let narrowest = |columns: u16| {
+            let mut screen = changed();
+            screen.pinned = Some(Layout::Four);
+            let _ = render_once(&mut screen, columns, 40);
+            screen.pane_widths()[1..].iter().copied().min().unwrap()
+        };
+        assert!(narrowest(WIDE) >= MIN_TEXT_PANE);
+        assert!(narrowest(WIDE - 20) < MIN_TEXT_PANE);
+        for (columns, expected) in [
+            (120_u16, Layout::Two),
+            (160, Layout::Two),
+            (WIDE - 1, Layout::Two),
+            (WIDE, Layout::Four),
+            (240, Layout::Four),
+        ] {
+            let mut screen = changed();
+            let _ = render_once(&mut screen, columns, 40);
+            assert_eq!(screen.effective(), expected, "{columns}");
+        }
+    }
+
+    #[test]
+    fn the_layout_key_still_reaches_four_panes_below_the_automatic_width() {
+        let mut screen = changed();
+        let _ = render_once(&mut screen, 170, 40);
+        assert_eq!(screen.effective(), Layout::Two);
+        press(&mut screen, 'v');
+        press(&mut screen, 'v');
+        assert_eq!(screen.effective(), Layout::Four);
+        let (grid, clusters) = render_once(&mut screen, 170, 40);
+        assert!(grid.display_text(&clusters).contains("hunks"));
+    }
+
+    #[test]
     fn snapshots_show_narrower_layouts() {
-        for (columns, rows) in [(80_u16, 24_u16), (100, 30), (120, 36)] {
+        for (columns, rows) in [(80_u16, 24_u16), (100, 30), (120, 36), (160, 40)] {
             let mut screen = changed();
             let (grid, clusters) = render_once(&mut screen, columns, rows);
             let text = grid.display_text(&clusters);
@@ -2458,7 +2494,7 @@ mod tests {
                     assert!(text.contains("stacked"), "{columns}");
                     assert!(text.contains("hello WORLD"), "{columns}");
                 }
-                (100, 30) | (120, 36) => {
+                (100, 30) | (120, 36) | (160, 40) => {
                     let body = text.lines().nth(1).unwrap();
                     assert!(
                         body.contains("ours") && body.contains("theirs"),
@@ -2474,6 +2510,7 @@ mod tests {
                 (80, 24) => include_str!("../snapshots/diff-80x24.txt"),
                 (100, 30) => include_str!("../snapshots/diff-100x30.txt"),
                 (120, 36) => include_str!("../snapshots/diff-120x36.txt"),
+                (160, 40) => include_str!("../snapshots/diff-160x40.txt"),
                 _ => unreachable!(),
             };
             assert_eq!(snap, expected, "{columns}x{rows}");
@@ -2700,7 +2737,7 @@ mod tests {
     #[test]
     fn width_picks_the_layout_and_keeps_the_hunk() {
         let mut screen = two_hunks();
-        let _ = render_once(&mut screen, 160, 40);
+        let _ = render_once(&mut screen, 200, 40);
         screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('n'))));
         assert_eq!(screen.selected_hunk(), 1);
         let (grid, clusters) = render_once(&mut screen, 120, 36);
@@ -2723,22 +2760,22 @@ mod tests {
     #[test]
     fn v_cycles_layouts_until_the_width_class_changes() {
         let mut screen = changed();
-        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let (grid, clusters) = render_once(&mut screen, 240, 40);
         let wide = grid.display_text(&clusters);
         assert!(wide.contains("hunks"), "{wide}");
         screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('v'))));
-        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let (grid, clusters) = render_once(&mut screen, 240, 40);
         let two = grid.display_text(&clusters);
         assert!(two.contains("ours") && two.contains("result"), "{two}");
         assert!(!two.lines().nth(1).unwrap_or("").contains("hunks"));
         screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('v'))));
-        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let (grid, clusters) = render_once(&mut screen, 240, 40);
         assert!(grid.display_text(&clusters).contains("stacked"));
         screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('v'))));
-        let (grid, clusters) = render_once(&mut screen, 180, 40);
+        let (grid, clusters) = render_once(&mut screen, 210, 40);
         assert!(grid.display_text(&clusters).contains("hunks"));
         screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('v'))));
-        let (grid, clusters) = render_once(&mut screen, 168, 40);
+        let (grid, clusters) = render_once(&mut screen, 205, 40);
         assert!(grid.display_text(&clusters).contains("result"));
         let (grid, clusters) = render_once(&mut screen, 80, 24);
         assert!(grid.display_text(&clusters).contains("stacked"));
@@ -2747,7 +2784,7 @@ mod tests {
     #[test]
     fn an_unknown_base_shows_two_panes_and_a_note() {
         let mut screen = DiffScreen::without_base("alpha\nhello\n", "alpha\nHELLO\n");
-        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let (grid, clusters) = render_once(&mut screen, 200, 40);
         let text = grid.display_text(&clusters);
         assert!(text.contains("base unknown"), "{text}");
         assert!(text.contains("ours"), "{text}");
@@ -2852,8 +2889,8 @@ mod tests {
             scrolled.display_text(&scrolled_clusters)
         );
         let mut marked = changed();
-        let (once, once_clusters) = render_once(&mut marked, 160, 40);
-        let (again, again_clusters) = render_once(&mut marked, 160, 40);
+        let (once, once_clusters) = render_once(&mut marked, 200, 40);
+        let (again, again_clusters) = render_once(&mut marked, 200, 40);
         assert_eq!(
             styled_snapshot(&once, &once_clusters),
             styled_snapshot(&again, &again_clusters)
@@ -2878,18 +2915,18 @@ mod tests {
         assert!(text.len() <= MAX_DIFF_BYTES as usize);
         let mut changed = changed_near_the_cap(&text);
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Down)));
-        let (scrolled, grid, clusters) = timed_frame(&mut changed, 160, 40);
+        let (scrolled, grid, clusters) = timed_frame(&mut changed, 200, 40);
         assert!(grid.display_text(&clusters).contains('B'));
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Tab)));
-        let (focused, _, _) = timed_frame(&mut changed, 160, 40);
+        let (focused, _, _) = timed_frame(&mut changed, 200, 40);
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Char('n'))));
-        let (jumped, grid, clusters) = timed_frame(&mut changed, 160, 40);
+        let (jumped, grid, clusters) = timed_frame(&mut changed, 200, 40);
         assert!(grid.display_text(&clusters).contains('C'));
         assert!(changed.scroll_top() > 0);
         let worst_cold = scrolled.max(focused).max(jumped);
         assert!(
             worst_cold < Duration::from_millis(8),
-            "160x40 cold changed worst {worst_cold:?} scroll {scrolled:?} focus {focused:?} hunk {jumped:?}"
+            "200x40 cold changed worst {worst_cold:?} scroll {scrolled:?} focus {focused:?} hunk {jumped:?}"
         );
         let mut screen = DiffScreen::new(&text, &text, &text);
         assert_eq!(screen.aligned.base.len(), lines);
@@ -2926,7 +2963,7 @@ mod tests {
         let mut screen = DiffScreen::new("same\n", "same\n", "same\n");
         let slow = cpu_cost(|| {
             busy_for(Duration::from_millis(12));
-            let _ = render_once(&mut screen, 160, 40);
+            let _ = render_once(&mut screen, 200, 40);
         });
         assert!(slow >= Duration::from_millis(8), "{slow:?}");
     }
@@ -3168,7 +3205,7 @@ mod tests {
         press(&mut screen, 'w');
         assert!(!screen.plan_open());
         assert_eq!(screen.notice(), Some("unresolved conflict blocks write"));
-        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let (grid, clusters) = render_once(&mut screen, 200, 40);
         let text = grid.display_text(&clusters);
         assert!(text.contains("unresolved conflict blocks write"), "{text}");
         assert!(!screen.plan_open());
@@ -3190,7 +3227,7 @@ mod tests {
         assert_eq!(screen.result_text().unwrap(), "alpha\nours\ntheirs\n");
         press(&mut screen, 'w');
         assert!(screen.plan_open());
-        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let (grid, clusters) = render_once(&mut screen, 200, 40);
         let text = grid.display_text(&clusters);
         assert!(text.contains("merge"), "{text}");
         press(&mut screen, 'n');
@@ -3285,7 +3322,7 @@ mod tests {
             content("alpha\nhola\n"),
         ))
         .unwrap();
-        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let (grid, clusters) = render_once(&mut screen, 200, 40);
         let text = grid.display_text(&clusters);
         assert!(
             text.lines()
@@ -3307,7 +3344,7 @@ mod tests {
             content("theirs\n"),
         ))
         .unwrap();
-        let (grid, clusters) = render_once(&mut two, 160, 40);
+        let (grid, clusters) = render_once(&mut two, 200, 40);
         assert!(grid.display_text(&clusters).contains("base unknown"));
         let mut missing = DiffScreen::from_file_diff(&file_diff(
             DiffContent::Absent,
@@ -3315,7 +3352,7 @@ mod tests {
             content("new file\n"),
         ))
         .unwrap();
-        let (grid, clusters) = render_once(&mut missing, 160, 40);
+        let (grid, clusters) = render_once(&mut missing, 200, 40);
         assert!(grid.display_text(&clusters).contains("new file"));
     }
 
@@ -3354,7 +3391,7 @@ mod tests {
     #[test]
     fn every_command_in_the_diff_keymap_is_handled_and_an_unknown_one_is_not() {
         let mut screen = two_hunks();
-        let _ = render_once(&mut screen, 160, 40);
+        let _ = render_once(&mut screen, 200, 40);
         for command in diff_keymap().commands() {
             if command.id() == "diff.edit" || command.id() == "diff.write" {
                 continue;
