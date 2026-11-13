@@ -68,6 +68,7 @@ pub struct DiffScreen {
     generation: u64,
     painted: Option<Painted>,
     force_redraw: AtomicBool,
+    redraw_phase: AtomicBool,
 }
 
 struct Chip {
@@ -174,6 +175,7 @@ impl DiffScreen {
             generation: 0,
             painted: None,
             force_redraw: AtomicBool::new(false),
+            redraw_phase: AtomicBool::new(false),
         }
     }
 
@@ -854,6 +856,9 @@ impl App for DiffScreen {
 
     fn token_palette(&self) -> Option<&[Color]> {
         if self.force_redraw.swap(false, Ordering::Relaxed) {
+            self.redraw_phase.fetch_xor(true, Ordering::Relaxed);
+        }
+        if self.redraw_phase.load(Ordering::Relaxed) {
             Some(&[])
         } else {
             None

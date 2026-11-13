@@ -28,7 +28,7 @@ fn diff_host() {
         libc::umask(0o022);
     }
     let screen = drift_tui::DiffScreen::new("same\n", "left\n", "right\n");
-    let _ = lunatui::run(screen, lunatui::RunOptions::new(160, 40).pixels(false));
+    lunatui::run(screen, lunatui::RunOptions::new(160, 40).pixels(false)).unwrap();
 }
 
 fn edit_probe(path: &str) {
@@ -37,6 +37,7 @@ fn edit_probe(path: &str) {
     let _ = out.flush();
     let byte = read_byte(Duration::from_secs(3)).unwrap_or(b'?');
     consume_line();
+    write_back(path, &format!("kept-{}\n", byte as char));
     let mode = std::fs::metadata(path)
         .map(|meta| meta.permissions().mode() & 0o777)
         .unwrap_or(0);
@@ -47,6 +48,21 @@ fn edit_probe(path: &str) {
         byte as char
     );
     let _ = out.flush();
+}
+
+fn write_back(path: &str, text: &str) {
+    let Ok(path) = std::ffi::CString::new(path) else {
+        return;
+    };
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_TRUNC) };
+    if fd < 0 {
+        return;
+    }
+    let bytes = text.as_bytes();
+    unsafe {
+        libc::write(fd, bytes.as_ptr().cast(), bytes.len());
+        libc::close(fd);
+    }
 }
 
 fn read_byte(timeout: Duration) -> Option<u8> {
@@ -149,17 +165,43 @@ fn parent() {
         &captured,
         &text_rx,
         "probe byte=Z",
-        "conflict",
+        "kept-Z",
+        Duration::from_secs(5),
+    );
+    let _ = master_write.write_all(b"e");
+    let _ = master_write.flush();
+    let saw_second_ready = wait_after(
+        &captured,
+        &text_rx,
+        "probe byte=Z",
+        "probe ready",
+        Duration::from_secs(5),
+    );
+    let _ = master_write.write_all(b"Y\n");
+    let _ = master_write.flush();
+    let saw_second = wait_after(
+        &captured,
+        &text_rx,
+        "probe byte=Z",
+        "probe byte=Y mode=600 icanon=1 echo=1",
+        Duration::from_secs(5),
+    );
+    let saw_second_redraw = wait_after(
+        &captured,
+        &text_rx,
+        "probe byte=Y",
+        "kept-Y",
         Duration::from_secs(5),
     );
     let _ = master_write.write_all(b"q");
     let _ = master_write.flush();
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = child.wait();
-        let _ = done_tx.send(());
+        let status = child.wait();
+        let _ = done_tx.send(status);
     });
-    if done_rx.recv_timeout(Duration::from_secs(2)).is_err() {
+    let finished = done_rx.recv_timeout(Duration::from_secs(5));
+    if finished.is_err() {
         unsafe { libc::kill(pid, libc::SIGKILL) };
     }
     let mut err = String::new();
@@ -167,11 +209,19 @@ fn parent() {
         let _ = stderr.read_to_string(&mut err);
     }
     let tail = captured.lock().unwrap_or_else(|error| error.into_inner());
-    let tail = tail.chars().rev().take(400).collect::<String>();
+    let tail = tail.chars().rev().take(500).collect::<String>();
     let tail = tail.chars().rev().collect::<String>();
+    let exit_ok = matches!(finished, Ok(Ok(status)) if status.success());
     assert!(
-        saw_conflict && saw_ready && saw_byte && saw_redraw,
-        "conflict {saw_conflict} ready {saw_ready} byte {saw_byte} redraw {saw_redraw} err {err} tail {tail}"
+        saw_conflict
+            && saw_ready
+            && saw_byte
+            && saw_redraw
+            && saw_second_ready
+            && saw_second
+            && saw_second_redraw
+            && exit_ok,
+        "conflict {saw_conflict} ready {saw_ready} byte {saw_byte} redraw {saw_redraw} second_ready {saw_second_ready} second {saw_second} second_redraw {saw_second_redraw} exit {exit_ok} finished {finished:?} err {err} tail {tail}"
     );
 }
 

@@ -131,6 +131,7 @@ fn hook_reader() -> bool {
     unsafe {
         let mut action: libc::sigaction = mem::zeroed();
         action.sa_sigaction = on_suspend as *const () as usize;
+        action.sa_flags = libc::SA_RESTART;
         libc::sigemptyset(&mut action.sa_mask);
         if libc::sigaction(libc::SIGUSR1, &action, std::ptr::null_mut()) != 0 {
             return false;
