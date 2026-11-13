@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+lock=${DRIFT_PACMAN_LOCK:-/var/lib/pacman/db.lck}
+while [ -e "$lock" ]; do
+  sleep 0.2
+done
+exec drift notify

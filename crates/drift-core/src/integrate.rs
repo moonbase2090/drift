@@ -7,7 +7,7 @@ pub const HOOK_PATH: &str = "hooks/post-update.d/drift";
 pub const MENU_ID: &str = "update.drift";
 pub const HOOK_MODE: u32 = 0o755;
 
-const HOOK_SCRIPT: &str = "#!/bin/bash\ndrift notify\n";
+const HOOK_SCRIPT: &str = include_str!("../../../packaging/hooks/post-update.d/drift");
 
 fn row() -> String {
     format!(

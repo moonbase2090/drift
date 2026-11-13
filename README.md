@@ -158,6 +158,10 @@ On the tree screen `H` opens the same list. `Enter` asks to undo the selected tr
 
 `drift snapshot --pre` copies the installed template roots into `/var/lib/drift/snapshots/<version>/` before an `omarchy-settings` upgrade. Pacman runs it from a PreTransaction hook. The command writes only under that store. A failure exits 2 and does not stop the upgrade.
 
+## Upgrade notice
+
+After that upgrade, a PostTransaction hook writes a UTC stamp to `/var/lib/drift/updated` and nowhere else. The stamp is world-readable, and its directory is traversable, so a user session can watch it. The packaged user path unit watches the stamp. It keeps running when the file is missing. A change starts a oneshot that waits until `/var/lib/pacman/db.lck` is gone and then runs `drift notify` once. That wait does not give up while the lock remains, and the service does not abandon it on a start timeout. During `omarchy-update` that oneshot does not send a second notice: the update still holds its lock, and `~/.config/omarchy/hooks/post-update.d/drift` (installed by `drift integrate`) is what runs `drift notify`.
+
 ## Development
 
 Rust 1.99.1, pinned by `rust-toolchain.toml`. From this repository:
