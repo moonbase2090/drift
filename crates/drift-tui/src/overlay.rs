@@ -148,9 +148,9 @@ pub struct Palette {
 
 pub fn palette_entries(context: Context) -> Vec<Entry> {
     let mut entries = Vec::new();
-    let mut add = |keymap: lunatui_runtime::keymap::Keymap, skip: Option<&str>| {
+    let mut add = |keymap: lunatui_runtime::keymap::Keymap, skip: &[&str]| {
         for command in keymap.commands() {
-            if Some(command.id()) == skip {
+            if skip.contains(&command.id()) {
                 continue;
             }
             let Some(chord) = command.chords().first().copied() else {
@@ -163,11 +163,16 @@ pub fn palette_entries(context: Context) -> Vec<Entry> {
             });
         }
     };
-    add(keymap_of(context), None);
-    add(
-        crate::commands::global_keymap(),
-        Some(GlobalCommand::Palette.id()),
-    );
+    add(keymap_of(context), &[]);
+    let own_undo = if context == Context::History {
+        Some(GlobalCommand::UndoLast.id())
+    } else {
+        None
+    };
+    let skipped: Vec<&str> = std::iter::once(GlobalCommand::Palette.id())
+        .chain(own_undo)
+        .collect();
+    add(crate::commands::global_keymap(), &skipped);
     entries
 }
 
