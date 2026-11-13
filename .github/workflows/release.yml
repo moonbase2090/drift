@@ -55,10 +55,17 @@ jobs:
           if ! gh release view "$version" >/dev/null 2>&1; then
             gh release create "$version" --verify-tag --title "$version" --generate-notes
           fi
-          gh release upload "$version" --clobber repo-out/* repo-out/.SRCINFO
+          gh release upload "$version" --clobber repo-out/*
           if ! gh release view pacman-repo >/dev/null 2>&1; then
             gh release create pacman-repo \
               --title "omarchy-drift pacman repository" \
               --notes "Signed omarchy-drift repository. Each version tag replaces these assets."
           fi
-          gh release upload pacman-repo --clobber repo-out/* repo-out/.SRCINFO
+          gh release upload pacman-repo --clobber \
+            repo-out/*.pkg.tar.zst repo-out/*.pkg.tar.zst.sig \
+            repo-out/omarchy-drift-*.tar.gz repo-out/PKGBUILD repo-out/SRCINFO \
+            repo-out/omarchy-drift.install repo-out/drift-pacman-signing.pub.asc \
+            repo-out/FINGERPRINT
+          gh release upload pacman-repo --clobber \
+            repo-out/omarchy-drift.db* repo-out/omarchy-drift.files* \
+            repo-out/SHA256SUMS repo-out/SHA256SUMS.sig

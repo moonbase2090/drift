@@ -71,15 +71,16 @@ stage() {
   mkdir -p "$dest"
   dest=$(cd "$dest" && pwd)
   [[ -z $(find "$dest" -mindepth 1 -maxdepth 1 -print -quit) ]] || die 'Output directory must be empty.'
+  if [[ $mode == signed ]]; then import_key; fi
   prepare
   build
   local packages=("$work"/"$repo_name"-*.pkg.tar.zst)
   [[ ${#packages[@]} == 1 && -f ${packages[0]} ]] || die 'Expected exactly one package archive.'
   pkg=${packages[0]}
-  cp "$pkg" "$work/PKGBUILD" "$work/.SRCINFO" "$work/omarchy-drift.install" "$work/$repo_name-"*.tar.gz "$dest/"
+  cp "$pkg" "$work/PKGBUILD" "$work/omarchy-drift.install" "$work/$repo_name-"*.tar.gz "$dest/"
+  cp "$work/.SRCINFO" "$dest/SRCINFO"
   cp "$root/keys/drift-pacman-signing.pub.asc" "$dest/"
   if [[ $mode == signed ]]; then
-    import_key
     gpg --batch --yes --pinentry-mode loopback --local-user "$published_fpr" --detach-sign "$dest/$(basename "$pkg")"
     repo-add --sign --key "$published_fpr" --include-sigs "$dest/$repo_name.db.tar.gz" "$dest/$(basename "$pkg")"
   else
@@ -94,7 +95,7 @@ stage() {
     fi
   done
   printf '%s\n' "$published_fpr" > "$dest/FINGERPRINT"
-  (cd "$dest"; sha256sum -- * .SRCINFO > SHA256SUMS)
+  (cd "$dest"; sha256sum -- * > SHA256SUMS)
   if [[ $mode == signed ]]; then
     gpg --batch --yes --pinentry-mode loopback --local-user "$published_fpr" --detach-sign "$dest/SHA256SUMS"
   fi
