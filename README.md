@@ -73,6 +73,8 @@ Undoing a resolution restores the file and the reviewed base it replaced, so an 
 
 Launch Drift from the Omarchy menu. The menu action is `omarchy-launch-or-focus-tui --app-id=TUI.float drift`, which opens the floating window, or focuses that window if it is already open. It is built for Omarchy 4.5 (Quattro), through the [Omarchy shell-plugin](https://github.com/basecamp/omarchy/blob/quattro/manual/32-shell-plugins.md) mechanism. Package templates are read from `/usr/share/omarchy`.
 
+The bar widget in `plugin/` has id `drift.status`. It runs `drift status --bar` every five minutes. The JSON `text` field is the drifted count, and the widget hides when that field is empty. A click runs the same floating launcher. `omarchy plugin validate ./plugin` checks the folder. Place the folder in the user plugin directory as `drift.status`, then run `omarchy bar put drift.status`.
+
 The interface is a path tree plus the per-file diff. Classification uses the installed package file list and, when available, a cache of the previous package version, so "matches template," "local override," and "conflicts with a new upstream change" stay distinct.
 
 ## Read-only commands
@@ -80,6 +82,7 @@ The interface is a path tree plus the per-file diff. Classification uses the ins
 ```sh
 drift scan
 drift status --json
+drift status --bar
 drift diff .config/hypr/hyprland.conf
 drift diff "$HOME/.config/hypr/hyprland.conf" --json
 ```
@@ -89,6 +92,8 @@ It prints base provenance, status, base/ours/theirs contents, hunk kinds and the
 automatic merge result. JSON includes each hunk's three sides. Conflicts have no
 automatic result. Missing or unreadable sides are explicit; non-UTF-8 files and
 files over 1 MiB show their hash and size instead of content.
+
+`drift status --bar` prints one JSON object. `text` is the drifted count, or empty when nothing has drifted, so a status bar can hide the module at zero. `tooltip` names the count, `class` is `clean` or `drifted`.
 
 Exit codes are 0 for no drift in the selected file, 1 for drift and 2 for an error,
 including an unknown path. Local overrides and user-only files count as no drift,
