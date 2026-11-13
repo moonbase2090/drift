@@ -114,6 +114,12 @@ impl MaterializedRoot {
     pub fn path(&self) -> &Path {
         self.dir.path()
     }
+
+    pub fn overwrite(&self, rel: &str, bytes: impl AsRef<[u8]>) -> Result<(), Error> {
+        check_rel(Path::new(rel))?;
+        let dest = self.dir.path().join(rel);
+        fs::write(&dest, bytes).map_err(|source| Error::io(&dest, source))
+    }
 }
 
 impl std::fmt::Debug for MaterializedRoot {
@@ -127,6 +133,20 @@ impl std::fmt::Debug for MaterializedRoot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overwrite_replaces_an_existing_file_and_rejects_escape() {
+        let tree = RootBuilder::new()
+            .file("a/b", b"one\n")
+            .unwrap()
+            .materialize()
+            .unwrap();
+        tree.overwrite("a/b", b"two\n").unwrap();
+        assert_eq!(fs::read(tree.path().join("a/b")).unwrap(), b"two\n");
+        assert!(tree.overwrite("../escape", b"x").is_err());
+        assert!(tree.overwrite("a/missing/deeper", b"x").is_err());
+        assert!(!tree.path().join("escape").exists());
+    }
 
     #[test]
     fn writes_bytes_under_the_root_and_rejects_escape() {

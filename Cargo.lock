@@ -201,6 +201,9 @@ dependencies = [
  "flate2",
  "inotify",
  "libc",
+ "lunatui",
+ "lunatui-term",
+ "serde_json",
  "sha2",
 ]
 

@@ -4,8 +4,9 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use drift_apply::{
-    execute, pending_prune, undo, undo_with_bases, undo_with_bases_probed, HyprlandCheck,
-    HyprlandStatus, Roots, UndoOutcome, UndoRequest, WriteFollowup,
+    execute, pending_prune, recorded_bases, undo, undo_with_bases, undo_with_bases_expecting,
+    undo_with_bases_probed, HyprlandCheck, HyprlandStatus, Roots, UndoOutcome, UndoRequest,
+    WriteFollowup,
 };
 use drift_core::{prepare, Action, Prepared, Registry, RelPath, ScanReport, Status};
 use drift_fixtures::{hash_tree, MaterializedRoot, RootBuilder};
@@ -809,4 +810,131 @@ fn undoing_the_oldest_kept_transaction_still_restores_its_bases_when_the_undo_pr
         base(&world, "hypr/a.lua").as_deref(),
         Some("upstream new\n")
     );
+}
+
+#[test]
+fn the_recorded_bases_of_a_transaction_are_listed_and_empty_without_a_record() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "new\n", Some("mine\n"), Some("old\n"));
+    builder.file("hypr/b.lua", "new b\n", Some("mine b\n"), Some("old b\n"));
+    let world = builder.build();
+    let (prepared, _) = world.prepared(
+        Action::KeepMine,
+        "txn-1",
+        &[".config/hypr/a.lua", ".config/hypr/b.lua"],
+    );
+    execute(&world.roots(), &world.share(), &prepared, &Quiet).unwrap();
+    let mut listed = recorded_bases(&world.path("state"), "txn-1").unwrap();
+    listed.sort();
+    assert_eq!(listed, ["config/hypr/a.lua", "config/hypr/b.lua"]);
+    assert!(recorded_bases(&world.path("state"), "missing")
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn an_undo_that_expects_a_prune_list_refuses_when_the_list_has_changed_and_writes_nothing() {
+    let mut builder = Builder::new();
+    for index in 0..101 {
+        builder.file(
+            &format!("hypr/f{index:03}.lua"),
+            "new\n",
+            Some("mine\n"),
+            Some("old\n"),
+        );
+    }
+    let world = builder.build();
+    for index in 0..100 {
+        let id = format!("txn-{index:03}");
+        let target = format!(".config/hypr/f{index:03}.lua");
+        let (next, _) = world.prepared(Action::TakeUpstream, &id, &[target.as_str()]);
+        execute(&world.roots(), &world.share(), &next, &Quiet).unwrap();
+    }
+    let expected = pending_prune(&world.path("state")).unwrap();
+    assert_eq!(expected, ["txn-000"]);
+
+    let (extra, _) = world.prepared(Action::TakeUpstream, "txn-100", &[".config/hypr/f100.lua"]);
+    execute(&world.roots(), &world.share(), &extra, &Quiet).unwrap();
+    let before = transactions(&world);
+    let error = undo_with_bases_expecting(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-050", "undo-1", &[]),
+        &expected,
+    )
+    .unwrap_err();
+    assert!(
+        error.message.contains("changed since the preview"),
+        "{}",
+        error.message
+    );
+    assert_eq!(transactions(&world), before);
+    assert_eq!(read(&world, "home/.config/hypr/f050.lua"), "new\n");
+
+    let fresh = pending_prune(&world.path("state")).unwrap();
+    undo_with_bases_expecting(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-050", "undo-1", &[]),
+        &fresh,
+    )
+    .unwrap();
+    assert_eq!(read(&world, "home/.config/hypr/f050.lua"), "mine\n");
+    assert!(!transactions(&world).contains(&"txn-001".to_string()));
+}
+
+#[test]
+fn a_base_only_undo_prunes_like_any_other_transaction_and_so_does_its_inverse() {
+    let mut builder = Builder::new();
+    for index in 0..101 {
+        builder.file(
+            &format!("hypr/f{index:03}.lua"),
+            "new\n",
+            Some("mine\n"),
+            Some("old\n"),
+        );
+    }
+    let world = builder.build();
+    for index in 0..100 {
+        let id = format!("txn-{index:03}");
+        let target = format!(".config/hypr/f{index:03}.lua");
+        let (next, _) = world.prepared(Action::TakeUpstream, &id, &[target.as_str()]);
+        execute(&world.roots(), &world.share(), &next, &Quiet).unwrap();
+    }
+    let (kept, _) = world.prepared(Action::KeepMine, "txn-100", &[".config/hypr/f100.lua"]);
+    execute(&world.roots(), &world.share(), &kept, &Quiet).unwrap();
+    assert_eq!(transactions(&world).len(), 100);
+    assert!(!transactions(&world).contains(&"txn-000".to_string()));
+    assert_eq!(base(&world, "hypr/f100.lua").as_deref(), Some("new\n"));
+
+    let expected = pending_prune(&world.path("state")).unwrap();
+    assert_eq!(expected, ["txn-001"]);
+    let done = undo_with_bases_expecting(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-100", "undo-1", &[]),
+        &expected,
+    )
+    .unwrap();
+    assert_eq!(done.bases.restored, ["config/hypr/f100.lua"]);
+    assert_eq!(base(&world, "hypr/f100.lua").as_deref(), Some("old\n"));
+    assert_eq!(transactions(&world).len(), 100);
+    assert!(!transactions(&world).contains(&"txn-001".to_string()));
+    assert!(!world.path("state/backups/txn-001").exists());
+    let manifest = read(&world, "state/backups/undo-1/manifest.json");
+    assert!(manifest.contains("txn-001"), "{manifest}");
+
+    let again_expected = pending_prune(&world.path("state")).unwrap();
+    assert_eq!(again_expected, ["txn-002"]);
+    undo_with_bases_expecting(
+        &world.roots(),
+        &world.share(),
+        &undo_request("undo-1", "undo-2", &[]),
+        &again_expected,
+    )
+    .unwrap();
+    assert_eq!(base(&world, "hypr/f100.lua").as_deref(), Some("new\n"));
+    assert_eq!(transactions(&world).len(), 100);
+    assert!(!world.path("state/backups/txn-002").exists());
+    assert!(read(&world, "state/backups/undo-2/manifest.json").contains("txn-002"));
 }

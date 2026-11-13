@@ -1,4 +1,6 @@
 mod diff;
+mod historian;
+mod history_screen;
 mod plan_dialog;
 mod resolver;
 mod screen;
@@ -8,6 +10,8 @@ mod wake;
 mod worker;
 
 pub use diff::DiffScreen;
+pub use historian::{Historian, UndoProposal};
+pub use history_screen::{HistoryAction, HistoryScreen};
 pub use plan_dialog::{apply_decision, review_plan, Decision, Focus, PlanDialog};
 pub use resolver::{Proposal, Resolver};
 pub use screen::{
