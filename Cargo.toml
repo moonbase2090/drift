@@ -24,13 +24,13 @@ drift-source = { path = "crates/drift-source" }
 drift-apply = { path = "crates/drift-apply" }
 drift-tui = { path = "crates/drift-tui" }
 drift-fixtures = { path = "crates/drift-fixtures" }
-lunatui = { git = "https://github.com/moonbase2090/lunatui", rev = "2aff7f28d5f43455391a3a5ae78783d0f32cd2cc", version = "=0.1.29", default-features = false, features = ["app", "keymap"] }
-lunatui-core = { git = "https://github.com/moonbase2090/lunatui", rev = "2aff7f28d5f43455391a3a5ae78783d0f32cd2cc", version = "=0.1.29", features = ["blit"] }
-lunatui-runtime = { git = "https://github.com/moonbase2090/lunatui", rev = "2aff7f28d5f43455391a3a5ae78783d0f32cd2cc", version = "=0.1.29", default-features = false, features = ["app", "keymap"] }
-lunatui-term = { git = "https://github.com/moonbase2090/lunatui", rev = "2aff7f28d5f43455391a3a5ae78783d0f32cd2cc", version = "=0.1.29" }
-lunatui-theme = { git = "https://github.com/moonbase2090/lunatui", rev = "2aff7f28d5f43455391a3a5ae78783d0f32cd2cc", version = "=0.1.29" }
-lunatui-widgets = { git = "https://github.com/moonbase2090/lunatui", rev = "2aff7f28d5f43455391a3a5ae78783d0f32cd2cc", version = "=0.1.29", default-features = false, features = ["code-view", "command-palette", "key-hints", "split-keys", "tree"] }
-lunatui-test = { git = "https://github.com/moonbase2090/lunatui", rev = "2aff7f28d5f43455391a3a5ae78783d0f32cd2cc", version = "=0.1.29" }
+lunatui = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.30", version = "=0.1.30", default-features = false, features = ["app", "keymap"] }
+lunatui-core = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.30", version = "=0.1.30", features = ["blit"] }
+lunatui-runtime = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.30", version = "=0.1.30", default-features = false, features = ["app", "keymap"] }
+lunatui-term = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.30", version = "=0.1.30" }
+lunatui-theme = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.30", version = "=0.1.30" }
+lunatui-widgets = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.30", version = "=0.1.30", default-features = false, features = ["code-view", "command-palette", "key-hints", "split-keys", "tree"] }
+lunatui-test = { git = "https://github.com/moonbase2090/lunatui", tag = "v0.1.30", version = "=0.1.30" }
 terminal_size = "0.4"
 inotify = { version = "0.9.6", default-features = false }
 libc = "0.2"
