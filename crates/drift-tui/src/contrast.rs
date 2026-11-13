@@ -1,6 +1,8 @@
 use lunatui_core::Color;
 use lunatui_theme::{Theme, Token, Variant};
 
+use crate::diff_palette::{DiffPalette, RowKind};
+
 fn rgb(color: Color) -> [u8; 3] {
     match color {
         Color::Rgb(red, green, blue) => [red, green, blue],
@@ -71,4 +73,66 @@ fn the_light_fallback_keeps_text_legible_and_its_known_status_shortfalls_are_pin
     let found = shortfalls(Variant::Light);
     assert!(!found.contains(&Token::TextPrimary));
     assert_eq!(found, LIGHT_SHORTFALLS.to_vec());
+}
+
+const OMARCHY: [(&str, &str); 4] = [
+    (
+        "tokyo-night",
+        "red = \"#f7768e\"\ngreen = \"#9ece6a\"\nyellow = \"#e0af68\"\n",
+    ),
+    (
+        "rose-pine",
+        "red = \"#b4637a\"\ngreen = \"#286983\"\nyellow = \"#ea9d34\"\n",
+    ),
+    (
+        "flexoki-light",
+        "red = \"#D14D41\"\ngreen = \"#879A39\"\nyellow = \"#D0A215\"\n",
+    ),
+    (
+        "white",
+        "red = \"#2a2a2a\"\ngreen = \"#3a3a3a\"\nyellow = \"#4a4a4a\"\n",
+    ),
+];
+
+fn diff_shortfalls(variant: Variant, palette: DiffPalette) -> Vec<String> {
+    let theme = Theme::builtin(variant);
+    let ground = theme.resolve(Token::Surface0);
+    let text = theme.resolve(Token::TextPrimary);
+    let tints = palette.tints(ground);
+    let mut found = Vec::new();
+    for kind in [RowKind::Added, RowKind::Removed, RowKind::Changed] {
+        let row = tints.row(kind).expect("row tint");
+        let word = tints.word(kind).expect("word tint");
+        let (_, mark) = tints.mark(kind).expect("mark");
+        for (what, ratio) in [
+            ("text on row", ratio(text, row)),
+            ("text on changed characters", ratio(text, word)),
+            ("marker on row", ratio(mark, row)),
+        ] {
+            if ratio < 4.5 {
+                found.push(format!("{kind:?} {what} {ratio:.2}"));
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn omarchy_hues_and_the_fallback_keep_diff_text_and_markers_legible_on_both_themes() {
+    let mut failures = Vec::new();
+    for (name, variant) in [("dark", Variant::Dark), ("light", Variant::Light)] {
+        let mut palettes = vec![("fallback", DiffPalette::fallback())];
+        palettes.extend(
+            OMARCHY
+                .iter()
+                .map(|(theme, source)| (*theme, DiffPalette::from_colors(source))),
+        );
+        assert_eq!(palettes.len(), 5);
+        for (palette, found) in palettes {
+            for shortfall in diff_shortfalls(variant, found) {
+                failures.push(format!("{name} + {palette}: {shortfall}"));
+            }
+        }
+    }
+    assert_eq!(failures, Vec::<String>::new());
 }

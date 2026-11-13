@@ -64,7 +64,7 @@ Every action has a key, and every action can be reached with the mouse. [docs/in
 
 ![Clickable diff hint bar](docs/media/diff-hints.gif)
 
-Text and status colours are checked for contrast against the dark Lunatui theme Drift runs in. Lunatui's light theme falls short on its accent and status colours, and Drift does not use it.
+Text and status colours are checked for contrast against the dark Lunatui theme Drift runs in. Lunatui's light theme falls short on its accent and status colours, and Drift does not use it. The diff row tints and gutter marks are checked at 4.5:1 against the built-in hues and four Omarchy themes (dark, light, rose and grey) on both Lunatui themes; a gutter mark whose theme colour would vanish on its row is lightened or darkened until it reads.
 
 ## Empty and error states
 
