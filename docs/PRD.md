@@ -71,7 +71,7 @@ Omarchy 4.5 already moved most behavior into package-owned defaults under `/usr/
 ### Viewing and resolving
 
 - **FR-9** Tree view of paths with a status glyph, a text label, and a color per file (never color alone), a header with counts per status, status filters, and incremental search.
-- **FR-10** Diff view showing base, ours, theirs, and a live result preview. Layouts adapt to width: four-pane at 160 columns and up, two-pane with a result strip at 100 and up, stacked unified view below that. Changed spans inside paired lines are highlighted.
+- **FR-10** Diff view showing base, ours, theirs, and a live result preview. Layouts adapt to width: four-pane at 200 columns and up (each text pane keeps about 40 cells; `v` can force it earlier), two-pane with a result strip at 100 and up, stacked unified view below that. Changed spans inside paired lines are highlighted.
 - **FR-11** Hunk navigation and per-hunk choice: mine, theirs, both (mine then theirs), or edit in `$EDITOR`. The result preview updates immediately. Unresolved conflict hunks block writing.
 - **FR-12** File-level actions: **keep mine** (writes nothing to the config; records T as reviewed so the file reads as an acknowledged local override), **take upstream** (replace with T), **merge** (open the hunk resolver; if the merge is clean, show the result for confirmation). Every file-level action also exists as a bulk action on marked files.
 - **FR-13** Every write goes through a plan screen listing each file, the action, the backup location, and a before/after diff summary. Nothing is written until the user confirms.

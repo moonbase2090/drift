@@ -16,15 +16,19 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 
 `drift --snapshot` prints one 80×24 frame and does not take the terminal. Pass `--width` and `--height` together to print another size.
 
-A changed file opens in five columns once the window is at least 160 cells wide: the hunk list, then base, ours, theirs, and the result. The four text panes share one scroll position. `n` and `p` move between hunks, Tab moves focus, and `[` / `]` or a drag resizes the focused pane.
+A changed file opens in five columns once the window is at least 200 cells wide, wide enough for each text pane to keep about 40 cells: the hunk list, then base, ours, theirs, and the result. The four text panes share one scroll position. `n` and `p` move between hunks, Tab moves focus, and `[` / `]` or a drag resizes the focused pane.
 
 ![Four-pane diff](docs/media/four-pane.gif)
 
-Below 160 columns the same file uses fewer panes. From 100 columns it shows ours and theirs side by side, with the result underneath. Narrower than that, the rows stack in one column. A removed line keeps a minus mark, an added line keeps a plus mark, and a conflict shows ours and theirs. `v` cycles those layouts. A resize that crosses a width boundary follows the width again and keeps the selected hunk. A file with no base stays on two panes, and the header says the base is unknown.
+Below 200 columns the same file uses fewer panes, so paths and lines are not cut mid-word in narrow columns; `v` can still force the five columns. From 100 columns it shows ours and theirs side by side, with the result underneath. Narrower than that, the rows stack in one column. A removed line keeps a minus mark, an added line keeps a plus mark, and a conflict shows ours and theirs. `v` cycles those layouts. A resize that crosses a width boundary follows the width again and keeps the selected hunk. A file with no base stays on two panes, and the header says the base is unknown.
 
-The Omarchy menu opens Drift with app id `TUI.float`. Omarchy floats and centers that class at 875×600. Stock Foot, with JetBrains Mono at 9pt and 14px of padding, measures 121×33 cells in that window, which is the two-pane layout. Maximizing reaches four panes at 160 columns. Drift does not add its own window rule.
+The Omarchy menu opens Drift with app id `TUI.float`. Omarchy floats and centers that class at 875×600. Stock Foot, with JetBrains Mono at 9pt and 14px of padding, measures 121×33 cells in that window, which is the two-pane layout. Maximizing reaches four panes at 200 columns, or with `v` below that. Drift does not add its own window rule.
 
 ![Narrower diff layouts](docs/media/layout-cycle.gif)
+
+The capture below is the real program in a 170-column terminal, where five columns would leave each text pane about 35 cells wide. The conflict opens as two panes with the result underneath, and `v` twice forces the five columns, with their cut-off lines.
+
+![Two panes below 200 columns](docs/media/four-fallback.gif)
 
 Changed lines are tinted across the whole row, like a git diff. In the two-pane view a line only ours has is green with a `+` in the gutter, a line only theirs has is red with a `-`, and a line changed on both sides is yellow with a `~`. The exact changed characters get a stronger tint of the same color. Where one side has no line, a blank filler row keeps the two panes level and takes no line number. Four-pane, stacked and result views use the same marks. The colors come from the active Omarchy theme (`colors.toml` in its state directory) and fall back to fixed readable colors when no theme is found.
 
