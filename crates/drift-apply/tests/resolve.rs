@@ -4,8 +4,8 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use drift_apply::{
-    execute, pending_prune, undo, HyprlandCheck, HyprlandStatus, Roots, UndoOutcome, UndoRequest,
-    WriteFollowup,
+    execute, pending_prune, undo, undo_with_bases, HyprlandCheck, HyprlandStatus, Roots,
+    UndoOutcome, UndoRequest, WriteFollowup,
 };
 use drift_core::{prepare, Action, Prepared, Registry, RelPath, ScanReport, Status};
 use drift_fixtures::{hash_tree, MaterializedRoot, RootBuilder};
@@ -466,4 +466,225 @@ fn a_file_edited_after_the_plan_aborts_the_write_and_records_no_base() {
         read(&world, "home/.local/share/drift/bases/config/hypr/a.lua"),
         "old\n"
     );
+}
+
+fn undo_request<'a>(target: &'a str, id: &'a str, forced: &'a [String]) -> UndoRequest<'a> {
+    UndoRequest {
+        target,
+        id,
+        time: "2026-06-02T00:00:00Z",
+        package_version: "4.5.0-3",
+        restore_anyway: forced,
+        fail_at: None,
+    }
+}
+
+fn base(world: &World, rel: &str) -> Option<String> {
+    fs::read_to_string(world.path(&format!("home/.local/share/drift/bases/config/{rel}"))).ok()
+}
+
+#[test]
+fn undoing_a_take_upstream_makes_the_file_read_as_upstream_changed_again() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "upstream new\n", Some("old\n"), Some("old\n"));
+    let world = builder.build();
+    assert_eq!(
+        status_of(&world.report(), ".config/hypr/a.lua"),
+        (Status::UpstreamChanged, "reviewed".to_string())
+    );
+    let (prepared, _) = world.prepared(Action::TakeUpstream, "txn-1", &[".config/hypr/a.lua"]);
+    execute(&world.roots(), &world.share(), &prepared, &Quiet).unwrap();
+    assert_eq!(
+        base(&world, "hypr/a.lua").as_deref(),
+        Some("upstream new\n")
+    );
+    assert_eq!(
+        status_of(&world.report(), ".config/hypr/a.lua").0,
+        Status::Unchanged
+    );
+
+    let done = undo_with_bases(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-1", "undo-1", &[]),
+    )
+    .unwrap();
+    assert!(matches!(done.outcome, UndoOutcome::Restored(_)));
+    assert_eq!(done.bases.restored, ["config/hypr/a.lua"]);
+    assert!(done.bases.failed.is_empty());
+    assert_eq!(read(&world, "home/.config/hypr/a.lua"), "old\n");
+    assert_eq!(base(&world, "hypr/a.lua").as_deref(), Some("old\n"));
+    assert_eq!(
+        status_of(&world.report(), ".config/hypr/a.lua"),
+        (Status::UpstreamChanged, "reviewed".to_string())
+    );
+}
+
+#[test]
+fn undoing_a_keep_mine_removes_the_acknowledgement_in_its_own_transaction() {
+    let mut builder = Builder::new();
+    builder.file(
+        "hypr/a.lua",
+        "upstream new\n",
+        Some("mine\n"),
+        Some("upstream old\n"),
+    );
+    let world = builder.build();
+    let (prepared, _) = world.prepared(Action::KeepMine, "txn-1", &[".config/hypr/a.lua"]);
+    execute(&world.roots(), &world.share(), &prepared, &Quiet).unwrap();
+    assert_eq!(
+        status_of(&world.report(), ".config/hypr/a.lua").0,
+        Status::LocalOverride
+    );
+
+    let done = undo_with_bases(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-1", "undo-1", &[]),
+    )
+    .unwrap();
+    assert_eq!(done.bases.restored, ["config/hypr/a.lua"]);
+    assert_eq!(
+        base(&world, "hypr/a.lua").as_deref(),
+        Some("upstream old\n")
+    );
+    assert_eq!(read(&world, "home/.config/hypr/a.lua"), "mine\n");
+    assert_eq!(
+        status_of(&world.report(), ".config/hypr/a.lua").0,
+        Status::Conflict
+    );
+    assert_eq!(transactions(&world), ["txn-1", "undo-1"]);
+    let history = drift_apply::history(&world.path("state")).unwrap();
+    assert!(history.unreadable.is_empty(), "{:?}", history.unreadable);
+    assert_eq!(history.entries.len(), 2);
+}
+
+#[test]
+fn undoing_the_undo_puts_the_reviewed_base_back() {
+    let mut builder = Builder::new();
+    builder.file(
+        "hypr/a.lua",
+        "upstream new\n",
+        Some("mine\n"),
+        Some("upstream old\n"),
+    );
+    let world = builder.build();
+    let (prepared, _) = world.prepared(Action::KeepMine, "txn-1", &[".config/hypr/a.lua"]);
+    execute(&world.roots(), &world.share(), &prepared, &Quiet).unwrap();
+    undo_with_bases(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-1", "undo-1", &[]),
+    )
+    .unwrap();
+    assert_eq!(
+        base(&world, "hypr/a.lua").as_deref(),
+        Some("upstream old\n")
+    );
+    undo_with_bases(
+        &world.roots(),
+        &world.share(),
+        &undo_request("undo-1", "undo-2", &[]),
+    )
+    .unwrap();
+    assert_eq!(
+        base(&world, "hypr/a.lua").as_deref(),
+        Some("upstream new\n")
+    );
+    assert_eq!(
+        status_of(&world.report(), ".config/hypr/a.lua"),
+        (Status::LocalOverride, "reviewed".to_string())
+    );
+}
+
+#[test]
+fn a_file_that_had_no_reviewed_base_has_none_again_after_the_undo() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "upstream new\n", Some("mine\n"), None);
+    let world = builder.build();
+    let (prepared, _) = world.prepared(Action::KeepMine, "txn-1", &[".config/hypr/a.lua"]);
+    execute(&world.roots(), &world.share(), &prepared, &Quiet).unwrap();
+    assert!(base(&world, "hypr/a.lua").is_some());
+    undo_with_bases(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-1", "undo-1", &[]),
+    )
+    .unwrap();
+    assert!(base(&world, "hypr/a.lua").is_none());
+    assert_eq!(
+        status_of(&world.report(), ".config/hypr/a.lua"),
+        (Status::LocalOverride, "none".to_string())
+    );
+}
+
+#[test]
+fn a_diverged_undo_leaves_the_reviewed_bases_alone() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "upstream new\n", Some("old\n"), Some("old\n"));
+    let world = builder.build();
+    let (prepared, _) = world.prepared(Action::TakeUpstream, "txn-1", &[".config/hypr/a.lua"]);
+    execute(&world.roots(), &world.share(), &prepared, &Quiet).unwrap();
+    fs::write(world.path("home/.config/hypr/a.lua"), "edited later\n").unwrap();
+    let done = undo_with_bases(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-1", "undo-1", &[]),
+    )
+    .unwrap();
+    assert!(matches!(done.outcome, UndoOutcome::Diverged(_)));
+    assert!(done.bases.restored.is_empty());
+    assert_eq!(
+        base(&world, "hypr/a.lua").as_deref(),
+        Some("upstream new\n")
+    );
+    assert!(!world.path("state/backups/undo-1").exists());
+}
+
+#[test]
+fn undoing_a_transaction_without_a_base_record_behaves_like_the_plain_undo() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "upstream new\n", Some("old\n"), Some("old\n"));
+    let world = builder.build();
+    let (prepared, _) = world.prepared(Action::TakeUpstream, "txn-1", &[".config/hypr/a.lua"]);
+    execute(&world.roots(), &world.share(), &prepared, &Quiet).unwrap();
+    fs::remove_file(world.path("state/backups/txn-1/reviewed-bases.json")).unwrap();
+    let done = undo_with_bases(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-1", "undo-1", &[]),
+    )
+    .unwrap();
+    assert!(matches!(done.outcome, UndoOutcome::Restored(_)));
+    assert!(done.bases.restored.is_empty());
+    assert_eq!(read(&world, "home/.config/hypr/a.lua"), "old\n");
+    assert_eq!(
+        base(&world, "hypr/a.lua").as_deref(),
+        Some("upstream new\n")
+    );
+    let error = undo_with_bases(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-1", "undo-2", &[]),
+    )
+    .unwrap_err();
+    assert!(
+        error.message.contains("nothing to undo"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn the_previous_bases_are_recorded_with_the_transaction() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "upstream new\n", Some("old\n"), Some("old\n"));
+    let world = builder.build();
+    let (prepared, _) = world.prepared(Action::TakeUpstream, "txn-1", &[".config/hypr/a.lua"]);
+    execute(&world.roots(), &world.share(), &prepared, &Quiet).unwrap();
+    let record = read(&world, "state/backups/txn-1/reviewed-bases.json");
+    assert!(record.contains("\"rel\":\"hypr/a.lua\""), "{record}");
+    assert!(record.contains("\"root\":\"config\""), "{record}");
+    let old_hex: String = "old\n".bytes().map(|byte| format!("{byte:02x}")).collect();
+    assert!(record.contains(&old_hex), "{record}");
 }

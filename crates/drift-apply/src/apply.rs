@@ -11,7 +11,12 @@ use drift_core::{Action, Plan, PlannedFile};
 
 mod hypr;
 mod integrate;
+mod resolve;
 mod undo;
+
+pub use resolve::{
+    execute, restore_reviewed_bases, undo_with_bases, Executed, Restored, UndoneWithBases,
+};
 
 pub fn pending_prune(state: &Path) -> Result<Vec<String>, ApplyError> {
     transactions_to_prune(state)
@@ -587,9 +592,14 @@ fn backup_relative(txn: &str, planned: &PlannedFile) -> String {
 }
 
 fn collides_with_metadata(txn: &str, relative: &str) -> bool {
-    ["manifest.json", "pending.json", "nodes.json"]
-        .iter()
-        .any(|name| relative == format!("backups/{txn}/{name}"))
+    [
+        "manifest.json",
+        "pending.json",
+        "nodes.json",
+        "reviewed-bases.json",
+    ]
+    .iter()
+    .any(|name| relative == format!("backups/{txn}/{name}"))
 }
 
 fn refuse_linked_ancestors(anchor: &Path, path: &Path) -> Result<(), ApplyError> {
