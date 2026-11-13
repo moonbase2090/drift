@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -567,4 +568,141 @@ fn removing_what_is_not_installed_is_a_no_op_and_a_dry_run_removes_nothing() {
     assert!(text.contains("would run  omarchy plugin disable"), "{text}");
     assert!(fixture.installed("BarWidget.qml").is_file());
     assert!(omarchy.runs.is_empty());
+}
+
+fn outside(fixture: &Fixture, text: &str) -> PathBuf {
+    let dir = fixture.root.join("outside");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("data"), text).unwrap();
+    dir
+}
+
+#[test]
+fn a_symlinked_directory_inside_the_copy_is_never_written_through() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.root.join("source/assets")).unwrap();
+    fixture.ship("assets/data", "SHIPPED\n");
+    let target = outside(&fixture, "MINE\n");
+    fs::create_dir_all(fixture.root.join("plugins/drift.status")).unwrap();
+    symlink(&target, fixture.installed("assets")).unwrap();
+    let mut omarchy = Fake::new();
+    let (result, _, asked) = go(
+        widget_install,
+        &fixture,
+        &mut omarchy,
+        options(WidgetMode::Yes),
+        false,
+    );
+    assert!(result.unwrap_err().contains("symlink"));
+    assert_eq!(asked, 0);
+    assert_eq!(fs::read_to_string(target.join("data")).unwrap(), "MINE\n");
+    assert!(omarchy.runs.is_empty());
+    assert!(fixture.backups().is_empty());
+}
+
+#[test]
+fn a_symlinked_file_at_a_shipped_path_is_never_replaced_or_followed() {
+    let fixture = Fixture::new();
+    let target = outside(&fixture, "MINE\n");
+    fs::create_dir_all(fixture.root.join("plugins/drift.status")).unwrap();
+    symlink(target.join("data"), fixture.installed("BarWidget.qml")).unwrap();
+    let mut omarchy = Fake::new();
+    let (result, _, _) = go(
+        widget_install,
+        &fixture,
+        &mut omarchy,
+        options(WidgetMode::Yes),
+        false,
+    );
+    assert!(result.unwrap_err().contains("symlink"));
+    assert_eq!(fs::read_to_string(target.join("data")).unwrap(), "MINE\n");
+    assert!(fs::symlink_metadata(fixture.installed("BarWidget.qml"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+}
+
+#[test]
+fn a_symlinked_plugin_directory_is_refused_by_install_and_sync_and_only_unlinked_by_remove() {
+    let fixture = Fixture::new();
+    let target = outside(&fixture, "MINE\n");
+    symlink(&target, fixture.root.join("plugins/drift.status")).unwrap();
+    let mut omarchy = Fake::new();
+    for call in [widget_install as Call, widget_sync as Call] {
+        let (result, _, _) = go(
+            call,
+            &fixture,
+            &mut omarchy,
+            options(WidgetMode::Yes),
+            false,
+        );
+        assert!(result.unwrap_err().contains("symlink"));
+    }
+    assert!(!target.join("BarWidget.qml").exists());
+    let (result, _, asked) = go(
+        widget_remove,
+        &fixture,
+        &mut omarchy,
+        options(WidgetMode::Confirm),
+        true,
+    );
+    assert_eq!(result, Ok(WidgetOutcome::Removed));
+    assert_eq!(asked, 1);
+    assert!(fs::symlink_metadata(fixture.root.join("plugins/drift.status")).is_err());
+    assert_eq!(fs::read_to_string(target.join("data")).unwrap(), "MINE\n");
+    assert!(fixture.backups().is_empty());
+    assert!(omarchy
+        .runs
+        .contains(&"omarchy plugin disable drift.status".to_string()));
+}
+
+#[test]
+fn a_symlink_the_plugin_does_not_ship_is_left_alone_by_sync() {
+    let fixture = Fixture::new();
+    let mut omarchy = Fake::new();
+    let _ = go(
+        widget_install,
+        &fixture,
+        &mut omarchy,
+        options(WidgetMode::Yes),
+        false,
+    );
+    let target = outside(&fixture, "MINE\n");
+    symlink(&target, fixture.installed("notes")).unwrap();
+    fixture.ship("BarWidget.qml", "Item { text: \"two\" }\n");
+    let (result, _, _) = go(
+        widget_sync,
+        &fixture,
+        &mut omarchy,
+        options(WidgetMode::Yes),
+        false,
+    );
+    assert_eq!(result, Ok(WidgetOutcome::Synced));
+    assert!(fs::symlink_metadata(fixture.installed("notes"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read_to_string(target.join("data")).unwrap(), "MINE\n");
+}
+
+#[test]
+fn a_symlink_planted_at_a_temporary_name_is_not_followed() {
+    let fixture = Fixture::new();
+    let target = outside(&fixture, "MINE\n");
+    fs::create_dir_all(fixture.root.join("plugins/drift.status")).unwrap();
+    symlink(
+        target.join("data"),
+        fixture.installed(".BarWidget.qml.drift-tmp"),
+    )
+    .unwrap();
+    let mut omarchy = Fake::new();
+    let (result, _, _) = go(
+        widget_install,
+        &fixture,
+        &mut omarchy,
+        options(WidgetMode::Yes),
+        false,
+    );
+    assert_eq!(result, Ok(WidgetOutcome::Synced));
+    assert_eq!(fs::read_to_string(target.join("data")).unwrap(), "MINE\n");
 }

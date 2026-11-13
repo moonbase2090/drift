@@ -3,10 +3,13 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use sha2::{Digest, Sha256};
 
 pub const RECORD_FILE: &str = "widget-installed.json";
+
+static TEMPS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WidgetMode {
@@ -174,9 +177,53 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default();
-    let temp = parent.join(format!(".{name}.drift-tmp"));
-    fs::write(&temp, bytes).map_err(|error| format!("{}: {error}", temp.display()))?;
-    fs::rename(&temp, path).map_err(|error| format!("{}: {error}", path.display()))
+    let serial = TEMPS.fetch_add(1, Ordering::Relaxed);
+    let temp = parent.join(format!(".{name}.drift-{}-{serial}", std::process::id()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|error| format!("{}: {error}", temp.display()))?;
+    let written = file
+        .write_all(bytes)
+        .and_then(|()| file.flush())
+        .map_err(|error| format!("{}: {error}", temp.display()));
+    drop(file);
+    let moved = written.and_then(|()| {
+        fs::rename(&temp, path).map_err(|error| format!("{}: {error}", path.display()))
+    });
+    if moved.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    moved
+}
+
+fn is_link(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
+fn refuse_link(dest_dir: &Path, id: &str) -> Result<(), String> {
+    if is_link(dest_dir) {
+        return Err(format!(
+            "{} is a symlink; drift widget will not write through it. Remove the link first (omarchy plugin remove {id} unlinks it)",
+            dest_dir.display()
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_plain(dest_dir: &Path, rel: &str) -> Result<(), String> {
+    let mut path = dest_dir.to_path_buf();
+    for part in rel.split('/') {
+        path.push(part);
+        if is_link(&path) {
+            return Err(format!(
+                "{} is a symlink; drift widget will not write through it. Move it away or remove it, then run again",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn plugin_id(source: &Path) -> Result<String, String> {
@@ -284,7 +331,7 @@ fn backup_dir(plugins: &Path, id: &str, stamp: &str) -> PathBuf {
     let base = plugins.join(format!(".{id}.bak.{stamp}"));
     let mut candidate = base.clone();
     let mut n = 1;
-    while candidate.exists() {
+    while fs::symlink_metadata(&candidate).is_ok() {
         candidate = PathBuf::from(format!("{}-{n}", base.display()));
         n += 1;
     }
@@ -439,7 +486,16 @@ fn refresh(
     let source = read_tree(&paths.source)?;
     let installed = read_tree(&dest_dir)?;
     let was_installed = dest_dir.is_dir();
+    refuse_link(&dest_dir, &id)?;
     let plan = entries(&source, &installed, &read_record(&paths.state));
+    for entry in &plan {
+        if matches!(
+            entry.step,
+            Step::Add | Step::Update | Step::Edited | Step::Delete
+        ) {
+            ensure_plain(&dest_dir, &entry.rel)?;
+        }
+    }
     show_plan(out, &id, &plan)?;
     let edited = plan.iter().filter(|e| e.step == Step::Edited).count();
     let changes = plan.iter().any(|e| {
@@ -484,6 +540,41 @@ fn refresh(
     })
 }
 
+fn unlink_widget(
+    dest_dir: &Path,
+    id: &str,
+    omarchy: &mut dyn OmarchyShell,
+    options: WidgetOptions,
+    out: &mut dyn Write,
+    ask: &mut dyn FnMut() -> bool,
+) -> Result<WidgetOutcome, String> {
+    say(
+        out,
+        &format!(
+            "unlink  {} (a symlink; what it points to is left alone)\n",
+            dest_dir.display()
+        ),
+    )?;
+    let steps = [
+        cmd(&["omarchy", "plugin", "disable", id]),
+        cmd(&["omarchy-shell", "shell", "rescanPlugins"]),
+    ];
+    if options.mode == WidgetMode::DryRun {
+        return dry_run(out, &steps, "removed");
+    }
+    if options.mode == WidgetMode::Confirm && !ask() {
+        say(out, "Nothing was removed.\n")?;
+        return Ok(WidgetOutcome::Declined);
+    }
+    if let Err(error) = commands(omarchy, out, &steps[..1]) {
+        say(out, &format!("note: {error}\n"))?;
+    }
+    fs::remove_file(dest_dir).map_err(|error| format!("{}: {error}", dest_dir.display()))?;
+    say(out, &format!("Unlinked {id}.\n"))?;
+    commands(omarchy, out, &steps[1..])?;
+    Ok(WidgetOutcome::Removed)
+}
+
 pub fn widget_remove(
     paths: &WidgetPaths,
     omarchy: &mut dyn OmarchyShell,
@@ -494,11 +585,14 @@ pub fn widget_remove(
 ) -> Result<WidgetOutcome, String> {
     let id = plugin_id(&paths.source)?;
     let dest_dir = paths.plugins.join(&id);
-    if !dest_dir.is_dir() {
+    if fs::symlink_metadata(&dest_dir).is_err() {
         say(out, &format!("{id} is not installed. Nothing to remove.\n"))?;
         return Ok(WidgetOutcome::NotInstalled);
     }
     require_omarchy(omarchy, options.mode)?;
+    if is_link(&dest_dir) {
+        return unlink_widget(&dest_dir, &id, omarchy, options, out, ask);
+    }
     let installed = read_tree(&dest_dir)?;
     let record = read_record(&paths.state);
     let edited: Vec<&String> = installed
