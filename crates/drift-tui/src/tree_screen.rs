@@ -781,6 +781,7 @@ fn contains(area: Rect, column: u16, row: u16) -> bool {
 mod tests {
     use std::time::Instant;
 
+    use drift_fixtures::cpu_cost;
     use lunatui::{render_once, App, ControlFlow};
     use lunatui_term::{KeyEvent, MouseEvent};
 
@@ -1537,17 +1538,14 @@ mod tests {
     fn keystrokes_on_five_thousand_rows_stay_under_the_budget() {
         let mut screen = TreeScreen::new(&big_report(5000));
         let _ = render_once(&mut Driver(&mut screen), 120, 36);
-        let started = Instant::now();
-        press(&mut screen, "/file4");
-        key(&mut screen, KeyCode::Enter);
-        press(&mut screen, "2");
-        press(&mut screen, "0");
-        key(&mut screen, KeyCode::Esc);
-        assert!(
-            started.elapsed() < Duration::from_millis(500),
-            "{:?}",
-            started.elapsed()
-        );
+        let took = cpu_cost(|| {
+            press(&mut screen, "/file4");
+            key(&mut screen, KeyCode::Enter);
+            press(&mut screen, "2");
+            press(&mut screen, "0");
+            key(&mut screen, KeyCode::Esc);
+        });
+        assert!(took < Duration::from_millis(500), "{took:?}");
     }
 
     #[test]
