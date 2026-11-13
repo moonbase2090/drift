@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use drift_core::{merge3, DiffRows, Hunk, HunkKind, Mark, Merge, Row, Span};
+use drift_core::{merge3, DiffContent, DiffRows, FileDiff, Hunk, HunkKind, Mark, Merge, Row, Span};
 use lunatui::{App, ControlFlow};
 use lunatui_core::{clip_display_prefix, Attrs, Color, Grid, Rect, Style, CLUSTER_TAG};
 use lunatui_runtime::keymap::{Command, KeyChord, Keymap};
@@ -62,6 +62,7 @@ pub struct DiffScreen {
     pinned: Option<Layout>,
     class: Option<WidthClass>,
     two_way: bool,
+    title: Option<String>,
     keymap: Keymap,
     columns: u16,
     rows: u16,
@@ -130,6 +131,34 @@ impl DiffScreen {
         screen
     }
 
+    pub fn from_file_diff(diff: &FileDiff) -> Result<Self, String> {
+        let text = |content: &DiffContent, what: &str| match content {
+            DiffContent::Text { text, .. } => Ok(Some(text.clone())),
+            DiffContent::Absent => Ok(None),
+            DiffContent::Unreadable => Err(format!("{}: the {what} side is unreadable", diff.path)),
+            DiffContent::HashOnly { .. } => Err(format!(
+                "{}: the {what} side is not shown as text (not UTF-8 or over 1 MiB)",
+                diff.path
+            )),
+        };
+        let ours = text(&diff.ours, "live")?.unwrap_or_default();
+        let theirs = text(&diff.theirs, "template")?.unwrap_or_default();
+        let screen = match &diff.base {
+            DiffContent::Text { text, .. } => Self::new(text, &ours, &theirs),
+            DiffContent::Absent => Self::without_base(&ours, &theirs),
+            DiffContent::Unreadable | DiffContent::HashOnly { .. } => {
+                text(&diff.base, "base")?;
+                Self::without_base(&ours, &theirs)
+            }
+        };
+        Ok(screen.with_title(&diff.path))
+    }
+
+    pub fn with_title(mut self, title: &str) -> Self {
+        self.title = Some(title.to_string());
+        self
+    }
+
     pub fn from_merge(merge: &Merge) -> Self {
         let (mut tree, hunks) = SplitTree::new();
         let base = tree
@@ -152,6 +181,7 @@ impl DiffScreen {
             pinned: None,
             class: None,
             two_way: false,
+            title: None,
             keymap: keymap(),
             columns: 0,
             rows: 0,
@@ -221,18 +251,22 @@ impl DiffScreen {
     }
 
     fn header_text(&self) -> String {
+        let name = match &self.title {
+            Some(title) => format!("Diff  {title}"),
+            None => "Diff".to_string(),
+        };
         if self.two_way {
             return match self.aligned.hunk_labels.get(self.hunk) {
-                Some(label) => format!("Diff  base unknown  {label}"),
-                None => "Diff  base unknown".to_string(),
+                Some(label) => format!("{name}  base unknown  {label}"),
+                None => format!("{name}  base unknown"),
             };
         }
         if self.effective() == Layout::Four {
-            return "Diff".to_string();
+            return name;
         }
         match self.aligned.hunk_labels.get(self.hunk) {
-            Some(label) => format!("Diff  {label}"),
-            None => "Diff".to_string(),
+            Some(label) => format!("{name}  {label}"),
+            None => name,
         }
     }
 
@@ -1870,5 +1904,99 @@ mod tests {
             }
         }
         colors
+    }
+
+    fn content(text: &str) -> DiffContent {
+        DiffContent::Text {
+            sha256: "ab".repeat(32),
+            text: text.to_string(),
+        }
+    }
+
+    fn file_diff(base: DiffContent, ours: DiffContent, theirs: DiffContent) -> FileDiff {
+        FileDiff {
+            path: ".config/hypr/a.lua".to_string(),
+            status: drift_core::Status::Conflict,
+            badge: None,
+            provenance: drift_core::BaseProvenance::Reviewed,
+            note: String::new(),
+            base,
+            ours,
+            theirs,
+        }
+    }
+
+    #[test]
+    fn a_file_diff_opens_with_its_path_in_the_header_and_all_three_sides() {
+        let mut screen = DiffScreen::from_file_diff(&file_diff(
+            content("alpha\nhello\n"),
+            content("alpha\nHELLO\n"),
+            content("alpha\nhola\n"),
+        ))
+        .unwrap();
+        let (grid, clusters) = render_once(&mut screen, 160, 40);
+        let text = grid.display_text(&clusters);
+        assert!(
+            text.lines()
+                .next()
+                .unwrap()
+                .contains("Diff  .config/hypr/a.lua"),
+            "{text}"
+        );
+        for needle in ["hello", "HELLO", "hola"] {
+            assert!(text.contains(needle), "{needle}\n{text}");
+        }
+    }
+
+    #[test]
+    fn an_absent_base_is_two_way_and_an_absent_live_file_diffs_against_nothing() {
+        let mut two = DiffScreen::from_file_diff(&file_diff(
+            DiffContent::Absent,
+            content("mine\n"),
+            content("theirs\n"),
+        ))
+        .unwrap();
+        let (grid, clusters) = render_once(&mut two, 160, 40);
+        assert!(grid.display_text(&clusters).contains("base unknown"));
+        let mut missing = DiffScreen::from_file_diff(&file_diff(
+            DiffContent::Absent,
+            DiffContent::Absent,
+            content("new file\n"),
+        ))
+        .unwrap();
+        let (grid, clusters) = render_once(&mut missing, 160, 40);
+        assert!(grid.display_text(&clusters).contains("new file"));
+    }
+
+    #[test]
+    fn sides_that_are_not_text_are_refused_with_the_side_and_the_path() {
+        let hashed = DiffContent::HashOnly {
+            sha256: "cd".repeat(32),
+            len: 3,
+            reason: drift_core::HashOnlyReason::NonUtf8,
+        };
+        let error = DiffScreen::from_file_diff(&file_diff(
+            DiffContent::Absent,
+            hashed.clone(),
+            content("t\n"),
+        ))
+        .err()
+        .unwrap();
+        assert_eq!(
+            error,
+            ".config/hypr/a.lua: the live side is not shown as text (not UTF-8 or over 1 MiB)"
+        );
+        let error = DiffScreen::from_file_diff(&file_diff(
+            DiffContent::Absent,
+            content("o\n"),
+            DiffContent::Unreadable,
+        ))
+        .err()
+        .unwrap();
+        assert_eq!(error, ".config/hypr/a.lua: the template side is unreadable");
+        let error = DiffScreen::from_file_diff(&file_diff(hashed, content("o\n"), content("t\n")))
+            .err()
+            .unwrap();
+        assert!(error.contains("the base side"), "{error}");
     }
 }

@@ -309,7 +309,7 @@ impl drift_tui::Resolver for LiveResolver {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs;
 
     use drift_apply::{HyprlandStatus, Roots};
@@ -325,14 +325,14 @@ mod tests {
         list.iter().map(|item| item.to_string()).collect()
     }
 
-    fn sha(text: &str) -> String {
+    pub(crate) fn sha(text: &str) -> String {
         Sha256::digest(text.as_bytes())
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect()
     }
 
-    fn world(files: &[(&str, &str, Option<&str>, Option<&str>)]) -> MaterializedRoot {
+    pub(crate) fn world(files: &[(&str, &str, Option<&str>, Option<&str>)]) -> MaterializedRoot {
         let mut builder = RootBuilder::new();
         for keep in [
             "state/.keep",
@@ -378,7 +378,7 @@ mod tests {
         builder.materialize().unwrap()
     }
 
-    fn scan_paths(root: &MaterializedRoot) -> ScanPaths {
+    pub(crate) fn scan_paths(root: &MaterializedRoot) -> ScanPaths {
         let base = root.path().to_path_buf();
         ScanPaths {
             source: SourcePaths::new(

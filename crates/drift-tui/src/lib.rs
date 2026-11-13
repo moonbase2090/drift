@@ -1,4 +1,5 @@
 mod diff;
+mod differ;
 mod plan_dialog;
 mod resolver;
 mod screen;
@@ -7,6 +8,7 @@ mod wake;
 mod worker;
 
 pub use diff::DiffScreen;
+pub use differ::Differ;
 pub use plan_dialog::{apply_decision, review_plan, Decision, Focus, PlanDialog};
 pub use resolver::{Proposal, Resolver};
 pub use screen::{

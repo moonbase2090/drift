@@ -182,9 +182,10 @@ fn open_review() -> std::io::Result<()> {
         &paths.source.package.omarchy_path,
     );
     let resolver = live_resolver(&registry);
+    let differ = diff::LiveDiffer::new(scan::paths_from_env(), registry.clone());
     let worker = drift_tui::spawn_scan(move || scan::scan_report(&paths, &registry));
     let watcher = watch::arm(&watched, worker.changes());
-    let result = drift_tui::launch_worker_with(worker, Box::new(resolver));
+    let result = drift_tui::launch_worker_with(worker, Box::new(resolver), Box::new(differ));
     drop(watcher);
     result
 }

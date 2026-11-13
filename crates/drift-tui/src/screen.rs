@@ -1,12 +1,14 @@
 use lunatui::{render_once, run, App, ControlFlow, RunOptions};
 use lunatui_core::{clip_display_prefix, width, ClusterTable, Grid, Rect, Style};
 use lunatui_runtime::keymap::{Command, KeyChord, Keymap};
-use lunatui_term::{Event, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind};
+use lunatui_term::{Event, KeyCode, KeyKind, Modifiers, MouseButton, MouseEvent, MouseKind};
 use lunatui_theme::{Theme, Token, Variant};
 use lunatui_widgets::{KeyHintBar, RenderCx, Tree, TreeItem, TreeState, Widget};
 
 use drift_core::{Action as ResolveAction, ScanReport};
 
+use crate::diff::DiffScreen;
+use crate::differ::Differ;
 use crate::plan_dialog::{Decision, PlanDialog};
 use crate::resolver::{Proposal, Resolver};
 use crate::tree_screen::{Action, TreeScreen};
@@ -29,6 +31,8 @@ struct Modal {
 
 pub struct Screen {
     resolver: Option<Box<dyn Resolver>>,
+    differ: Option<Box<dyn Differ>>,
+    diff: Option<DiffScreen>,
     modal: Option<Modal>,
     notice: Option<String>,
     review: Option<TreeScreen>,
@@ -48,6 +52,8 @@ impl Screen {
     pub fn new() -> Self {
         Self {
             resolver: None,
+            differ: None,
+            diff: None,
             modal: None,
             notice: None,
             review: None,
@@ -77,6 +83,15 @@ impl Screen {
     pub fn with_resolver(mut self, resolver: Box<dyn Resolver>) -> Self {
         self.resolver = Some(resolver);
         self
+    }
+
+    pub fn with_differ(mut self, differ: Box<dyn Differ>) -> Self {
+        self.differ = Some(differ);
+        self
+    }
+
+    pub fn diff(&self) -> Option<&DiffScreen> {
+        self.diff.as_ref()
     }
 
     pub fn with_report(report: &ScanReport) -> Self {
@@ -150,8 +165,13 @@ pub fn launch_worker(worker: WorkerHandle) -> std::io::Result<()> {
 pub fn launch_worker_with(
     worker: WorkerHandle,
     resolver: Box<dyn Resolver>,
+    differ: Box<dyn Differ>,
 ) -> std::io::Result<()> {
-    launch_attached(Screen::attached(worker).with_resolver(resolver))
+    launch_attached(
+        Screen::attached(worker)
+            .with_resolver(resolver)
+            .with_differ(differ),
+    )
 }
 
 fn launch_attached(screen: Screen) -> std::io::Result<()> {
@@ -253,6 +273,10 @@ impl Screen {
             Action::Keep(paths) => (ResolveAction::KeepMine, paths),
             Action::Take(paths) => (ResolveAction::TakeUpstream, paths),
             Action::Merge(paths) => (ResolveAction::Merge, paths),
+            Action::Open(path) => {
+                self.open_diff(path);
+                return;
+            }
             other => {
                 self.action = Some(other);
                 return;
@@ -278,6 +302,34 @@ impl Screen {
             }
             Ok(proposal) => self.show(&format!("Nothing to do: {}", proposal.skipped.join("; "))),
             Err(message) => self.show(&message),
+        }
+    }
+
+    fn open_diff(&mut self, path: String) {
+        let Some(differ) = self.differ.as_mut() else {
+            self.action = Some(Action::Open(path));
+            return;
+        };
+        match differ
+            .diff(&path)
+            .and_then(|found| DiffScreen::from_file_diff(&found))
+        {
+            Ok(screen) => self.diff = Some(screen),
+            Err(message) => self.show(&message),
+        }
+    }
+
+    fn update_diff(&mut self, event: &Event) {
+        let leaves = matches!(
+            event,
+            Event::Key(key) if key.kind == KeyKind::Press && key.code == KeyCode::Esc
+        );
+        let closes = match self.diff.as_mut() {
+            Some(diff) if !leaves => diff.update(event) == ControlFlow::Break,
+            _ => true,
+        };
+        if closes {
+            self.diff = None;
         }
     }
 
@@ -378,6 +430,10 @@ impl App for Screen {
             self.update_modal(event);
             return ControlFlow::Continue;
         }
+        if self.diff.is_some() {
+            self.update_diff(event);
+            return ControlFlow::Continue;
+        }
         if !matches!(self.phase, Phase::Scanning) && self.review.is_some() {
             let action = self.review.as_mut().and_then(|review| review.handle(event));
             return match action {
@@ -411,6 +467,10 @@ impl App for Screen {
     fn render(&mut self, grid: &mut Grid, area: Rect, clusters: &mut ClusterTable) {
         self.apply_notes();
         self.kick_scan();
+        if let Some(diff) = self.diff.as_mut() {
+            diff.render(grid, area, clusters);
+            return;
+        }
         if matches!(self.phase, Phase::Scanning) {
             self.spin = self.spin.wrapping_add(1);
             self.refresh_tree();
@@ -1311,5 +1371,210 @@ mod tests {
         press(&mut screen, "y");
         assert!(log.borrow().applied.is_empty());
         assert!(!shown(&mut screen).contains("Apply plan"));
+    }
+
+    use drift_core::{DiffContent, FileDiff};
+
+    struct FakeDiffer {
+        asked: Rc<RefCell<Vec<String>>>,
+        fail: bool,
+        binary: bool,
+    }
+
+    impl Differ for FakeDiffer {
+        fn diff(&mut self, path: &str) -> Result<FileDiff, String> {
+            self.asked.borrow_mut().push(path.to_string());
+            if self.fail {
+                return Err("the package database is unreadable".to_string());
+            }
+            let text = |text: &str| DiffContent::Text {
+                sha256: "ab".repeat(32),
+                text: text.to_string(),
+            };
+            Ok(FileDiff {
+                path: path.to_string(),
+                status: Status::Conflict,
+                badge: None,
+                provenance: BaseProvenance::Reviewed,
+                note: String::new(),
+                base: text("alpha\nhello\n"),
+                ours: if self.binary {
+                    DiffContent::Unreadable
+                } else {
+                    text("alpha\nHELLO\n")
+                },
+                theirs: text("alpha\nhola\n"),
+            })
+        }
+    }
+
+    fn differing(fail: bool, binary: bool) -> (Screen, Rc<RefCell<Vec<String>>>) {
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let report = ScanReport {
+            package_version: "4.5.0-3".to_string(),
+            reviewed_version: None,
+            entries: vec![entry(".config/a.conf", Status::Conflict)],
+            backups: Vec::new(),
+            ignored: 0,
+        };
+        let screen = Screen::with_report(&report).with_differ(Box::new(FakeDiffer {
+            asked: Rc::clone(&asked),
+            fail,
+            binary,
+        }));
+        (screen, asked)
+    }
+
+    fn enter(screen: &mut Screen) {
+        let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Enter)));
+    }
+
+    fn escape(screen: &mut Screen) {
+        let _ = screen.update(&Event::Key(KeyEvent::press(KeyCode::Esc)));
+    }
+
+    fn wide(screen: &mut Screen) -> String {
+        let (grid, clusters) = render_once(screen, 160, 40);
+        grid.display_text(&clusters)
+    }
+
+    #[test]
+    fn enter_on_a_file_of_the_live_screen_opens_its_diff() {
+        let (mut screen, asked) = differing(false, false);
+        let _ = wide(&mut screen);
+        press(&mut screen, "j");
+        enter(&mut screen);
+        assert_eq!(asked.borrow().as_slice(), [".config/a.conf"]);
+        assert!(screen.diff().is_some());
+        let text = wide(&mut screen);
+        assert!(
+            text.lines()
+                .next()
+                .unwrap()
+                .contains("Diff  .config/a.conf"),
+            "{text}"
+        );
+        for needle in ["hello", "HELLO", "hola"] {
+            assert!(text.contains(needle), "{needle}\n{text}");
+        }
+        assert!(!text.contains("Drift"), "{text}");
+    }
+
+    #[test]
+    fn v_cycles_the_layouts_of_the_opened_diff() {
+        let (mut screen, _) = differing(false, false);
+        let _ = wide(&mut screen);
+        press(&mut screen, "j");
+        enter(&mut screen);
+        let four = wide(&mut screen);
+        assert!(four.contains("hunks"), "{four}");
+        press(&mut screen, "v");
+        let two = wide(&mut screen);
+        assert!(
+            two.contains("result") && !two.lines().nth(1).unwrap_or("").contains("hunks"),
+            "{two}"
+        );
+        press(&mut screen, "v");
+        assert!(wide(&mut screen).contains("stacked"));
+        assert!(screen.diff().is_some());
+    }
+
+    #[test]
+    fn escape_returns_to_the_tree_with_its_selection_and_q_does_too() {
+        for leave in ["escape", "q"] {
+            let (mut screen, _) = differing(false, false);
+            let _ = wide(&mut screen);
+            press(&mut screen, "j");
+            enter(&mut screen);
+            assert!(screen.diff().is_some());
+            if leave == "escape" {
+                escape(&mut screen);
+            } else {
+                assert_eq!(
+                    screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('q')))),
+                    ControlFlow::Continue
+                );
+            }
+            assert!(screen.diff().is_none(), "{leave}");
+            let text = wide(&mut screen);
+            assert!(
+                text.contains("Drift") && text.contains("a.conf"),
+                "{leave}\n{text}"
+            );
+            assert!(!text.contains("hunks"), "{leave}\n{text}");
+            assert_eq!(
+                screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('q')))),
+                ControlFlow::Break,
+                "{leave}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_diff_can_be_opened_again_after_leaving_it() {
+        let (mut screen, asked) = differing(false, false);
+        let _ = wide(&mut screen);
+        press(&mut screen, "j");
+        enter(&mut screen);
+        escape(&mut screen);
+        enter(&mut screen);
+        assert!(screen.diff().is_some());
+        assert_eq!(asked.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_diff_that_cannot_be_shown_says_why_on_the_tree() {
+        for (fail, binary, expected) in [
+            (true, false, "the package database is unreadable"),
+            (false, true, ".config/a.conf: the live side is unreadable"),
+        ] {
+            let (mut screen, _) = differing(fail, binary);
+            let _ = wide(&mut screen);
+            press(&mut screen, "j");
+            enter(&mut screen);
+            assert!(screen.diff().is_none());
+            assert_eq!(notice(&screen), expected);
+        }
+    }
+
+    #[test]
+    fn enter_on_a_directory_opens_no_diff() {
+        let (mut screen, asked) = differing(false, false);
+        let _ = wide(&mut screen);
+        enter(&mut screen);
+        assert!(screen.diff().is_none());
+        assert!(asked.borrow().is_empty());
+    }
+
+    #[test]
+    fn without_a_differ_the_open_action_is_only_reported() {
+        let report = ScanReport {
+            package_version: "4.5.0-3".to_string(),
+            reviewed_version: None,
+            entries: vec![entry(".config/a.conf", Status::Conflict)],
+            backups: Vec::new(),
+            ignored: 0,
+        };
+        let mut screen = Screen::with_report(&report);
+        let _ = wide(&mut screen);
+        press(&mut screen, "j");
+        enter(&mut screen);
+        assert_eq!(
+            screen.take_action(),
+            Some(Action::Open(".config/a.conf".to_string()))
+        );
+        assert!(screen.diff().is_none());
+    }
+
+    #[test]
+    fn a_rescan_finishing_under_the_diff_leaves_it_open() {
+        let (mut screen, _) = differing(false, false);
+        let _ = wide(&mut screen);
+        press(&mut screen, "j");
+        enter(&mut screen);
+        screen.apply_note(Note::Scanning);
+        screen.apply_note(Note::Ready(empty_report()));
+        assert!(screen.diff().is_some());
+        assert!(wide(&mut screen).contains("hunks"));
     }
 }
