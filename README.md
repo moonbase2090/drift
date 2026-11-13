@@ -11,6 +11,7 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 - [User guide](docs/guide.md): what Drift tracks, how bases are found (including the first update), the screens and keys, resolving a conflict, the safety model, recovering from backups and uninstalling.
 - [Command reference](docs/cli.md): every command, flag and exit code.
 - [Bar widget](docs/widget.md).
+- [The first-update scenario](docs/first-update.md): a scripted walk through the first upgrade on a fresh install.
 - [Keys and mouse targets](docs/input-map.md).
 
 The commands in these pages are run by a test against a fixture system.
