@@ -10,6 +10,7 @@ target is reached through the command palette (`:`), which every screen opens by
 |---|---|---|---|
 | Show the help | `global.help` | `?` | Click `[?] Help` on any screen |
 | Open the command palette | `global.palette` | `:` | Click `[:] Palette` on any screen |
+| Undo the last transaction | `global.undo-last` | `u` | Open the palette, click the action |
 
 ## Tree
 
@@ -49,7 +50,7 @@ target is reached through the command palette (`:`), which every screen opens by
 |---|---|---|---|
 | Back to the tree | `history.back` | `q`, `Esc` | Click `[Q] Back` |
 | Reload the history | `history.refresh` | `r` | Click `[r] Refresh` |
-| Undo the selected transaction | `history.undo` | `Enter`, `u` | Click `[Enter] Undo` |
+| Undo the selected transaction | `history.undo` | `Enter` | Click `[Enter] Undo` |
 | Undo and restore changed files too | `history.undo-force` | `U` | Click `[U] Undo and force` |
 | Move down | `history.down` | `j`, `Down` | Click a row |
 | Move up | `history.up` | `k`, `Up` | Click a row |
@@ -65,6 +66,8 @@ target is reached through the command palette (`:`), which every screen opens by
 | Quit | `diff.quit` | `q` | Click `[Q] Quit` |
 | Next hunk | `diff.next` | `n` | Click `[N] Next hunk` |
 | Previous hunk | `diff.previous` | `p` | Click `[P] Prev hunk` |
+| Next unresolved conflict | `diff.next-conflict` | `N` | Open the palette, click the action |
+| Previous unresolved conflict | `diff.previous-conflict` | `P` | Open the palette, click the action |
 | Layout | `diff.layout` | `v` | Click `[V] Layout` |
 | Next pane | `diff.focus-next` | `Tab` | Click `[Tab] Pane` |
 | Previous pane | `diff.focus-previous` | `Shift+Tab` | Open the palette, click the action |
@@ -88,10 +91,4 @@ target is reached through the command palette (`:`), which every screen opens by
 | Select a file | `plan.select` | `j`, `k`, `Up`, `Down`, `Home`, `End` | Click a file row |
 | Expand or collapse a file's diff | `plan.expand` | `d` | Click a file row |
 
-## Keys the PRD lists that are not built yet
-
-| Context | Key | Action |
-|---|---|---|
-| Global | `u` | undo the last transaction from anywhere |
-| Diff | `N` | jump to the next unresolved conflict |
-| Diff | `P` | jump to the previous unresolved conflict |
+Every key the PRD lists in section 6.2 is built.

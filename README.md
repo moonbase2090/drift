@@ -8,7 +8,7 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 
 ## Review screen
 
-`drift` opens a screen with a header, a path tree, and the key hints taken from the keymap. While a scan is running the tree shows a scanning row, and the rest of the screen still takes input. Press `r` to scan again. A change under a tracked root starts one follow-up scan after a short pause, including when many changes arrive together. Press `q`, or click Quit, to leave. The terminal is restored when the screen closes. The screen follows the terminal when its size changes, whichever screen or dialog is open, and repaints at the new size.
+`drift` opens a screen with a header, a path tree, and the key hints taken from the keymap. While a scan is running the tree shows a scanning row, and the rest of the screen still takes input. Press `r` to scan again, or `u`, on the tree, the diff or the history, to undo the newest transaction (the same plan dialog as the history opens first, and nothing is written until you confirm; in the history `u` undoes the selected row, which starts on the newest). A change under a tracked root starts one follow-up scan after a short pause, including when many changes arrive together. Press `q`, or click Quit, to leave. The terminal is restored when the screen closes. The screen follows the terminal when its size changes, whichever screen or dialog is open, and repaints at the new size.
 
 ![Empty Drift screen](docs/media/empty-screen.gif)
 
@@ -16,9 +16,13 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 
 `drift --snapshot` prints one 80×24 frame and does not take the terminal. Pass `--width` and `--height` together to print another size.
 
-A changed file opens in five columns once the window is at least 200 cells wide, wide enough for each text pane to keep about 40 cells: the hunk list, then base, ours, theirs, and the result. The four text panes share one scroll position. `n` and `p` move between hunks, Tab moves focus, and `[` / `]` or a drag resizes the focused pane.
+A changed file opens in five columns once the window is at least 200 cells wide, wide enough for each text pane to keep about 40 cells: the hunk list, then base, ours, theirs, and the result. The four text panes share one scroll position. `n` and `p` move between hunks, `N` and `P` jump to the next and previous conflict that is still unresolved (a note says when there is none), Tab moves focus, and `[` / `]` or a drag resizes the focused pane.
 
 ![Four-pane diff](docs/media/four-pane.gif)
+
+The capture below is the real program on a file with four conflicts: `N` moves to the next unresolved conflict three times and `P` goes back one.
+
+![Conflict keys](docs/media/conflict-keys.gif)
 
 Below 200 columns the same file uses fewer panes, so paths and lines are not cut mid-word in narrow columns; `v` can still force the five columns. From 100 columns it shows ours and theirs side by side, with the result underneath. Narrower than that, the rows stack in one column. A removed line keeps a minus mark, an added line keeps a plus mark, and a conflict shows ours and theirs. `v` cycles those layouts. A resize that crosses a width boundary follows the width again and keeps the selected hunk. A file with no base stays on two panes, and the header says the base is unknown.
 
