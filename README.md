@@ -75,6 +75,8 @@ Launch Drift from the Omarchy menu. The menu action is `omarchy-launch-or-focus-
 
 `drift notify` scans and, when configuration has drifted, sends a notification through `omarchy-notification-send`. One drifted file reads `1 config drifted`; more than one reads `N configs drifted`. The urgency is normal, and clicking the notification runs `omarchy-launch-or-focus-tui --app-id=TUI.float drift`, which opens Drift or focuses the existing window. Nothing is sent when the count is zero, while another process holds the Omarchy update lock, while the pacman database lock exists, or after `drift notify off`. The post-update hook inherits the Omarchy lock and still sends, and it still checks the pacman lock. An Omarchy lock file left behind does not block a later notify. Pacman removes its database lock when the transaction ends. Notifications are on until turned off. `drift notify on` turns them back on, and that choice is kept in Drift's state.
 
+The bar widget in `plugin/` has id `drift.status`. It runs `drift status --bar` every five minutes. The JSON `text` field is the drifted count, and the widget hides when that field is empty. A click runs the same floating launcher. `omarchy plugin validate ./plugin` checks the folder. Place the folder in the user plugin directory as `drift.status`, then run `omarchy bar put drift.status`.
+
 The interface is a path tree plus the per-file diff. Classification uses the installed package file list and, when available, a cache of the previous package version, so "matches template," "local override," and "conflicts with a new upstream change" stay distinct.
 
 ## Read-only commands
@@ -82,6 +84,7 @@ The interface is a path tree plus the per-file diff. Classification uses the ins
 ```sh
 drift scan
 drift status --json
+drift status --bar
 drift diff .config/hypr/hyprland.conf
 drift diff "$HOME/.config/hypr/hyprland.conf" --json
 ```
@@ -91,6 +94,8 @@ It prints base provenance, status, base/ours/theirs contents, hunk kinds and the
 automatic merge result. JSON includes each hunk's three sides. Conflicts have no
 automatic result. Missing or unreadable sides are explicit; non-UTF-8 files and
 files over 1 MiB show their hash and size instead of content.
+
+`drift status --bar` prints one JSON object. `text` is the drifted count, or empty when nothing has drifted, so a status bar can hide the module at zero. `tooltip` names the count, `class` is `clean` or `drifted`.
 
 Exit codes are 0 for no drift in the selected file, 1 for drift and 2 for an error,
 including an unknown path. Local overrides and user-only files count as no drift,

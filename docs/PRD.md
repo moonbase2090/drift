@@ -156,7 +156,7 @@ Omarchy plugins are git repositories with a `manifest.json` at the root (`schema
 
 Drift ships:
 
-- A **`bar-widget` plugin**, id `drift.status`, kinds `["bar-widget"]`, that polls `drift status --bar` and shows the drifted count, opening Drift on click. Installed with `omarchy plugin add <repo-url>`; placed with `omarchy bar put drift.status`. If a third-party `bar-widget` cannot run `drift status` itself, ship the count through the `command` bar module instead. That capability is checked against the shell reference during milestone 4.
+- A **`bar-widget` plugin**, id `drift.status`, kinds `["bar-widget"]`, in `plugin/`. The shell loads a third-party widget unsandboxed, and the widget can run a program and read its output, so it polls `drift status --bar` itself every five minutes. It shows the JSON `text` count and hides when `text` is empty. A click opens Drift. `omarchy plugin validate ./plugin` checks the folder. `omarchy plugin add` expects the manifest at the repository root, so this folder is placed in the user plugin directory until the widget has its own repository. Place it with `omarchy bar put drift.status`.
 - **Menu entry** through the user extension file `~/.config/omarchy/extensions/omarchy-menu.jsonc` (an `update.drift` row whose `action` runs the floating launcher).
 - **Post-update hook** `~/.config/omarchy/hooks/post-update.d/drift` running `drift notify`. `omarchy-hook post-update` runs only at the end of `omarchy-update`, so a systemd user path unit (packaged) also watches the hook-written state file in `/var/lib/drift` and triggers `drift notify` after updates made with plain `pacman -Syu`.
 
@@ -243,4 +243,4 @@ The approach is verification, not mutation or complexity scoring. Tests are fixt
 9. **Registry breadth.** **Decided:** v1 covers `config/` templates mapped to `~/.config` only. Secondary copy roots (applications, the Alacritty desktop file, Hyprland toggle flags) come later.
 10. **License and name.** **Decided:** MIT, to match Lunatui. Whether `drift` is free as a package name on the AUR is checked in the packaging ticket.
 11. **Plugin install path.** **Pending:** the owner's answer on whether the plugin should live in a separate small repository. For now, one repository.
-12. **Third-party plugin capabilities.** **Decided:** if a third-party `bar-widget` cannot run `drift status` itself, use the `command` bar module. Confirm against the shell reference during milestone 4.
+12. **Third-party plugin capabilities.** **Decided:** a third-party bar widget runs `drift status --bar` itself. The shell loads it unsandboxed, so it can start the program and read the output. The bar `run` helper only starts a command and does not return output, so the widget does not use it for the count. The command bar module is not the implementation.
