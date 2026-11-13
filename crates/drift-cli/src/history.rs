@@ -771,4 +771,73 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn without_a_name_the_newest_transaction_is_the_one_undone() {
+        let root = resolved();
+        let second = go_at(
+            &root,
+            &[".config/hypr/b.lua", "--keep", "--yes"],
+            false,
+            "",
+            &clean(),
+            SECOND,
+        );
+        assert_eq!(second.result, Ok(0), "{}", second.err);
+        let shown = undo_at(&root, &["--dry-run"], false, "", SECOND + 10);
+        assert!(
+            shown.out.starts_with("undo of resolve-1800000100456\n"),
+            "{}",
+            shown.out
+        );
+        let named = undo_at(
+            &root,
+            &["resolve-1800000000123", "--dry-run"],
+            false,
+            "",
+            SECOND + 10,
+        );
+        assert!(
+            named.out.starts_with("undo of resolve-1800000000123\n"),
+            "{}",
+            named.out
+        );
+    }
+
+    #[test]
+    fn the_history_screen_leaves_a_changed_file_alone_until_u_forces_it() {
+        use lunatui::App as _;
+        use lunatui_term::KeyCode;
+
+        let tui = resolved();
+        tui.overwrite("home/.config/hypr/a.lua", "edited later\n")
+            .unwrap();
+        let paths = scan_paths(&tui);
+        let roots = roots_for(&paths, tui.path().join("runtime"));
+        let mut screen = drift_tui::Screen::with_report(&tree_report(&tui))
+            .with_historian(Box::new(LiveHistorian::new(paths, roots, at_second)));
+        let _ = lunatui::render_once(&mut screen, 120, 36);
+        for code in [KeyCode::Char('H'), KeyCode::Enter] {
+            let _ = screen.update(&key(code));
+        }
+        let (grid, clusters) = lunatui::render_once(&mut screen, 120, 36);
+        let text = grid.display_text(&clusters);
+        assert!(!text.contains(".config/hypr/a.lua"), "{text}");
+        assert!(
+            screen
+                .history()
+                .and_then(|history| history.notice())
+                .is_some_and(|notice| notice.contains("changed since")),
+            "{:?}",
+            screen.history().and_then(|history| history.notice())
+        );
+        let _ = screen.update(&key(KeyCode::Char('n')));
+        let _ = screen.update(&key(KeyCode::Char('U')));
+        let (grid, clusters) = lunatui::render_once(&mut screen, 120, 36);
+        let text = grid.display_text(&clusters);
+        assert!(text.contains("restored anyway"), "{text}");
+        assert_eq!(read(&tui, "home/.config/hypr/a.lua"), "edited later\n");
+        let _ = screen.update(&key(KeyCode::Char('y')));
+        assert_eq!(read(&tui, "home/.config/hypr/a.lua"), "mine a\n");
+    }
 }
