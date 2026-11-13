@@ -1058,14 +1058,28 @@ fn mouse_quits(columns: u16, rows: u16, mouse: &MouseEvent) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use drift_core::MAX_DIFF_BYTES;
+    use drift_fixtures::cpu_cost;
     use lunatui::render_once;
     use lunatui_term::KeyEvent;
     use lunatui_test::styled_snapshot;
 
     use super::*;
+
+    fn timed_frame(
+        screen: &mut DiffScreen,
+        columns: u16,
+        rows: u16,
+    ) -> (Duration, lunatui_core::Grid, lunatui_core::ClusterTable) {
+        let mut rendered = None;
+        let took = cpu_cost(|| {
+            rendered = Some(render_once(screen, columns, rows));
+        });
+        let (grid, clusters) = rendered.expect("frame");
+        (took, grid, clusters)
+    }
 
     fn sample_near_the_cap() -> (String, usize) {
         let line = format!("{}\n", "a".repeat(63));
@@ -1283,18 +1297,12 @@ mod tests {
         assert!(text.len() <= MAX_DIFF_BYTES as usize);
         let mut changed = changed_near_the_cap(&text);
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Down)));
-        let started = Instant::now();
-        let (grid, clusters) = render_once(&mut changed, 160, 40);
-        let scrolled = started.elapsed();
+        let (scrolled, grid, clusters) = timed_frame(&mut changed, 160, 40);
         assert!(grid.display_text(&clusters).contains('B'));
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Tab)));
-        let started = Instant::now();
-        let _ = render_once(&mut changed, 160, 40);
-        let focused = started.elapsed();
+        let (focused, _, _) = timed_frame(&mut changed, 160, 40);
         changed.update(&Event::Key(KeyEvent::press(KeyCode::Char('n'))));
-        let started = Instant::now();
-        let (grid, clusters) = render_once(&mut changed, 160, 40);
-        let jumped = started.elapsed();
+        let (jumped, grid, clusters) = timed_frame(&mut changed, 160, 40);
         assert!(grid.display_text(&clusters).contains('C'));
         assert!(changed.scroll_top() > 0);
         let worst_cold = scrolled.max(focused).max(jumped);
@@ -1312,9 +1320,9 @@ mod tests {
             }
             let mut samples = Vec::new();
             for _ in 0..16 {
-                let started = Instant::now();
-                let _ = render_once(&mut screen, columns, rows);
-                samples.push(started.elapsed());
+                samples.push(cpu_cost(|| {
+                    let _ = render_once(&mut screen, columns, rows);
+                }));
             }
             let worst = samples.iter().copied().max().unwrap();
             assert!(

@@ -481,6 +481,8 @@ fn build_nodes(entries: &[ScanEntry]) -> (Vec<Node>, Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    use drift_fixtures::cpu_cost;
+
     use super::*;
     use crate::status::{Badge, BaseProvenance};
 
@@ -788,17 +790,14 @@ mod tests {
             .collect();
         let mut view = TreeView::new(entries);
         assert_eq!(view.rows().len(), 5000 + 101);
-        let started = std::time::Instant::now();
-        view.set_query("file4");
-        view.set_status_filter(Some(Status::Conflict));
-        view.set_query("");
-        view.set_status_filter(None);
-        view.mark_all_in_view();
-        assert!(
-            started.elapsed() < std::time::Duration::from_millis(500),
-            "{:?}",
-            started.elapsed()
-        );
+        let took = cpu_cost(|| {
+            view.set_query("file4");
+            view.set_status_filter(Some(Status::Conflict));
+            view.set_query("");
+            view.set_status_filter(None);
+            view.mark_all_in_view();
+        });
+        assert!(took < std::time::Duration::from_millis(500), "{took:?}");
         assert_eq!(view.marked_count(), 5000);
     }
 }
