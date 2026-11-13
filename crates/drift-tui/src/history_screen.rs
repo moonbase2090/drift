@@ -23,7 +23,7 @@ pub enum HistoryAction {
     Palette,
 }
 
-const HINTS: &[(&str, KeyCode)] = &[
+pub(crate) const HINTS: &[(&str, KeyCode)] = &[
     ("[Q] Back", KeyCode::Char('q')),
     ("[?] Help", KeyCode::Char('?')),
     ("[:] Palette", KeyCode::Char(':')),
@@ -450,6 +450,47 @@ mod tests {
             column,
             row,
         )))
+    }
+
+    fn variant(action: &Option<HistoryAction>) -> Option<String> {
+        action.as_ref().map(|found| {
+            let text = format!("{found:?}");
+            text.split(['(', ' '])
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+    }
+
+    #[test]
+    fn nothing_a_click_can_ask_for_is_missing_from_the_keys() {
+        let mut by_mouse = std::collections::BTreeSet::new();
+        for (columns, rows) in [(80_u16, 14_u16), (120, 20)] {
+            for row in 0..rows {
+                for column in 0..columns {
+                    let mut screen = HistoryScreen::new(sample());
+                    let _ = text(&mut screen, columns, rows);
+                    by_mouse.extend(variant(&click(&mut screen, column, row)));
+                }
+            }
+        }
+        let mut by_key = std::collections::BTreeSet::new();
+        for command in crate::commands::HISTORY_COMMANDS {
+            for chord in command.chords() {
+                let mut screen = HistoryScreen::new(sample());
+                let _ = text(&mut screen, 120, 20);
+                by_key.extend(variant(&key(&mut screen, chord.code())));
+            }
+        }
+        for command in crate::commands::GLOBAL_COMMANDS {
+            for chord in command.chords() {
+                let mut screen = HistoryScreen::new(sample());
+                by_key.extend(variant(&key(&mut screen, chord.code())));
+            }
+        }
+        assert!(by_mouse.len() >= 4, "{by_mouse:?}");
+        let only_mouse: Vec<_> = by_mouse.difference(&by_key).collect();
+        assert!(only_mouse.is_empty(), "mouse-only actions: {only_mouse:?}");
     }
 
     #[test]

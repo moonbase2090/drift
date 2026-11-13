@@ -44,9 +44,13 @@ Before anything is written, the plan dialog lists every file with its action, th
 
 ![Plan dialog](docs/media/plan-dialog.gif)
 
+A file you chose to keep is not written, but `d` still shows how the shipped template differs from your file, under a line saying your file is kept; the dry run prints the same diff. The capture is the real program: it keeps one local override and expands it.
+
+![Keep mine plan](docs/media/keep-plan.gif)
+
 ## Tree screen
 
-`drift` scans the installed package against your files and shows the result as a path tree. Every file has a glyph, its status label and a colour, so no status depends on colour alone; the header counts each status and doubles as the filter buttons. `j` and `k` move, `h` and `l` collapse and expand, `1`-`6` filter by status and `0` clears, `/` searches as you type, `Space` marks and `a` marks everything in the filter. The mouse selects, double-clicks to open, scrolls, toggles carets and checkboxes, and presses the header counts and the hint bar. The capture below is the real program: `cargo run -p drift-tui --example tree_screen` opens the screen on a sample report. It moves to a file (the summary pane shows its template and base), marks it, filters to upstream changes, then searches for `way`.
+`drift` scans the installed package against your files and shows the result as a path tree. Directories start collapsed, except the ones on the path to the first drifted or overridden file, so a deep folder that does not need review stays out of the way. Every file has a glyph, its status label and a colour, so no status depends on colour alone; the header counts each status and doubles as the filter buttons. `j` and `k` move, `h` and `l` collapse and expand, `1`-`6` filter by status and `0` clears, `/` searches as you type, `Space` marks and `a` marks everything in the filter. The mouse selects, double-clicks to open, scrolls, toggles carets and checkboxes, and presses the header counts and the hint bar. The capture below is the real program: `cargo run -p drift-tui --example tree_screen` opens the screen on a sample report. It moves to a file (the summary pane shows its template and base), marks it, filters to upstream changes, then searches for `way`.
 
 ![Tree screen](docs/media/tree-screen.gif)
 
@@ -61,6 +65,14 @@ Before anything is written, the plan dialog lists every file with its action, th
 `?` opens the help on any screen: every key of the current screen first, then the other screens and the keys that work everywhere, with `j`/`k`, `PageUp`/`PageDown` and `Home`/`End` to scroll and `Esc`, `q` or `?` to close. `:` opens the command palette: type part of an action's name, move with the arrow keys and press `Enter` to run it exactly as if you had pressed its key; the palette shows each action's keys beside it. Both are built from the same keymaps the screens use to handle keys, so a key that works is listed, and neither can drift from what the screens do. Both are unavailable while the first scan is still running and while you are typing a search, where `?` and `:` are ordinary characters. The capture below is the real `drift` binary on a scratch home directory: it opens the help, scrolls it, closes it, then opens the palette, filters to "filter loc" and runs the local override filter.
 
 ![Help and palette](docs/media/help-palette.gif)
+
+## Keys and the mouse
+
+Every action has a key, and every action can be reached with the mouse. [docs/input-map.md](docs/input-map.md) lists each action with its keys and its mouse target, and a test regenerates that file from the keymaps and fails when it is out of date. The hint bar on every screen is clickable. The diff screen's bar offers Quit, Help, Palette, Write, Next hunk and Previous hunk, and the diff now answers the mouse in the stacked and two-pane layouts as well as the four-pane one. An action without a direct target is one click away in the command palette, which each screen opens from its hint bar. Tests click every cell of the tree, history and diff screens and fail if a click can ask for something no key can. The capture below is the real `drift` binary at 80×24 on a scratch home directory; the ring marks the hint that is clicked: Next hunk, then Write, which opens the plan, then Cancel.
+
+![Clickable diff hint bar](docs/media/diff-hints.gif)
+
+Text and status colours are checked for contrast against the dark Lunatui theme Drift runs in. Lunatui's light theme falls short on its accent and status colours, and Drift does not use it. The diff row tints and gutter marks are checked at 4.5:1 against the built-in hues and four Omarchy themes (dark, light, rose and grey) on both Lunatui themes; a gutter mark whose theme colour would vanish on its row is lightened or darkened until it reads.
 
 ## Empty and error states
 

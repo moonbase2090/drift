@@ -4,17 +4,17 @@
 > ▾ [ ] .config/  (8 files, 3 drifted)                                  | .config/                                      
     ▾ [ ] btop/  (1 file, 1 drifted)                                    | ✓ unchanged 2                                 
         [ ] ? missing           btop.conf                               | ↓ upstream changed 1                          
-    ▾ [ ] chromium/  (1 file, 0 drifted)                                | ≠ local override 2                            
-      ▾ [ ] Default/  (1 file, 0 drifted)                               | ✗ conflict 1                                  
-          [ ] ≠ local override    Preferences                           | + user-only 1                                 
-    ▾ [ ] hypr/  (3 files, 2 drifted)                                   | ? missing 1                                   
-        [ ] ✓ unchanged         input.lua                               |                                               
-        [ ] ↓ upstream changed  looknfeel.lua  [merges cleanly]         |                                               
-        [ ] ✗ conflict          monitors.lua                            |                                               
-    ▾ [ ] waybar/  (2 files, 0 drifted)                                 |                                               
-        [ ] ✓ unchanged         config.jsonc                            |                                               
-        [ ] ≠ local override    style.css  [base unknown]               |                                               
-      [ ] + user-only         alacritty.toml                            |                                               
+    ▸ [ ] chromium/  (1 file, 0 drifted)                                | ≠ local override 2                            
+    ▸ [ ] hypr/  (3 files, 2 drifted)                                   | ✗ conflict 1                                  
+    ▸ [ ] waybar/  (2 files, 0 drifted)                                 | + user-only 1                                 
+      [ ] + user-only         alacritty.toml                            | ? missing 1                                   
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
+                                                                        |                                               
                                                                         |                                               
                                                                         |                                               
                                                                         |                                               

@@ -5,14 +5,14 @@
 > ▾ [ ] .config/  (8 files, 3 drifted)                                          
     ▾ [ ] btop/  (1 file, 1 drifted)                                            
         [ ] ? missing           btop.conf                                       
-    ▾ [ ] chromium/  (1 file, 0 drifted)                                        
-      ▾ [ ] Default/  (1 file, 0 drifted)                                       
-          [ ] ≠ local override    Preferences                                   
-    ▾ [ ] hypr/  (3 files, 2 drifted)                                           
-        [ ] ✓ unchanged         input.lua                                       
-        [ ] ↓ upstream changed  looknfeel.lua  [merges cleanly]                 
-        [ ] ✗ conflict          monitors.lua                                    
-    ▾ [ ] waybar/  (2 files, 0 drifted)                                         
+    ▸ [ ] chromium/  (1 file, 0 drifted)                                        
+    ▸ [ ] hypr/  (3 files, 2 drifted)                                           
+    ▸ [ ] waybar/  (2 files, 0 drifted)                                         
+      [ ] + user-only         alacritty.toml                                    
+                                                                                
+                                                                                
+                                                                                
+                                                                                
 --------------------------------------------------------------------------------
 .config/                                                                        
 ✓ unchanged 2                                                                   

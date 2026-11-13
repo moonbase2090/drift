@@ -108,7 +108,7 @@ const NO_MATCH_HINTS: &[(&str, KeyCode)] = &[
     ("[H] History", KeyCode::Char('H')),
 ];
 
-const HINTS: &[(&str, KeyCode)] = &[
+pub(crate) const HINTS: &[(&str, KeyCode)] = &[
     ("[Q] Quit", KeyCode::Char('q')),
     ("[?] Help", KeyCode::Char('?')),
     ("[:] Palette", KeyCode::Char(':')),
@@ -1120,6 +1120,25 @@ mod tests {
         screen
     }
 
+    fn expand_all(screen: &mut TreeScreen) {
+        while let Some(row) = screen.view().rows().iter().position(|row| {
+            matches!(
+                row.kind,
+                RowKind::Dir {
+                    expanded: false,
+                    ..
+                }
+            )
+        }) {
+            key(screen, KeyCode::Home);
+            for _ in 0..row {
+                key(screen, KeyCode::Down);
+            }
+            key(screen, KeyCode::Right);
+        }
+        key(screen, KeyCode::Home);
+    }
+
     fn key(screen: &mut TreeScreen, code: KeyCode) -> Option<Action> {
         screen.handle(&Event::Key(KeyEvent::press(code)))
     }
@@ -1188,13 +1207,14 @@ mod tests {
         let mut screen = TreeScreen::new(&sample_report());
         let _ = text(&mut screen, 120, 36);
         press(&mut screen, "/wa");
-        assert_eq!(text(&mut screen, 120, 36), snapshot("tree-search-120x36"));
+        let shown = text(&mut screen, 120, 36);
+        assert_eq!(shown, snapshot("tree-search-120x36"));
 
         let mut screen = TreeScreen::new(&sample_report());
         let _ = text(&mut screen, 80, 24);
-        press(&mut screen, "jjlhh");
-        press(&mut screen, "h");
-        assert_eq!(text(&mut screen, 80, 24), snapshot("tree-collapsed-80x24"));
+        press(&mut screen, "jh");
+        let shown = text(&mut screen, 80, 24);
+        assert_eq!(shown, snapshot("tree-collapsed-80x24"));
     }
 
     #[test]
@@ -1206,6 +1226,7 @@ mod tests {
             seen.push(glyph(status));
         }
         let mut screen = TreeScreen::new(&sample_report());
+        expand_all(&mut screen);
         let shown = text(&mut screen, 120, 36);
         for entry in sample_report().entries {
             let name = entry.path.rsplit('/').next().unwrap().to_string();
@@ -1424,6 +1445,7 @@ mod tests {
     #[test]
     fn a_directory_checkbox_shows_partial_marks() {
         let mut screen = opened();
+        expand_all(&mut screen);
         press(&mut screen, "jjjjjjj");
         assert_eq!(selected_path(&screen), ".config/hypr/input.lua");
         press(&mut screen, " ");
@@ -1445,6 +1467,7 @@ mod tests {
     #[test]
     fn per_file_actions_act_on_the_selection_or_the_marks_and_i_asks_to_ignore() {
         let mut screen = opened();
+        expand_all(&mut screen);
         press(&mut screen, "jjjjjjj");
         assert_eq!(selected_path(&screen), ".config/hypr/input.lua");
         assert_eq!(
@@ -1497,6 +1520,7 @@ mod tests {
     #[test]
     fn clicking_a_row_selects_it_and_a_quick_second_click_opens_it() {
         let mut screen = opened();
+        expand_all(&mut screen);
         let shown = text(&mut screen, 120, 36);
         let row = row_of(&shown, "input.lua");
         let t0 = Instant::now();
@@ -1515,6 +1539,7 @@ mod tests {
     #[test]
     fn slow_or_split_clicks_are_not_a_double_click() {
         let mut screen = opened();
+        expand_all(&mut screen);
         let shown = text(&mut screen, 120, 36);
         let (first, second) = (row_of(&shown, "input.lua"), row_of(&shown, "looknfeel.lua"));
         let t0 = Instant::now();
@@ -1567,6 +1592,7 @@ mod tests {
     fn the_same_file_clicked_twice_quickly_still_opens_after_a_rebuild_in_between() {
         let t0 = Instant::now();
         let mut screen = opened();
+        expand_all(&mut screen);
         let shown = text(&mut screen, 120, 36);
         let row = row_of(&shown, "[ ] ✗ conflict");
         screen.handle_at(&click_event(40, row), t0);
@@ -1582,6 +1608,7 @@ mod tests {
     #[test]
     fn the_caret_toggles_the_directory_and_the_checkbox_marks() {
         let mut screen = opened();
+        expand_all(&mut screen);
         let shown = text(&mut screen, 120, 36);
         let hypr = row_of(&shown, "hypr/");
         let rows = screen.view().rows().len();
@@ -1655,6 +1682,51 @@ mod tests {
         assert!(shown.contains("filter: conflict"), "{shown}");
         screen.handle_at(&click_event(column + 2, row), Instant::now());
         assert_eq!(screen.view().status_filter(), None);
+    }
+
+    fn variant(action: &Option<Action>) -> Option<String> {
+        action.as_ref().map(|found| {
+            let text = format!("{found:?}");
+            text.split(['(', ' '])
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+    }
+
+    #[test]
+    fn nothing_a_click_can_ask_for_is_missing_from_the_keys() {
+        let mut by_mouse = std::collections::BTreeSet::new();
+        for (columns, rows) in [(80_u16, 24_u16), (120, 36)] {
+            for row in 0..rows {
+                for column in 0..columns {
+                    let mut screen = TreeScreen::new(&sample_report());
+                    let _ = text(&mut screen, columns, rows);
+                    let found = screen.handle_at(&click_event(column, row), Instant::now());
+                    by_mouse.extend(variant(&found));
+                }
+            }
+        }
+        let mut by_key = std::collections::BTreeSet::new();
+        for command in crate::commands::TREE_COMMANDS {
+            for chord in command.chords() {
+                for steps in 0..8 {
+                    let mut screen = opened();
+                    press(&mut screen, &"j".repeat(steps));
+                    let found = key(&mut screen, chord.code());
+                    by_key.extend(variant(&found));
+                }
+            }
+        }
+        for command in crate::commands::GLOBAL_COMMANDS {
+            for chord in command.chords() {
+                let mut screen = opened();
+                by_key.extend(variant(&key(&mut screen, chord.code())));
+            }
+        }
+        assert!(by_mouse.len() >= 4, "{by_mouse:?}");
+        let only_mouse: Vec<_> = by_mouse.difference(&by_key).collect();
+        assert!(only_mouse.is_empty(), "mouse-only actions: {only_mouse:?}");
     }
 
     #[test]
@@ -1774,6 +1846,7 @@ mod tests {
     #[test]
     fn the_summary_describes_the_selection() {
         let mut screen = opened();
+        expand_all(&mut screen);
         let shown = text(&mut screen, 200, 60);
         assert!(
             shown.contains("2 files") || shown.contains("✗ conflict 1"),

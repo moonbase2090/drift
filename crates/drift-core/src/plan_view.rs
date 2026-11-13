@@ -148,7 +148,8 @@ fn file_view(
         }
     };
     let (summary, diff, diff_truncated) = if planned.action() == Action::KeepMine {
-        (DiffSummary::NotWritten, Vec::new(), false)
+        let (_, diff, truncated) = summarise(&path, contents);
+        (DiffSummary::NotWritten, diff, truncated)
     } else {
         summarise(&path, contents)
     };
@@ -333,6 +334,25 @@ mod tests {
         assert_eq!(view.files[2].summary.label(), "not written");
         assert_eq!(view.files[2].backup, "none (nothing is written)");
         assert_eq!(view.writes(), 2);
+    }
+
+    #[test]
+    fn a_keep_mine_file_is_not_written_but_still_shows_the_upstream_diff() {
+        let p = plan(
+            vec![file("config/keep.lua", Action::KeepMine, Some(H1), None)],
+            &[],
+        );
+        let view = PlanView::build(
+            &p,
+            STATE,
+            &[contents("config/keep.lua", Some("k\n"), Some("K\n"))],
+        );
+        let file = &view.files[0];
+        assert_eq!(file.summary, DiffSummary::NotWritten);
+        assert_eq!(file.backup, "none (nothing is written)");
+        assert!(file.diff.iter().any(|line| line == "-k"), "{:?}", file.diff);
+        assert!(file.diff.iter().any(|line| line == "+K"), "{:?}", file.diff);
+        assert_eq!(view.writes(), 0);
     }
 
     #[test]
