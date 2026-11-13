@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "drift.status",
+  "name": "Drift",
+  "version": "0.1.0",
+  "description": "Shows the drifted configuration count and opens Drift on click.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Drift",
+    "description": "Drifted configuration count",
+    "category": "Status",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
