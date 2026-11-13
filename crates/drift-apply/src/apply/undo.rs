@@ -84,6 +84,14 @@ pub fn inspect_undo(roots: &Roots, target: &str) -> Result<Vec<UndoItem>, ApplyE
 }
 
 pub fn undo(roots: &Roots, request: &UndoRequest<'_>) -> Result<UndoOutcome, ApplyError> {
+    undo_locked(roots, request, &mut |outcome| outcome)
+}
+
+pub(super) fn undo_locked(
+    roots: &Roots,
+    request: &UndoRequest<'_>,
+    under_lock: &mut dyn FnMut(Result<UndoOutcome, ApplyError>) -> Result<UndoOutcome, ApplyError>,
+) -> Result<UndoOutcome, ApplyError> {
     if node_exists(&roots.omarchy_lock) {
         return Err(bare("omarchy update lock is held"));
     }
@@ -91,6 +99,11 @@ pub fn undo(roots: &Roots, request: &UndoRequest<'_>) -> Result<UndoOutcome, App
         return Err(bare("pacman database lock is held"));
     }
     let _lock = DriftLock::take(&roots.state)?;
+    let outcome = undo_held(roots, request);
+    under_lock(outcome)
+}
+
+fn undo_held(roots: &Roots, request: &UndoRequest<'_>) -> Result<UndoOutcome, ApplyError> {
     ensure_real_dir(&roots.live, &roots.live)?;
     ensure_real_dir(&roots.state, &roots.state)?;
     let target = load_manifest(&roots.state, request.target)?;

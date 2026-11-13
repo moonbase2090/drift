@@ -234,33 +234,43 @@ pub fn undo_with_bases(
     share: &Path,
     request: &UndoRequest<'_>,
 ) -> Result<UndoneWithBases, ApplyError> {
-    let has_record = load_previous(&roots.state, request.target)?.is_some();
-    let outcome = match undo(roots, request) {
-        Ok(UndoOutcome::Diverged(items)) => {
-            return Ok(UndoneWithBases {
-                outcome: UndoOutcome::Diverged(items),
-                bases: Restored {
-                    restored: Vec::new(),
-                    failed: Vec::new(),
-                },
-            })
-        }
-        Ok(restored) => restored,
-        Err(error) if has_record && error.message == "nothing to undo" => {
-            UndoOutcome::Restored(ApplyReport {
-                applied: Vec::new(),
-                pruned: Vec::new(),
-            })
-        }
-        Err(error) => return Err(error),
+    undo_with_bases_probed(roots, share, request, &mut || {})
+}
+
+#[doc(hidden)]
+pub fn undo_with_bases_probed(
+    roots: &Roots,
+    share: &Path,
+    request: &UndoRequest<'_>,
+    between: &mut dyn FnMut(),
+) -> Result<UndoneWithBases, ApplyError> {
+    let mut bases = Restored {
+        restored: Vec::new(),
+        failed: Vec::new(),
     };
-    let bases = restore_reviewed_bases(
-        share,
-        &roots.state,
-        request.target,
-        request.id,
-        request.time,
-        request.package_version,
-    )?;
+    let outcome = undo_locked(roots, request, &mut |result| {
+        let has_record = load_previous(&roots.state, request.target)?.is_some();
+        let outcome = match result {
+            Ok(UndoOutcome::Diverged(items)) => return Ok(UndoOutcome::Diverged(items)),
+            Ok(restored) => restored,
+            Err(error) if has_record && error.message == "nothing to undo" => {
+                UndoOutcome::Restored(ApplyReport {
+                    applied: Vec::new(),
+                    pruned: Vec::new(),
+                })
+            }
+            Err(error) => return Err(error),
+        };
+        between();
+        bases = restore_reviewed_bases(
+            share,
+            &roots.state,
+            request.target,
+            request.id,
+            request.time,
+            request.package_version,
+        )?;
+        Ok(outcome)
+    })?;
     Ok(UndoneWithBases { outcome, bases })
 }

@@ -4,8 +4,8 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use drift_apply::{
-    execute, pending_prune, undo, undo_with_bases, HyprlandCheck, HyprlandStatus, Roots,
-    UndoOutcome, UndoRequest, WriteFollowup,
+    execute, pending_prune, undo, undo_with_bases, undo_with_bases_probed, HyprlandCheck,
+    HyprlandStatus, Roots, UndoOutcome, UndoRequest, WriteFollowup,
 };
 use drift_core::{prepare, Action, Prepared, Registry, RelPath, ScanReport, Status};
 use drift_fixtures::{hash_tree, MaterializedRoot, RootBuilder};
@@ -727,4 +727,31 @@ fn the_previous_bases_are_recorded_with_the_transaction() {
     assert!(record.contains("\"root\":\"config\""), "{record}");
     let old_hex: String = "old\n".bytes().map(|byte| format!("{byte:02x}")).collect();
     assert!(record.contains(&old_hex), "{record}");
+}
+
+#[test]
+fn the_base_restore_runs_under_the_same_lock_as_the_file_undo() {
+    let mut builder = Builder::new();
+    builder.file("hypr/a.lua", "upstream new\n", Some("old\n"), Some("old\n"));
+    builder.file("hypr/b.lua", "new b\n", Some("mine b\n"), Some("old b\n"));
+    let world = builder.build();
+    let (prepared, _) = world.prepared(Action::TakeUpstream, "txn-1", &[".config/hypr/a.lua"]);
+    execute(&world.roots(), &world.share(), &prepared, &Quiet).unwrap();
+    let mut refused = None;
+    let mut between = || {
+        let (second, _) = world.prepared(Action::KeepMine, "txn-2", &[".config/hypr/b.lua"]);
+        refused = Some(execute(&world.roots(), &world.share(), &second, &Quiet));
+    };
+    let done = undo_with_bases_probed(
+        &world.roots(),
+        &world.share(),
+        &undo_request("txn-1", "undo-1", &[]),
+        &mut between,
+    )
+    .unwrap();
+    assert_eq!(done.bases.restored, ["config/hypr/a.lua"]);
+    let error = refused.unwrap().unwrap_err();
+    assert!(error.message.contains("lock"), "{}", error.message);
+    assert_eq!(base(&world, "hypr/b.lua").as_deref(), Some("old b\n"));
+    assert_eq!(base(&world, "hypr/a.lua").as_deref(), Some("old\n"));
 }

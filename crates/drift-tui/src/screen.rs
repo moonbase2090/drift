@@ -240,6 +240,9 @@ impl Screen {
         if !matches!(self.phase, Phase::Scanning) {
             self.spin = 0;
         }
+        if matches!(self.phase, Phase::Scanning | Phase::Failed) {
+            self.drop_modal();
+        }
         if matches!(self.phase, Phase::Scanning) {
             self.refresh_tree();
         }
@@ -333,6 +336,13 @@ impl Screen {
         worker.rescan();
         self.phase = Phase::Scanning;
         self.refresh_tree();
+    }
+
+    fn drop_modal(&mut self) {
+        if self.modal.take().is_some() {
+            self.notice =
+                Some("A rescan started; the plan was cancelled. Nothing was written.".to_string());
+        }
     }
 
     fn title(&self) -> String {
@@ -1242,5 +1252,63 @@ mod tests {
         assert_eq!(notice(&screen), "Applied 1 file(s) as txn-1.");
         drop(unlock);
         drop(screen);
+    }
+
+    #[test]
+    fn a_scan_that_starts_while_the_dialog_is_open_cancels_it_so_a_hidden_plan_cannot_be_confirmed()
+    {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let unlock = Unlock(Some(release_tx));
+        let worker = crate::worker::launch(
+            Box::new(move || {
+                let _ = release_rx.recv();
+                Ok(empty_report())
+            }),
+            Duration::from_millis(200),
+        );
+        let report = ScanReport {
+            package_version: "4.5.0-3".to_string(),
+            reviewed_version: None,
+            entries: vec![entry(".config/a.conf", Status::Conflict)],
+            backups: Vec::new(),
+            ignored: 0,
+        };
+        let log = Rc::new(RefCell::new(Log::default()));
+        let mut screen = Screen::attached(worker).with_resolver(Box::new(Fake {
+            log: Rc::clone(&log),
+            fail_propose: false,
+            fail_apply: false,
+        }));
+        screen.kick = false;
+        screen.apply_note(Note::Ready(report.clone()));
+        let _ = shown(&mut screen);
+        press(&mut screen, "jt");
+        assert!(shown(&mut screen).contains("Apply plan"));
+        screen.apply_note(Note::Scanning);
+        assert!(!shown(&mut screen).contains("Apply plan"));
+        press(&mut screen, "y");
+        press(&mut screen, "\n");
+        assert!(log.borrow().applied.is_empty());
+        screen.apply_note(Note::Ready(report));
+        assert!(
+            notice(&screen).contains("plan was cancelled"),
+            "{}",
+            notice(&screen)
+        );
+        press(&mut screen, "y");
+        assert!(log.borrow().applied.is_empty());
+        drop(unlock);
+        drop(screen);
+    }
+
+    #[test]
+    fn a_failed_scan_also_cancels_an_open_dialog() {
+        let (mut screen, log) = actionable(false, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jt");
+        screen.apply_note(Note::Failed("boom".to_string()));
+        press(&mut screen, "y");
+        assert!(log.borrow().applied.is_empty());
+        assert!(!shown(&mut screen).contains("Apply plan"));
     }
 }
