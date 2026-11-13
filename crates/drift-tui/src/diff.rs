@@ -16,6 +16,8 @@ use lunatui_widgets::{
 };
 use unicode_width::UnicodeWidthChar;
 
+use crate::diff_palette::{DiffPalette, RowKind, Tints};
+
 const WIDE: u16 = 160;
 const MEDIUM: u16 = 100;
 const QUIT: &str = "diff.quit";
@@ -89,6 +91,7 @@ pub struct DiffScreen {
     generation: u64,
     stacked_scroll: Option<bool>,
     painted: Option<Painted>,
+    palette: DiffPalette,
     force_redraw: AtomicBool,
     redraw_phase: AtomicBool,
 }
@@ -113,6 +116,7 @@ struct Line {
     spans: Vec<Range<usize>>,
     mark: Option<CodeMark>,
     ascii: bool,
+    kind: RowKind,
 }
 
 impl AsRef<str> for Line {
@@ -126,22 +130,33 @@ struct Aligned {
     ours: Vec<Line>,
     theirs: Vec<Line>,
     result: Vec<Line>,
+    duo_ours: Vec<Line>,
+    duo_theirs: Vec<Line>,
     hunk_rows: Vec<usize>,
     hunk_labels: Vec<String>,
-    stacked: Vec<String>,
+    stacked: Vec<Line>,
     stacked_hunk_rows: Vec<usize>,
 }
 
 struct Hits<'a> {
     lines: &'a [Line],
+    tints: &'a Tints,
 }
 
 impl CodeHighlight for Hits<'_> {
-    fn highlight(&self, line: usize, _text: &str, paint: &mut dyn FnMut(Range<usize>, Style)) {
+    fn highlight(&self, line: usize, text: &str, paint: &mut dyn FnMut(Range<usize>, Style)) {
         let Some(line) = self.lines.get(line) else {
             return;
         };
-        let style = Style::new().fg(HIGHLIGHT);
+        if let Some(row) = self.tints.row(line.kind) {
+            if !text.is_empty() {
+                paint(0..text.len(), Style::new().bg(row));
+            }
+        }
+        let style = match self.tints.word(line.kind) {
+            Some(word) => Style::new().bg(word),
+            None => Style::new().fg(HIGHLIGHT),
+        };
         for span in &line.spans {
             paint(span.clone(), style);
         }
@@ -191,6 +206,12 @@ impl DiffScreen {
         Ok(screen.with_title(&diff.path))
     }
 
+    pub fn with_palette(mut self, palette: DiffPalette) -> Self {
+        self.palette = palette;
+        self.painted = None;
+        self
+    }
+
     pub fn with_title(mut self, title: &str) -> Self {
         self.title = Some(title.to_string());
         self
@@ -237,6 +258,7 @@ impl DiffScreen {
             generation: 0,
             stacked_scroll: None,
             painted: None,
+            palette: DiffPalette::fallback(),
             force_redraw: AtomicBool::new(false),
             redraw_phase: AtomicBool::new(false),
         }
@@ -628,6 +650,8 @@ fn align(merge: &Merge, choices: &[Option<Choice>]) -> Aligned {
         ours: Vec::new(),
         theirs: Vec::new(),
         result: Vec::new(),
+        duo_ours: Vec::new(),
+        duo_theirs: Vec::new(),
         hunk_rows: Vec::new(),
         hunk_labels: Vec::new(),
         stacked: Vec::new(),
@@ -638,7 +662,9 @@ fn align(merge: &Merge, choices: &[Option<Choice>]) -> Aligned {
         match segment {
             drift_core::Segment::Stable(text) => {
                 for line in split_lines(text) {
-                    aligned.stacked.push(format!("  {line}"));
+                    aligned
+                        .stacked
+                        .push(owned_line(format!("  {line}"), Vec::new(), None));
                     let shown = if at < rows.len() && rows[at].hunk.is_none() {
                         let text = rows[at].text.clone();
                         at += 1;
@@ -650,13 +676,13 @@ fn align(merge: &Merge, choices: &[Option<Choice>]) -> Aligned {
                     aligned.base.push(plain.clone());
                     aligned.ours.push(plain.clone());
                     aligned.theirs.push(plain.clone());
+                    aligned.duo_ours.push(plain.clone());
+                    aligned.duo_theirs.push(plain.clone());
                     aligned.result.push(plain);
                 }
             }
             drift_core::Segment::Hunk(hunk) => {
                 let choice = choices.get(hunk_index).and_then(Option::as_ref);
-                let chosen = choice.and_then(|_| merge.hunk_text(hunk_index, choice));
-                push_stacked(&mut aligned, hunk, chosen.as_deref());
                 let start = at;
                 while at < rows.len() && rows[at].hunk == Some(hunk_index) {
                     at += 1;
@@ -676,6 +702,97 @@ fn align(merge: &Merge, choices: &[Option<Choice>]) -> Aligned {
     aligned
 }
 
+struct HunkLines {
+    base: Vec<Line>,
+    ours: Vec<Line>,
+    theirs: Vec<Line>,
+    result: Vec<Line>,
+    duo_ours: Vec<Line>,
+    duo_theirs: Vec<Line>,
+    stacked: Vec<(&'static str, Vec<Line>)>,
+}
+
+fn hunk_lines(hunk: &Hunk, rows: &[Row]) -> HunkLines {
+    let removed = or_raw(from_mark(rows, Mark::Removed), &hunk.base);
+    match hunk.kind {
+        HunkKind::Conflict => {
+            let ours = from_mark(rows, Mark::Mine);
+            let theirs = from_mark(rows, Mark::Theirs);
+            let mut duo_ours = ours.clone();
+            let mut duo_theirs = theirs.clone();
+            pair_kinds(&mut duo_ours, &mut duo_theirs);
+            HunkLines {
+                base: kinded(raw_lines(&hunk.base), RowKind::Removed),
+                ours: kinded(ours.clone(), RowKind::Changed),
+                theirs: kinded(theirs.clone(), RowKind::Changed),
+                result: vec![owned_line(
+                    "unresolved".to_string(),
+                    Vec::new(),
+                    Some(CodeMark::Error),
+                )],
+                duo_ours,
+                duo_theirs,
+                stacked: vec![
+                    ("- ", kinded(removed.clone(), RowKind::Removed)),
+                    ("< ours ", kinded(ours, RowKind::Changed)),
+                    ("> theirs ", kinded(theirs, RowKind::Changed)),
+                ],
+            }
+        }
+        HunkKind::TheirsOnly => {
+            let added = or_raw(from_mark(rows, Mark::Added), &hunk.theirs);
+            let mut duo_ours = removed.clone();
+            let mut duo_theirs = added.clone();
+            pair_kinds(&mut duo_ours, &mut duo_theirs);
+            HunkLines {
+                base: kinded(removed.clone(), RowKind::Removed),
+                ours: plain(&removed),
+                theirs: kinded(added.clone(), RowKind::Added),
+                result: kinded(added.clone(), RowKind::Added),
+                duo_ours,
+                duo_theirs,
+                stacked: vec![
+                    ("- ", kinded(removed.clone(), RowKind::Removed)),
+                    ("+ ", kinded(added, RowKind::Added)),
+                ],
+            }
+        }
+        HunkKind::OursOnly => {
+            let added = or_raw(from_mark(rows, Mark::Added), &hunk.ours);
+            let mut duo_ours = added.clone();
+            let mut duo_theirs = removed.clone();
+            pair_kinds(&mut duo_ours, &mut duo_theirs);
+            HunkLines {
+                base: kinded(removed.clone(), RowKind::Removed),
+                ours: kinded(added.clone(), RowKind::Added),
+                theirs: plain(&removed),
+                result: kinded(added.clone(), RowKind::Added),
+                duo_ours,
+                duo_theirs,
+                stacked: vec![
+                    ("- ", kinded(removed.clone(), RowKind::Removed)),
+                    ("+ ", kinded(added, RowKind::Added)),
+                ],
+            }
+        }
+        HunkKind::BothSame => {
+            let added = or_raw(from_mark(rows, Mark::Added), &hunk.ours);
+            HunkLines {
+                base: kinded(removed.clone(), RowKind::Removed),
+                ours: kinded(added.clone(), RowKind::Added),
+                theirs: kinded(added.clone(), RowKind::Added),
+                result: kinded(added.clone(), RowKind::Added),
+                duo_ours: plain(&added),
+                duo_theirs: plain(&added),
+                stacked: vec![
+                    ("- ", kinded(removed.clone(), RowKind::Removed)),
+                    ("+ ", kinded(added, RowKind::Added)),
+                ],
+            }
+        }
+    }
+}
+
 fn push_hunk(
     aligned: &mut Aligned,
     merge: &Merge,
@@ -688,49 +805,81 @@ fn push_hunk(
     aligned
         .hunk_labels
         .push(format!("{} {}", index + 1, hunk_name(hunk.kind)));
-    let (base, ours, theirs, result) = match hunk.kind {
-        HunkKind::Conflict => {
-            let ours = from_mark(rows, Mark::Mine);
-            let theirs = from_mark(rows, Mark::Theirs);
-            let base = raw_lines(&hunk.base);
-            let result = vec![owned_line(
-                "unresolved".to_string(),
-                Vec::new(),
-                Some(CodeMark::Error),
-            )];
-            (base, ours, theirs, result)
+    let lines = hunk_lines(hunk, rows);
+    aligned.stacked_hunk_rows.push(aligned.stacked.len());
+    let chosen = choice.and_then(|_| merge.hunk_text(index, choice));
+    if let Some(text) = chosen.as_deref() {
+        for line in kinded(raw_lines(text), RowKind::Added) {
+            aligned.stacked.push(prefixed("= ", line));
         }
-        HunkKind::TheirsOnly => {
-            let base = or_raw(from_mark(rows, Mark::Removed), &hunk.base);
-            let theirs = or_raw(from_mark(rows, Mark::Added), &hunk.theirs);
-            let ours = plain(&base);
-            (base, ours, theirs.clone(), theirs)
+    }
+    for (prefix, group) in lines.stacked {
+        for line in group {
+            aligned.stacked.push(prefixed(prefix, line));
         }
-        HunkKind::OursOnly => {
-            let base = or_raw(from_mark(rows, Mark::Removed), &hunk.base);
-            let ours = or_raw(from_mark(rows, Mark::Added), &hunk.ours);
-            let theirs = plain(&base);
-            (base, ours.clone(), theirs, ours)
-        }
-        HunkKind::BothSame => {
-            let base = or_raw(from_mark(rows, Mark::Removed), &hunk.base);
-            let ours = or_raw(from_mark(rows, Mark::Added), &hunk.ours);
-            (base, ours.clone(), ours.clone(), ours)
-        }
-    };
+    }
     let result = if choice.is_some() {
-        raw_lines(merge.hunk_text(index, choice).as_deref().unwrap_or(""))
+        kinded(
+            raw_lines(merge.hunk_text(index, choice).as_deref().unwrap_or("")),
+            RowKind::Added,
+        )
     } else {
-        result
+        lines.result
     };
-    let height = [base.len(), ours.len(), theirs.len(), result.len()]
-        .into_iter()
-        .max()
-        .unwrap_or(0);
-    extend(&mut aligned.base, base, height);
-    extend(&mut aligned.ours, ours, height);
-    extend(&mut aligned.theirs, theirs, height);
+    let height = [
+        lines.base.len(),
+        lines.ours.len(),
+        lines.theirs.len(),
+        result.len(),
+        lines.duo_ours.len(),
+        lines.duo_theirs.len(),
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(0);
+    extend(&mut aligned.base, lines.base, height);
+    extend(&mut aligned.ours, lines.ours, height);
+    extend(&mut aligned.theirs, lines.theirs, height);
     extend(&mut aligned.result, result, height);
+    extend(&mut aligned.duo_ours, lines.duo_ours, height);
+    extend(&mut aligned.duo_theirs, lines.duo_theirs, height);
+}
+
+fn kinded(mut lines: Vec<Line>, kind: RowKind) -> Vec<Line> {
+    for line in &mut lines {
+        line.kind = kind;
+    }
+    lines
+}
+
+fn pair_kinds(ours: &mut [Line], theirs: &mut [Line]) {
+    let shared = ours.len().min(theirs.len());
+    for (index, line) in ours.iter_mut().enumerate() {
+        line.kind = if index < shared {
+            RowKind::Changed
+        } else {
+            RowKind::Added
+        };
+    }
+    for (index, line) in theirs.iter_mut().enumerate() {
+        line.kind = if index < shared {
+            RowKind::Changed
+        } else {
+            RowKind::Removed
+        };
+    }
+}
+
+fn prefixed(prefix: &str, line: Line) -> Line {
+    let shift = prefix.len();
+    let spans = line
+        .spans
+        .iter()
+        .map(|span| span.start + shift..span.end + shift)
+        .collect();
+    let mut shown = owned_line(format!("{prefix}{}", line.text), spans, None);
+    shown.kind = line.kind;
+    shown
 }
 
 fn hunk_name(kind: HunkKind) -> &'static str {
@@ -765,6 +914,7 @@ fn plain(lines: &[Line]) -> Vec<Line> {
             spans: Vec::new(),
             mark: None,
             ascii: line.ascii,
+            kind: RowKind::Plain,
         })
         .collect()
 }
@@ -775,12 +925,7 @@ fn line_from_row(row: &Row) -> Line {
         .iter()
         .filter_map(|span| columns_to_bytes(&row.text, *span))
         .collect::<Vec<_>>();
-    let mark = if spans.is_empty() {
-        None
-    } else {
-        Some(CodeMark::Changed)
-    };
-    owned_line(row.text.clone(), spans, mark)
+    owned_line(row.text.clone(), spans, None)
 }
 
 fn raw_lines(text: &str) -> Vec<Line> {
@@ -792,7 +937,9 @@ fn raw_lines(text: &str) -> Vec<Line> {
 
 fn extend(into: &mut Vec<Line>, mut lines: Vec<Line>, height: usize) {
     while lines.len() < height {
-        lines.push(owned_line(String::new(), Vec::new(), None));
+        let mut blank = owned_line(String::new(), Vec::new(), None);
+        blank.kind = RowKind::Filler;
+        lines.push(blank);
     }
     into.extend(lines);
 }
@@ -822,6 +969,7 @@ fn owned_line(text: String, spans: Vec<Range<usize>>, mark: Option<CodeMark>) ->
         spans,
         mark,
         ascii,
+        kind: RowKind::Plain,
     }
 }
 
@@ -881,34 +1029,6 @@ fn split_pair(area: Rect) -> (Rect, Rect) {
         area.height,
     );
     (left, right)
-}
-
-fn push_stacked(aligned: &mut Aligned, hunk: &Hunk, chosen: Option<&str>) {
-    aligned.stacked_hunk_rows.push(aligned.stacked.len());
-    if let Some(text) = chosen {
-        push_marked(&mut aligned.stacked, "= ", text);
-    }
-    match hunk.kind {
-        HunkKind::Conflict => {
-            push_marked(&mut aligned.stacked, "- ", &hunk.base);
-            push_marked(&mut aligned.stacked, "< ours ", &hunk.ours);
-            push_marked(&mut aligned.stacked, "> theirs ", &hunk.theirs);
-        }
-        HunkKind::TheirsOnly => {
-            push_marked(&mut aligned.stacked, "- ", &hunk.base);
-            push_marked(&mut aligned.stacked, "+ ", &hunk.theirs);
-        }
-        HunkKind::OursOnly | HunkKind::BothSame => {
-            push_marked(&mut aligned.stacked, "- ", &hunk.base);
-            push_marked(&mut aligned.stacked, "+ ", &hunk.ours);
-        }
-    }
-}
-
-fn push_marked(into: &mut Vec<String>, mark: &str, text: &str) {
-    for line in split_lines(text) {
-        into.push(format!("{mark}{line}"));
-    }
 }
 
 fn regions(area: Rect) -> (Rect, Rect, Rect) {
@@ -1136,6 +1256,7 @@ impl DiffScreen {
 
     fn render_wide(&mut self, body: Rect, cx: &mut RenderCx<'_>, accent: Style, text: Style) {
         let scroll = self.prepare_scroll(body.height.saturating_sub(1));
+        let tints = self.palette.tints(cx.token(Token::Surface0));
         let layout = self.tree.layout(body);
         let panes = [
             &self.aligned.base,
@@ -1150,7 +1271,7 @@ impl DiffScreen {
             }
             let lines = panes[index - 1];
             let style = if self.focus == index { accent } else { text };
-            self.render_code(area.rect, PANES[index], lines, style, scroll, cx);
+            self.render_code(area.rect, (PANES[index], style), lines, scroll, &tints, cx);
         }
         let active = self.drag.active().or_else(|| self.focused_divider());
         paint_dividers(&layout, text, accent, active, cx);
@@ -1159,6 +1280,7 @@ impl DiffScreen {
     fn render_two(&mut self, body: Rect, cx: &mut RenderCx<'_>, accent: Style, text: Style) {
         let (top, strip) = split_strip(body);
         let scroll = self.prepare_scroll(top.height.saturating_sub(1));
+        let tints = self.palette.tints(cx.token(Token::Surface0));
         let (left, right) = split_pair(top);
         let ours = if self.focused() == "ours" {
             accent
@@ -1170,8 +1292,22 @@ impl DiffScreen {
         } else {
             text
         };
-        self.render_code(left, "ours", &self.aligned.ours, ours, scroll, cx);
-        self.render_code(right, "theirs", &self.aligned.theirs, theirs, scroll, cx);
+        self.render_code(
+            left,
+            ("ours", ours),
+            &self.aligned.duo_ours,
+            scroll,
+            &tints,
+            cx,
+        );
+        self.render_code(
+            right,
+            ("theirs", theirs),
+            &self.aligned.duo_theirs,
+            scroll,
+            &tints,
+            cx,
+        );
         if top.width > 2 && top.height > 0 {
             let x = left.x.saturating_add(left.width);
             cx.fill(Rect::new(x, top.y, 1, top.height), text, '│');
@@ -1184,7 +1320,14 @@ impl DiffScreen {
         } else {
             text
         };
-        self.render_code(strip, "result", &self.aligned.result, result, scroll, cx);
+        self.render_code(
+            strip,
+            ("result", result),
+            &self.aligned.result,
+            scroll,
+            &tints,
+            cx,
+        );
     }
 
     fn render_stacked(&mut self, body: Rect, cx: &mut RenderCx<'_>, accent: Style, text: Style) {
@@ -1198,6 +1341,7 @@ impl DiffScreen {
                 body.height.saturating_sub(top_height),
             );
             let scroll = self.prepare_scroll(top.height.saturating_sub(1));
+            let tints = self.palette.tints(cx.token(Token::Surface0));
             let ours = if self.focused() == "ours" {
                 accent
             } else {
@@ -1208,8 +1352,22 @@ impl DiffScreen {
             } else {
                 text
             };
-            self.render_code(top, "ours", &self.aligned.ours, ours, scroll, cx);
-            self.render_code(bottom, "theirs", &self.aligned.theirs, theirs, scroll, cx);
+            self.render_code(
+                top,
+                ("ours", ours),
+                &self.aligned.duo_ours,
+                scroll,
+                &tints,
+                cx,
+            );
+            self.render_code(
+                bottom,
+                ("theirs", theirs),
+                &self.aligned.duo_theirs,
+                scroll,
+                &tints,
+                cx,
+            );
             return;
         }
         cx.put_str(
@@ -1223,11 +1381,40 @@ impl DiffScreen {
         }
         let view = Rect::new(body.x, body.y + 1, body.width, body.height - 1);
         let scroll = self.prepare_scroll(view.height);
+        let tints = self.palette.tints(cx.token(Token::Surface0));
         let top = scroll.top();
         let rows = usize::from(view.height);
         for (offset, shown) in self.aligned.stacked.iter().skip(top).take(rows).enumerate() {
             let y = view.y.saturating_add(u16::try_from(offset).unwrap_or(0));
-            cx.put_str(view.x, y, clip_display_prefix(shown, view.width), text);
+            let row = tints.row(shown.kind);
+            let body = row.map_or(text, |color| text.bg(color));
+            if row.is_some() {
+                cx.fill(Rect::new(view.x, y, view.width, 1), body, ' ');
+            }
+            cx.put_str(
+                view.x,
+                y,
+                clip_display_prefix(&shown.text, view.width),
+                body,
+            );
+            if let Some((_, hue)) = tints.mark(shown.kind) {
+                cx.set_style(Rect::new(view.x, y, 1, 1), body.fg(hue));
+            }
+            if let Some(word) = tints.word(shown.kind) {
+                for span in &shown.spans {
+                    let start = text_columns(&shown.text[..span.start]);
+                    let end = text_columns(&shown.text[..span.end.min(shown.text.len())]);
+                    let width = u16::try_from(end.saturating_sub(start)).unwrap_or(0);
+                    let at = u16::try_from(start).unwrap_or(u16::MAX);
+                    if width > 0 && at < view.width {
+                        let reach = width.min(view.width - at);
+                        cx.set_style(
+                            Rect::new(view.x.saturating_add(at), y, reach, 1),
+                            text.bg(word),
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -1293,12 +1480,13 @@ impl DiffScreen {
     fn render_code(
         &self,
         area: Rect,
-        title: &str,
+        heading: (&str, Style),
         lines: &[Line],
-        title_style: Style,
         scroll: CodeViewState,
+        tints: &Tints,
         cx: &mut RenderCx<'_>,
     ) {
+        let (title, title_style) = heading;
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -1316,7 +1504,7 @@ impl DiffScreen {
         let rows = usize::from(view_area.height);
         let fast = scroll.left() == 0 && lines.iter().skip(top).take(rows).all(|line| line.ascii);
         if fast {
-            paint_ascii(view_area, lines, top, rows, cx);
+            paint_ascii(view_area, lines, top, rows, tints, cx);
             return;
         }
         let mut marks = Vec::new();
@@ -1331,13 +1519,14 @@ impl DiffScreen {
         } else {
             WidgetState::Normal
         };
-        let hits = Hits { lines };
+        let hits = Hits { lines, tints };
         CodeView::new(lines)
             .view(&scroll)
             .marks(&marks)
             .highlight(&hits)
             .state(state)
             .render(view_area, cx);
+        paint_rows(view_area, lines, top, rows, scroll.left(), tints, cx);
     }
 }
 
@@ -1436,7 +1625,14 @@ impl DimRun {
     }
 }
 
-fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mut RenderCx<'_>) {
+fn paint_ascii(
+    view_area: Rect,
+    lines: &[Line],
+    top: usize,
+    rows: usize,
+    tints: &Tints,
+    cx: &mut RenderCx<'_>,
+) {
     let plain = Style::new().fg(cx.token(Token::TextPrimary));
     let numbers = plain.with_attrs(Attrs::new().set_dim(true));
     let highlight = Style::new().fg(HIGHLIGHT);
@@ -1446,6 +1642,7 @@ fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mu
     let text_width = view_area.width.saturating_sub(gutter).saturating_sub(bar);
     let text_x = view_area.x.saturating_add(gutter.min(view_area.width));
     let limit = usize::from(text_width);
+    let row_width = view_area.width.saturating_sub(bar);
     let shown_rows = lines.len().saturating_sub(top).min(rows);
     let repeated = repeated_byte(lines, top, shown_rows, limit);
     if view_area.width > 0 && view_area.height > 0 {
@@ -1476,6 +1673,21 @@ fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mu
         let y = view_area
             .y
             .saturating_add(u16::try_from(offset).unwrap_or(0));
+        if line.kind == RowKind::Filler {
+            if let Some(color) = tints.row(RowKind::Filler) {
+                cx.fill(
+                    Rect::new(view_area.x, y, row_width, 1),
+                    plain.bg(color),
+                    ' ',
+                );
+            }
+            continue;
+        }
+        let row = tints.row(line.kind);
+        let body = row.map_or(plain, |color| plain.bg(color));
+        if row.is_some() {
+            cx.fill(Rect::new(view_area.x, y, row_width, 1), body, ' ');
+        }
         if let Some(mark) = line.mark {
             let (glyph, style) = mark_paint(mark, cx);
             if view_area.width > 0 {
@@ -1490,8 +1702,15 @@ fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mu
             let x = view_area.x.saturating_add(1).saturating_add(
                 u16::try_from(usize::from(places).saturating_sub(shown.len())).unwrap_or(0),
             );
-            cx.put_str(x, y, shown, plain);
-            dims.push(cx, numbers, x, y, u16::try_from(shown.len()).unwrap_or(0));
+            cx.put_str(x, y, shown, body);
+            let width = u16::try_from(shown.len()).unwrap_or(0);
+            match row {
+                Some(color) => cx.set_style(Rect::new(x, y, width, 1), numbers.bg(color)),
+                None => dims.push(cx, numbers, x, y, width),
+            }
+        }
+        if let Some((glyph, hue)) = tints.mark(line.kind) {
+            cx.fill(Rect::new(view_area.x, y, 1, 1), body.fg(hue), glyph);
         }
         if repeated.is_some() || limit == 0 || line.text.is_empty() {
             continue;
@@ -1501,19 +1720,11 @@ fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mu
         } else {
             line.text.as_str()
         };
-        cx.put_str(text_x, y, shown, plain);
-        for span in &line.spans {
-            if span.start >= shown.len() {
-                continue;
-            }
-            let end = span.end.min(shown.len());
-            if end <= span.start {
-                continue;
-            }
-            let x = text_x.saturating_add(u16::try_from(span.start).unwrap_or(0));
-            let width = u16::try_from(end - span.start).unwrap_or(0);
-            cx.set_style(Rect::new(x, y, width, 1), highlight);
-        }
+        cx.put_str(text_x, y, shown, body);
+        let word = tints
+            .word(line.kind)
+            .map_or(highlight, |color| plain.bg(color));
+        paint_spans(cx, &line.spans, shown.len(), (text_x, y), word);
     }
     marks.flush(cx);
     dims.flush(cx, numbers);
@@ -1540,6 +1751,91 @@ fn paint_ascii(view_area: Rect, lines: &[Line], top: usize, rows: usize, cx: &mu
             top,
             cx,
         );
+    }
+}
+
+fn paint_spans(
+    cx: &mut RenderCx<'_>,
+    spans: &[Range<usize>],
+    shown: usize,
+    origin: (u16, u16),
+    style: Style,
+) {
+    for span in spans {
+        let end = span.end.min(shown);
+        if span.start >= shown || end <= span.start {
+            continue;
+        }
+        let x = origin
+            .0
+            .saturating_add(u16::try_from(span.start).unwrap_or(0));
+        let width = u16::try_from(end - span.start).unwrap_or(0);
+        cx.set_style(Rect::new(x, origin.1, width, 1), style);
+    }
+}
+
+fn text_columns(text: &str) -> usize {
+    let mut column = 0usize;
+    for ch in text.chars() {
+        if ch == '\t' {
+            column += 4 - column % 4;
+        } else {
+            column += UnicodeWidthChar::width(ch).unwrap_or(0);
+        }
+    }
+    column
+}
+
+fn paint_rows(
+    view_area: Rect,
+    lines: &[Line],
+    top: usize,
+    rows: usize,
+    left: u16,
+    tints: &Tints,
+    cx: &mut RenderCx<'_>,
+) {
+    let plain = Style::new().fg(cx.token(Token::TextPrimary));
+    let numbers = plain.with_attrs(Attrs::new().set_dim(true));
+    let gutter = digit_places(lines.len().max(1))
+        .saturating_add(2)
+        .min(view_area.width);
+    let bar = u16::from(view_area.width > gutter && lines.len() > rows);
+    let row_width = view_area.width.saturating_sub(bar);
+    for (offset, line) in lines.iter().skip(top).take(rows).enumerate() {
+        let Some(row) = tints.row(line.kind) else {
+            continue;
+        };
+        let y = view_area
+            .y
+            .saturating_add(u16::try_from(offset).unwrap_or(0));
+        if line.kind == RowKind::Filler {
+            cx.fill(Rect::new(view_area.x, y, row_width, 1), plain.bg(row), ' ');
+            continue;
+        }
+        let gutter_width = gutter.min(row_width);
+        if gutter_width > 1 {
+            cx.set_style(
+                Rect::new(view_area.x.saturating_add(1), y, gutter_width - 1, 1),
+                numbers.bg(row),
+            );
+        }
+        if gutter_width > 0 {
+            let (glyph, style) = match tints.mark(line.kind) {
+                Some((glyph, hue)) => (glyph, plain.fg(hue).bg(row)),
+                None => (' ', plain.bg(row)),
+            };
+            cx.fill(Rect::new(view_area.x, y, 1, 1), style, glyph);
+        }
+        let used = text_columns(&line.text).saturating_sub(usize::from(left));
+        let start = gutter.saturating_add(u16::try_from(used).unwrap_or(u16::MAX));
+        if start < row_width {
+            cx.fill(
+                Rect::new(view_area.x.saturating_add(start), y, row_width - start, 1),
+                plain.bg(row),
+                ' ',
+            );
+        }
     }
 }
 
@@ -1588,7 +1884,7 @@ fn repeated_byte(lines: &[Line], top: usize, rows: usize, limit: usize) -> Optio
     let mut matched = None;
     let mut seen = 0usize;
     for line in lines.iter().skip(top).take(rows) {
-        if line.mark.is_some() || !line.spans.is_empty() {
+        if line.mark.is_some() || !line.spans.is_empty() || line.kind != RowKind::Plain {
             return None;
         }
         let bytes = line.text.as_bytes();
@@ -1771,6 +2067,241 @@ mod tests {
         }
         let theirs = base.clone();
         DiffScreen::new(&base, &ours, &theirs)
+    }
+
+    fn tints() -> Tints {
+        DiffPalette::fallback().tints(Color::Rgb(30, 30, 46))
+    }
+
+    fn bg_at(grid: &lunatui_core::Grid, x: usize, y: usize) -> Color {
+        grid.get(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())
+            .unwrap()
+            .style()
+            .bg
+    }
+
+    fn fg_cell(grid: &lunatui_core::Grid, x: usize, y: usize) -> Color {
+        grid.get(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())
+            .unwrap()
+            .style()
+            .fg
+    }
+
+    fn columns_of(text: &str, row: usize, needle: &str) -> Vec<usize> {
+        let line: Vec<char> = text.lines().nth(row).unwrap().chars().collect();
+        let want: Vec<char> = needle.chars().collect();
+        (0..line.len().saturating_sub(want.len()) + 1)
+            .filter(|at| line[*at..*at + want.len()] == want[..])
+            .collect()
+    }
+
+    fn row_color(kind: RowKind) -> Color {
+        tints().row(kind).unwrap()
+    }
+
+    fn render_text(
+        screen: &mut DiffScreen,
+        columns: u16,
+        rows: u16,
+    ) -> (lunatui_core::Grid, String) {
+        let (grid, clusters) = render_once(screen, columns, rows);
+        let text = grid.display_text(&clusters);
+        (grid, text)
+    }
+
+    fn ours_only() -> DiffScreen {
+        DiffScreen::new(
+            "alpha\nhello world\nomega\n",
+            "alpha\nhello WORLD\nomega\n",
+            "alpha\nhello world\nomega\n",
+        )
+    }
+
+    #[test]
+    fn the_four_pane_view_tints_whole_rows_and_marks_the_gutter() {
+        let mut screen = ours_only();
+        let (grid, text) = render_text(&mut screen, 200, 40);
+        let row = cmp_row(&text, "WORLD").unwrap();
+        let ours = columns_of(&text, row, "hello WORLD");
+        let old = columns_of(&text, row, "hello world");
+        let (base, theirs) = (old[0], old[1]);
+        let (ours, result) = (ours[0], ours[1]);
+        let edge = |x: usize| x + "hello WORLD".len() + 3;
+        assert_eq!(bg_at(&grid, ours, row), row_color(RowKind::Added));
+        assert_eq!(bg_at(&grid, edge(ours), row), row_color(RowKind::Added));
+        assert_eq!(bg_at(&grid, base, row), row_color(RowKind::Removed));
+        assert_eq!(bg_at(&grid, edge(base), row), row_color(RowKind::Removed));
+        assert_eq!(bg_at(&grid, result, row), row_color(RowKind::Added));
+        assert_ne!(bg_at(&grid, theirs, row), row_color(RowKind::Removed));
+        assert_ne!(bg_at(&grid, theirs, row), row_color(RowKind::Added));
+        let line: Vec<char> = text.lines().nth(row).unwrap().chars().collect();
+        assert_eq!(line[ours - 3], '+');
+        assert_eq!(line[base - 3], '-');
+        assert_eq!(line[result - 3], '+');
+        assert_ne!(line[theirs - 3], '+');
+        assert_ne!(line[theirs - 3], '-');
+        let above = row - 1;
+        assert_ne!(bg_at(&grid, ours, above), row_color(RowKind::Added));
+    }
+
+    #[test]
+    fn the_changed_characters_are_stronger_than_their_row() {
+        let mut screen = ours_only();
+        let (grid, text) = render_text(&mut screen, 200, 40);
+        let row = cmp_row(&text, "WORLD").unwrap();
+        let ours = columns_of(&text, row, "hello WORLD")[0];
+        let word = tints().word(RowKind::Added).unwrap();
+        assert_eq!(bg_at(&grid, ours + 6, row), word);
+        assert_eq!(bg_at(&grid, ours + 10, row), word);
+        assert_eq!(bg_at(&grid, ours, row), row_color(RowKind::Added));
+        assert_ne!(word, row_color(RowKind::Added));
+    }
+
+    #[test]
+    fn the_two_pane_view_shows_ours_only_and_theirs_only_lines_against_filler() {
+        let mut screen = DiffScreen::new(
+            "alpha\ngone\nomega\nkeep\n",
+            "alpha\ngone\nomega\nnew line\nkeep\n",
+            "alpha\nomega\nkeep\n",
+        );
+        let (grid, text) = render_text(&mut screen, 120, 30);
+        assert!(matches!(screen.effective(), Layout::Two));
+        let gone = cmp_row(&text, "gone").unwrap();
+        let theirs_side = text.lines().nth(gone).unwrap().chars().count() / 2;
+        assert_eq!(bg_at(&grid, 4, gone), row_color(RowKind::Added));
+        let line: Vec<char> = text.lines().nth(gone).unwrap().chars().collect();
+        assert_eq!(line[0], '+');
+        let filler = bg_at(&grid, theirs_side + 4, gone);
+        assert_eq!(filler, row_color(RowKind::Filler));
+        assert_eq!(line[theirs_side + 1], ' ');
+        assert!(
+            !text
+                .lines()
+                .nth(gone)
+                .unwrap()
+                .chars()
+                .skip(theirs_side + 1)
+                .any(|c| c.is_ascii_digit()),
+            "{text}"
+        );
+        let new_line = cmp_row(&text, "new line").unwrap();
+        assert_eq!(bg_at(&grid, 4, new_line), row_color(RowKind::Added));
+    }
+
+    #[test]
+    fn a_line_that_changed_on_both_sides_is_marked_and_tinted_as_changed() {
+        let mut screen = DiffScreen::new("a\nb\n", "a\nmine\n", "a\ntheirs\n");
+        let (grid, text) = render_text(&mut screen, 120, 30);
+        let row = text.lines().position(|line| line.starts_with('~')).unwrap();
+        let line: Vec<char> = text.lines().nth(row).unwrap().chars().collect();
+        assert_eq!(line[0], '~');
+        assert_eq!(bg_at(&grid, 1, row), row_color(RowKind::Changed));
+        let theirs = columns_of(&text, row, "theirs")[0];
+        assert_eq!(line[theirs - 3], '~');
+        assert_eq!(bg_at(&grid, theirs - 2, row), row_color(RowKind::Changed));
+        assert_eq!(
+            bg_at(&grid, theirs, row),
+            tints().word(RowKind::Changed).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_theirs_only_line_in_two_pane_is_red_with_a_minus() {
+        let mut screen = DiffScreen::new("a\nz\n", "a\nz\n", "a\nextra\nz\n");
+        let (grid, text) = render_text(&mut screen, 120, 30);
+        let row = cmp_row(&text, "extra").unwrap();
+        let theirs = columns_of(&text, row, "extra")[0];
+        let line: Vec<char> = text.lines().nth(row).unwrap().chars().collect();
+        assert_eq!(line[theirs - 3], '-');
+        assert_eq!(bg_at(&grid, theirs, row), row_color(RowKind::Removed));
+        assert_eq!(bg_at(&grid, 4, row), row_color(RowKind::Filler));
+    }
+
+    #[test]
+    fn the_stacked_view_tints_removed_and_added_rows() {
+        let mut screen = ours_only();
+        let (grid, text) = render_text(&mut screen, 80, 24);
+        assert!(text.contains("stacked"));
+        let minus = text
+            .lines()
+            .position(|l| l.starts_with("- hello world"))
+            .unwrap();
+        let plus = text
+            .lines()
+            .position(|l| l.starts_with("+ hello WORLD"))
+            .unwrap();
+        assert_eq!(bg_at(&grid, 30, minus), row_color(RowKind::Removed));
+        assert_eq!(bg_at(&grid, 30, plus), row_color(RowKind::Added));
+        assert_eq!(bg_at(&grid, 9, plus), tints().word(RowKind::Added).unwrap(),);
+        assert_ne!(fg_cell(&grid, 0, plus), fg_cell(&grid, 30, plus));
+        let context = text.lines().position(|l| l.starts_with("  alpha")).unwrap();
+        assert_ne!(bg_at(&grid, 30, context), row_color(RowKind::Added));
+    }
+
+    #[test]
+    fn non_ascii_rows_keep_the_tint_to_the_edge_and_the_changed_characters() {
+        let mut screen = DiffScreen::new("é a\nb\n", "é a\nbé\n", "é a\nb\n");
+        let (grid, text) = render_text(&mut screen, 200, 40);
+        let row = cmp_row(&text, "bé").unwrap();
+        let ours = columns_of(&text, row, "bé")[0];
+        assert_eq!(bg_at(&grid, ours, row), row_color(RowKind::Added));
+        assert_eq!(bg_at(&grid, ours + 12, row), row_color(RowKind::Added));
+        assert_eq!(bg_at(&grid, ours - 2, row), row_color(RowKind::Added));
+        assert_eq!(
+            bg_at(&grid, ours + 1, row),
+            tints().word(RowKind::Added).unwrap()
+        );
+    }
+
+    #[test]
+    fn resolving_a_hunk_tints_its_result_rows() {
+        let mut screen = DiffScreen::new("a\nb\n", "a\nmine\n", "a\ntheirs\n");
+        let (_, before) = render_text(&mut screen, 200, 40);
+        assert!(before.contains("unresolved"));
+        screen.run(MINE);
+        let (grid, text) = render_text(&mut screen, 200, 40);
+        let row = text
+            .lines()
+            .position(|line| line.matches("mine").count() >= 2)
+            .unwrap();
+        let result = *columns_of(&text, row, "mine").last().unwrap();
+        assert_eq!(bg_at(&grid, result, row), row_color(RowKind::Added));
+    }
+
+    #[test]
+    fn a_theme_palette_recolors_the_rows() {
+        let themed = DiffPalette::from_colors("green = \"#00ff00\"\nred = \"#ff0000\"\n");
+        let mut screen = ours_only().with_palette(themed);
+        let (grid, text) = render_text(&mut screen, 200, 40);
+        let row = cmp_row(&text, "WORLD").unwrap();
+        let ours = columns_of(&text, row, "hello WORLD")[0];
+        let want = themed
+            .tints(Color::Rgb(30, 30, 46))
+            .row(RowKind::Added)
+            .unwrap();
+        assert_eq!(bg_at(&grid, ours, row), want);
+        assert_ne!(want, row_color(RowKind::Added));
+    }
+
+    #[test]
+    fn filler_rows_keep_the_panes_the_same_height() {
+        let screen = DiffScreen::new("a\nb\nc\n", "a\nb\nX\nY\nZ\n", "a\nb\nc\n");
+        let counts = [
+            screen.aligned.base.len(),
+            screen.aligned.ours.len(),
+            screen.aligned.theirs.len(),
+            screen.aligned.result.len(),
+            screen.aligned.duo_ours.len(),
+            screen.aligned.duo_theirs.len(),
+        ];
+        assert!(counts.iter().all(|count| *count == counts[0]), "{counts:?}");
+        let fillers = screen
+            .aligned
+            .base
+            .iter()
+            .filter(|line| line.kind == RowKind::Filler)
+            .count();
+        assert_eq!(fillers, 2);
     }
 
     #[test]

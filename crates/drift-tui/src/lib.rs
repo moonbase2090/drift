@@ -1,5 +1,6 @@
 mod commands;
 mod diff;
+mod diff_palette;
 mod differ;
 mod historian;
 mod history_screen;

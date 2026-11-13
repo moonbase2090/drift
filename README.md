@@ -26,6 +26,10 @@ The Omarchy menu opens Drift with app id `TUI.float`. Omarchy floats and centers
 
 ![Narrower diff layouts](docs/media/layout-cycle.gif)
 
+Changed lines are tinted across the whole row, like a git diff. In the two-pane view a line only ours has is green with a `+` in the gutter, a line only theirs has is red with a `-`, and a line changed on both sides is yellow with a `~`. The exact changed characters get a stronger tint of the same color. Where one side has no line, a blank filler row keeps the two panes level and takes no line number. Four-pane, stacked and result views use the same marks. The colors come from the active Omarchy theme (`colors.toml` in its state directory) and fall back to fixed readable colors when no theme is found.
+
+![Tinted diff rows](docs/media/diff-rows.gif)
+
 `o` keeps the selected hunk's ours text, `t` takes theirs, `b` keeps both, and `e` edits that hunk. The result pane updates immediately. `w` opens the plan once every conflict is chosen. An unresolved conflict stays in the result pane and `w` explains why it will not open the plan.
 
 ![Hunk choices](docs/media/hunk-resolver.gif)
