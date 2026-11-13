@@ -40,6 +40,12 @@ Before anything is written, the plan dialog lists every file with its action, th
 
 ![Tree screen](docs/media/tree-screen.gif)
 
+## Opening a diff
+
+`Enter` on a file of the tree (or a double-click) opens its diff: base, yours and the package's side by side, with the hunks and the automatic result. `n` and `p` move between hunks, `Tab` moves between panes, `v` cycles the layouts (four panes, two panes, stacked), and `Esc` or `q` returns to the tree with the same selection. A file whose sides cannot be shown as text (not UTF-8, over 1 MiB or unreadable) is named in the notice line instead. The capture below is the real `drift` binary running on a scratch home directory with one edited file: it filters to local overrides, selects the file, opens the diff, cycles the layouts and goes back.
+
+![Opening a diff](docs/media/open-diff.gif)
+
 ## Acting on files from the tree
 
 On the tree screen, `o` (keep mine), `t` (take upstream) and `m` (merge) act on the marked files, or on the selected file or directory when nothing is marked (`Space` marks, `a` marks everything in the filter). The action opens the plan dialog; nothing is written until you confirm, all the files in one go go into one transaction, and the screen rescans afterwards. Files that cannot be acted on are named in the notice line. The capture below is the real review screen running `cargo run -p drift-tui --example tree_actions` on a sample report; its resolver only reports what it would write. It marks two files, takes upstream, expands a diff, moves focus to Confirm and confirms.

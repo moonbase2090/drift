@@ -12,27 +12,51 @@ const LEAVE_SCREEN: &[u8] = b"\x1b[?1049l\x1b[?25h\x1b[?1006l\x1b[?1003l\x1b[?10
 const ENTER_SCREEN: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
 
 pub fn around_editor<T>(work: impl FnOnce() -> T) -> T {
-    let Some(saved) = capture_termios() else {
+    let Some(tty) = crate::wake::terminal() else {
+        return work();
+    };
+    let Some(saved) = capture_termios(tty) else {
         return work();
     };
     let held = hold_reader();
-    cook(&saved);
+    let paused = crate::wake::pause();
+    let stdin = lend_terminal(tty);
+    cook(tty, &saved);
     write_tty(LEAVE_SCREEN);
-    let mut guard = Guard { saved, held };
+    let mut guard = Guard {
+        tty,
+        saved,
+        held,
+        paused,
+        stdin,
+    };
     let result = work();
     guard.finish();
     result
 }
 
 struct Guard {
+    tty: i32,
     saved: libc::termios,
     held: bool,
+    paused: bool,
+    stdin: Option<i32>,
 }
 
 impl Guard {
     fn finish(&mut self) {
-        restore_termios(&self.saved);
+        restore_termios(self.tty, &self.saved);
         write_tty(ENTER_SCREEN);
+        if let Some(original) = self.stdin.take() {
+            unsafe {
+                libc::dup2(original, libc::STDIN_FILENO);
+                libc::close(original);
+            }
+        }
+        if self.paused {
+            crate::wake::resume();
+            self.paused = false;
+        }
         if self.held {
             release_reader();
             self.held = false;
@@ -46,32 +70,49 @@ impl Drop for Guard {
     }
 }
 
-fn capture_termios() -> Option<libc::termios> {
+fn lend_terminal(tty: i32) -> Option<i32> {
+    if tty == libc::STDIN_FILENO {
+        return None;
+    }
     unsafe {
-        if libc::isatty(libc::STDIN_FILENO) != 1 {
+        let original = libc::dup(libc::STDIN_FILENO);
+        if original < 0 {
+            return None;
+        }
+        if libc::dup2(tty, libc::STDIN_FILENO) < 0 {
+            libc::close(original);
+            return None;
+        }
+        Some(original)
+    }
+}
+
+fn capture_termios(tty: i32) -> Option<libc::termios> {
+    unsafe {
+        if libc::isatty(tty) != 1 {
             return None;
         }
         let mut term = mem::zeroed();
-        if libc::tcgetattr(libc::STDIN_FILENO, &mut term) != 0 {
+        if libc::tcgetattr(tty, &mut term) != 0 {
             return None;
         }
         Some(term)
     }
 }
 
-fn cook(saved: &libc::termios) {
+fn cook(tty: i32, saved: &libc::termios) {
     let mut cooked = *saved;
     cooked.c_iflag |= libc::ICRNL | libc::IXON;
     cooked.c_oflag |= libc::OPOST;
     cooked.c_lflag |= libc::ISIG | libc::ICANON | libc::ECHO | libc::IEXTEN;
     unsafe {
-        libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &cooked);
+        libc::tcsetattr(tty, libc::TCSANOW, &cooked);
     }
 }
 
-fn restore_termios(saved: &libc::termios) {
+fn restore_termios(tty: i32, saved: &libc::termios) {
     unsafe {
-        libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, saved);
+        libc::tcsetattr(tty, libc::TCSANOW, saved);
     }
 }
 
