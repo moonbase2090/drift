@@ -1,5 +1,6 @@
 mod apply;
 mod seed;
+mod snapshot;
 
 pub use apply::{
     apply, apply_checked, execute, history, inspect_undo, integrate, pending_prune,
@@ -10,6 +11,7 @@ pub use apply::{
     WriteFollowup,
 };
 pub use seed::{record_bases, scan, Recorded, Scan, StoreRoots};
+pub use snapshot::{snapshot_templates, SnapshotError, SnapshotReport};
 
 pub fn crate_name() -> &'static str {
     env!("CARGO_PKG_NAME")

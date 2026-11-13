@@ -92,6 +92,10 @@ drift resolve "$HOME/.config/hypr/looknfeel.lua" --merge --yes
 
 Symlinks, files an app rewrites, files without a template and files already equal to upstream are skipped with a reason. A write under `~/.config/hypr` is followed by `hyprctl configerrors`, and Drift offers to undo the transaction if Hyprland reports errors.
 
+## Package snapshot
+
+`drift snapshot --pre` copies the installed template roots into `/var/lib/drift/snapshots/<version>/` before an `omarchy-settings` upgrade. Pacman runs it from a PreTransaction hook. The command writes only under that store. A failure exits 2 and does not stop the upgrade.
+
 ## Development
 
 Rust 1.99.1, pinned by `rust-toolchain.toml`. From this repository:

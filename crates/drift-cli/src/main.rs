@@ -2,6 +2,7 @@ mod diff;
 mod environment;
 mod resolve;
 mod scan;
+mod snapshot;
 mod watch;
 
 use std::io::IsTerminal;
@@ -16,6 +17,7 @@ Usage: drift [--snapshot [--width N] [--height N]] [--version] [--help]
        drift diff <path> [--json]
        drift resolve <path>... --keep | --upstream | --merge [--yes | --dry-run]
        drift scan
+       drift snapshot --pre
        drift status [--json | --bar]
 
 With no arguments, drift opens the review screen.
@@ -26,7 +28,9 @@ diff prints base, ours, theirs, hunks and the automatic result for one live path
 resolve shows a plan for keep mine, take upstream or a clean merge of the given files and
 asks before writing; all files go in one transaction. --yes skips the question.
 scan lists every tracked file with its status. status prints a summary, as JSON with
---json, or as a status-bar module with --bar. Exit codes: 0 no drift, 1 drift, 2 error.
+--json, or as a status-bar module with --bar. snapshot --pre copies installed template
+roots into /var/lib/drift/snapshots/<version> before a package upgrade and writes only
+under that store. Exit codes: 0 no drift, 1 drift, 2 error.
 ";
 
 enum Action {
@@ -37,6 +41,7 @@ enum Action {
     Scan(scan::View),
     Diff(diff::DiffArgs),
     Resolve(resolve::ResolveArgs),
+    PreSnapshot,
 }
 
 fn prefixed<T>(result: Result<T, String>) -> Result<T, String> {
@@ -56,6 +61,7 @@ fn subcommand(args: &[String]) -> Option<Result<Action, String>> {
                 .map_err(|message| format!("drift: {message}\n{USAGE}")),
         ),
         "integrate" => Some(integrate_mode(rest).map(Action::Integrate)),
+        "snapshot" => Some(prefixed(snapshot::parse(rest)).map(|()| Action::PreSnapshot)),
         _ => None,
     }
 }
@@ -255,6 +261,7 @@ fn execute(action: Result<Action, String>) -> ExitCode {
             view,
             &mut std::io::stdout(),
         )),
+        Ok(Action::PreSnapshot) => finish(snapshot::run().map(|()| 0)),
         Ok(Action::Launch) => match open_review() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -370,6 +377,25 @@ mod tests {
             execute(run(&args(&["status", "--nope"]))),
             ExitCode::from(2)
         );
+    }
+
+    #[test]
+    fn snapshot_pre_is_a_subcommand_and_the_frame_flag_stays() {
+        assert!(matches!(
+            run(&args(&["snapshot", "--pre"])).unwrap(),
+            Action::PreSnapshot
+        ));
+        let Action::Text(help) = run(&args(&["--help"])).unwrap() else {
+            panic!("help");
+        };
+        assert!(help.contains("drift snapshot --pre"));
+        assert!(matches!(
+            run(&args(&["--snapshot"])).unwrap(),
+            Action::Snapshot { .. }
+        ));
+        assert!(run(&args(&["snapshot"])).is_err());
+        assert!(run(&args(&["snapshot", "--pre", "--yes"])).is_err());
+        assert_eq!(execute(run(&args(&["snapshot"]))), ExitCode::from(2));
     }
     #[test]
     fn diff_usage_errors_start_with_the_command_prefix() {
