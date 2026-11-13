@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use lunatui_core::Color;
-use lunatui_theme::{Theme, Variant};
+use lunatui_theme::{Theme, Token, Variant};
 
 const FALLBACK_BACKGROUND: [u8; 3] = [24, 24, 32];
 const ROW_PERCENT: u16 = 20;
@@ -104,8 +104,23 @@ pub(crate) fn active_variant() -> Variant {
         .unwrap_or(Variant::Dark)
 }
 
+const LIGHT_TEXT: [(Token, Color); 5] = [
+    (Token::Accent, Color::Rgb(0x1a, 0x4f, 0x8b)),
+    (Token::Ok, Color::Rgb(0x1b, 0x6b, 0x2f)),
+    (Token::Warn, Color::Rgb(0x8a, 0x4b, 0x08)),
+    (Token::Fail, Color::Rgb(0x9b, 0x1c, 0x2c)),
+    (Token::FocusRing, Color::Rgb(0x3b, 0x2f, 0x8a)),
+];
+
+pub(crate) fn theme_for(variant: Variant) -> Theme {
+    match variant {
+        Variant::Light => Theme::with_overrides(variant, &LIGHT_TEXT),
+        Variant::Dark => Theme::builtin(variant),
+    }
+}
+
 pub(crate) fn active_theme() -> Theme {
-    Theme::builtin(active_variant())
+    theme_for(active_variant())
 }
 
 impl Tints {
