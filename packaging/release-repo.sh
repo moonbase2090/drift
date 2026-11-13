@@ -54,18 +54,18 @@ ensure_builder() {
 }
 
 run_makepkg() {
-  local work=$1
+  local build=$1/packaging
   ensure_builder
   if [ "$(id -u)" -eq 0 ]; then
-    chown -R builder:builder "$work"
-    runuser -u builder -- bash -c 'cd "$1" && makepkg --noconfirm --force --nosign' bash "$work"
+    chown -R builder:builder "$1"
+    runuser -u builder -- bash -c 'cd "$1" && makepkg --noconfirm --force --nosign' bash "$build"
   else
-    (cd "$work" && makepkg --noconfirm --force --nosign)
+    (cd "$build" && makepkg --noconfirm --force --nosign)
   fi
 }
 
 built_package() {
-  local work=$1
+  local work=$1/packaging
   local packages=()
   local pkg
   shopt -s nullglob
@@ -140,6 +140,11 @@ prepare_work() {
     die "omarchy-drift.install is missing beside the PKGBUILD."
   fi
   work=$(mktemp -d)
+  mkdir -p "$work/packaging"
+  if [ -d "$root/plugin" ]; then
+    mkdir -p "$work/plugin"
+    cp -a "$root/plugin/." "$work/plugin/"
+  fi
   if [ "$mode" = tag ]; then
     version=${DRIFT_VERSION:-}
     version=${version#v}
@@ -153,17 +158,17 @@ prepare_work() {
     git -C "$root" -c safe.directory="$root" archive \
       --format=tar.gz \
       --prefix="drift-${version}/" \
-      -o "$work/${repo_name}-${version}.tar.gz" \
+      -o "$work/packaging/${repo_name}-${version}.tar.gz" \
       HEAD
-    hash=$(sha256sum "$work/${repo_name}-${version}.tar.gz" | awk '{ print $1 }') || exit 1
+    hash=$(sha256sum "$work/packaging/${repo_name}-${version}.tar.gz" | awk '{ print $1 }') || exit 1
     sed \
       -e "s/^pkgver=.*/pkgver=${version}/" \
       -e "s/^sha256sums=.*/sha256sums=('${hash}')/" \
-      "$src" > "$work/PKGBUILD"
+      "$src" > "$work/packaging/PKGBUILD"
   else
-    cp "$src" "$work/PKGBUILD"
+    cp "$src" "$work/packaging/PKGBUILD"
   fi
-  cp "$install_script" "$work/omarchy-drift.install"
+  cp "$install_script" "$work/packaging/omarchy-drift.install"
   chmod -R a+rX "$work"
   printf '%s\n' "$work"
 }

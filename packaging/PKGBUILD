@@ -34,7 +34,14 @@ package() {
   install -Dm644 packaging/20-drift-updated.hook "$pkgdir/usr/share/libalpm/hooks/20-drift-updated.hook"
   install -Dm644 packaging/user/drift-notify.path "$pkgdir/usr/lib/systemd/user/drift-notify.path"
   install -Dm644 packaging/user/drift-notify.service "$pkgdir/usr/lib/systemd/user/drift-notify.service"
-  install -Dm644 plugin/manifest.json "$pkgdir/usr/share/$pkgname/plugin/manifest.json"
-  install -Dm644 plugin/BarWidget.qml "$pkgdir/usr/share/$pkgname/plugin/BarWidget.qml"
+  if [ -d "$startdir/../plugin" ]; then
+    plugin_dir=$(cd "$startdir/../plugin" && pwd)
+  else
+    plugin_dir=$PWD/plugin
+  fi
+  find "$plugin_dir" -type f -print0 | while IFS= read -r -d '' plugin_file; do
+    rel=${plugin_file#"$plugin_dir"/}
+    install -Dm644 "$plugin_file" "$pkgdir/usr/share/$pkgname/plugin/$rel"
+  done
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
