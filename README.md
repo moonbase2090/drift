@@ -40,9 +40,13 @@ Before anything is written, the plan dialog lists every file with its action, th
 
 ![Plan dialog](docs/media/plan-dialog.gif)
 
+A file you chose to keep is not written, but `d` still shows how the shipped template differs from your file, under a line saying your file is kept; the dry run prints the same diff. The capture is the real program: it keeps one local override and expands it.
+
+![Keep mine plan](docs/media/keep-plan.gif)
+
 ## Tree screen
 
-`drift` scans the installed package against your files and shows the result as a path tree. Every file has a glyph, its status label and a colour, so no status depends on colour alone; the header counts each status and doubles as the filter buttons. `j` and `k` move, `h` and `l` collapse and expand, `1`-`6` filter by status and `0` clears, `/` searches as you type, `Space` marks and `a` marks everything in the filter. The mouse selects, double-clicks to open, scrolls, toggles carets and checkboxes, and presses the header counts and the hint bar. The capture below is the real program: `cargo run -p drift-tui --example tree_screen` opens the screen on a sample report. It moves to a file (the summary pane shows its template and base), marks it, filters to upstream changes, then searches for `way`.
+`drift` scans the installed package against your files and shows the result as a path tree. Directories start collapsed, except the ones on the path to the first drifted or overridden file, so a deep folder that does not need review stays out of the way. Every file has a glyph, its status label and a colour, so no status depends on colour alone; the header counts each status and doubles as the filter buttons. `j` and `k` move, `h` and `l` collapse and expand, `1`-`6` filter by status and `0` clears, `/` searches as you type, `Space` marks and `a` marks everything in the filter. The mouse selects, double-clicks to open, scrolls, toggles carets and checkboxes, and presses the header counts and the hint bar. The capture below is the real program: `cargo run -p drift-tui --example tree_screen` opens the screen on a sample report. It moves to a file (the summary pane shows its template and base), marks it, filters to upstream changes, then searches for `way`.
 
 ![Tree screen](docs/media/tree-screen.gif)
 
