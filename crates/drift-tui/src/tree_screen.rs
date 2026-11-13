@@ -197,6 +197,7 @@ impl TreeScreen {
             return match GlobalCommand::from_id(id)? {
                 GlobalCommand::Help => Some(Action::Help),
                 GlobalCommand::Palette => Some(Action::Palette),
+                GlobalCommand::UndoLast => Some(Action::UndoLast),
             };
         }
         let id = self.keymap.dispatch(&event)?;
@@ -240,7 +241,6 @@ impl TreeScreen {
             TreeCommand::Merge => return self.act(Action::Merge),
             TreeCommand::Ignore => return self.act(Action::Ignore),
             TreeCommand::History => return Some(Action::History),
-            TreeCommand::UndoLast => return Some(Action::UndoLast),
             TreeCommand::Back => self.back(),
             filter => {
                 if let Some(status) = filter.status() {

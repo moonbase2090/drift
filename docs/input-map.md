@@ -10,6 +10,7 @@ target is reached through the command palette (`:`), which every screen opens by
 |---|---|---|---|
 | Show the help | `global.help` | `?` | Click `[?] Help` on any screen |
 | Open the command palette | `global.palette` | `:` | Click `[:] Palette` on any screen |
+| Undo the last transaction | `global.undo-last` | `u` | Open the palette, click the action |
 
 ## Tree
 
@@ -41,7 +42,6 @@ target is reached through the command palette (`:`), which every screen opens by
 | Merge | `tree.merge` | `m` | Click `[m] Merge` |
 | Ignore | `tree.ignore` | `i` | Open the palette, click the action |
 | Open the history | `tree.history` | `H` | Click `[H] History` |
-| Undo the last transaction | `tree.undo-last` | `u` | Open the palette, click the action |
 | Clear search, filter or marks | `tree.back` | `Esc` | Open the palette, click the action |
 
 ## History
@@ -50,7 +50,7 @@ target is reached through the command palette (`:`), which every screen opens by
 |---|---|---|---|
 | Back to the tree | `history.back` | `q`, `Esc` | Click `[Q] Back` |
 | Reload the history | `history.refresh` | `r` | Click `[r] Refresh` |
-| Undo the selected transaction | `history.undo` | `Enter`, `u` | Click `[Enter] Undo` |
+| Undo the selected transaction | `history.undo` | `Enter` | Click `[Enter] Undo` |
 | Undo and restore changed files too | `history.undo-force` | `U` | Click `[U] Undo and force` |
 | Move down | `history.down` | `j`, `Down` | Click a row |
 | Move up | `history.up` | `k`, `Up` | Click a row |

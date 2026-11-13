@@ -315,6 +315,11 @@ impl DiffScreen {
         self.plan.is_some()
     }
 
+    pub(crate) fn set_notice(&mut self, text: &str) {
+        self.revise();
+        self.notice = Some(text.to_string());
+    }
+
     pub fn notice(&self) -> Option<&str> {
         self.notice.as_deref()
     }
