@@ -49,3 +49,6 @@ mod tests {
         assert!(crate_name().starts_with("drift-"));
     }
 }
+
+#[cfg(test)]
+mod proof;
