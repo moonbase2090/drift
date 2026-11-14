@@ -17,12 +17,15 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
+    let mut entries: Vec<_> = entries
+        .flatten()
+        .filter_map(|e| Some((e.path(), e.file_type().ok()?)))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (path, kind) in entries {
+        if kind.is_dir() {
             rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
+        } else if kind.is_file() && path.extension().is_some_and(|e| e == "rs") {
             out.push(path);
         }
     }
@@ -142,28 +145,150 @@ fn no_comment(root: &Path) -> usize {
     failures
 }
 
+fn text_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries
+        .flatten()
+        .filter_map(|e| Some((e.path(), e.file_type().ok()?)))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (path, kind) in entries {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if kind.is_dir() {
+            if name != "target" && name != ".git" {
+                text_files(&path, out);
+            }
+        } else if kind.is_file() {
+            out.push(path);
+        }
+    }
+}
+
+fn identifiers(root: &Path) -> usize {
+    let mut files = Vec::new();
+    text_files(root, &mut files);
+    let mut failures = 0;
+    let mut checked = 0;
+    for file in files {
+        let Ok(text) = fs::read_to_string(&file) else {
+            continue;
+        };
+        checked += 1;
+        for item in checks::identifier_violations(&text) {
+            eprintln!(
+                "{}:{}: tracker identifier or personal address `{}`",
+                relative(root, &file),
+                item.line,
+                item.what
+            );
+            failures += 1;
+        }
+    }
+    println!("identifiers: {checked} files checked, {failures} violations");
+    failures
+}
+
+type Check = fn(&Path) -> usize;
+
+const CHECKS: [(&str, Check); 5] = [
+    ("write-check", write_check),
+    ("no-comment", no_comment),
+    ("fixtures-dependency", fixtures_dependency),
+    ("feature-policy", feature_policy),
+    ("identifiers", identifiers),
+];
+
+fn failures_of(command: &str, root: &Path) -> Option<usize> {
+    if command == "check" {
+        return Some(CHECKS.iter().map(|(_, check)| check(root)).sum());
+    }
+    CHECKS
+        .iter()
+        .find(|(name, _)| *name == command)
+        .map(|(_, check)| check(root))
+}
+
 fn main() -> ExitCode {
     let root = workspace_root();
-    let command = std::env::args().nth(1);
-    let failures = match command.as_deref() {
-        Some("write-check") => write_check(&root),
-        Some("no-comment") => no_comment(&root),
-        Some("fixtures-dependency") => fixtures_dependency(&root),
-        Some("feature-policy") => feature_policy(&root),
-        Some("check") => {
-            write_check(&root)
-                + no_comment(&root)
-                + fixtures_dependency(&root)
-                + feature_policy(&root)
+    let command = std::env::args().nth(1).unwrap_or_default();
+    match failures_of(&command, &root) {
+        Some(0) => ExitCode::SUCCESS,
+        Some(_) => ExitCode::FAILURE,
+        None => {
+            eprintln!("Usage: cargo xtask <write-check|no-comment|fixtures-dependency|feature-policy|identifiers|check>");
+            ExitCode::from(2)
         }
-        _ => {
-            eprintln!("Usage: cargo xtask <write-check|no-comment|fixtures-dependency|feature-policy|check>");
-            return ExitCode::from(2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("xtask-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_identifier_walk_reads_text_files_and_skips_target_git_and_binaries() {
+        let root = scratch("walk");
+        let ticket = format!("see D{}", "R-5");
+        for (path, bytes) in [
+            ("docs/a.md", ticket.clone().into_bytes()),
+            ("target/b.md", ticket.clone().into_bytes()),
+            (".git/c", ticket.clone().into_bytes()),
+            ("bin.dat", vec![0xff, 0xfe, 0x00]),
+            ("clean.md", b"nothing here".to_vec()),
+        ] {
+            let file = root.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, bytes).unwrap();
         }
-    };
-    if failures == 0 {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+        let mut files = Vec::new();
+        text_files(&root, &mut files);
+        let names: Vec<String> = files.iter().map(|file| relative(&root, file)).collect();
+        assert_eq!(names, ["bin.dat", "clean.md", "docs/a.md"]);
+        assert_eq!(identifiers(&root), 1);
+        assert_eq!(failures_of("identifiers", &root), Some(1));
+        assert_eq!(failures_of("no-such-check", &root), None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_walks_do_not_follow_symlinks_into_loops_or_outside_the_checkout() {
+        let root = scratch("links");
+        let outside = scratch("links-outside");
+        let ticket = format!("see D{}", "R-5");
+        fs::write(outside.join("leak.rs"), &ticket).unwrap();
+        fs::write(outside.join("leak.md"), &ticket).unwrap();
+        fs::create_dir_all(root.join("crates")).unwrap();
+        fs::write(root.join("crates/own.rs"), "fn a() {}\n").unwrap();
+        fs::write(root.join("own.md"), "clean").unwrap();
+        std::os::unix::fs::symlink(&root, root.join("loop")).unwrap();
+        std::os::unix::fs::symlink(&root, root.join("crates/loop")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("crates/escape")).unwrap();
+        std::os::unix::fs::symlink(outside.join("leak.md"), root.join("leak-link.md")).unwrap();
+        std::os::unix::fs::symlink(outside.join("leak.rs"), root.join("crates/leak-link.rs"))
+            .unwrap();
+        let mut texts = Vec::new();
+        text_files(&root, &mut texts);
+        let names: Vec<String> = texts.iter().map(|file| relative(&root, file)).collect();
+        assert_eq!(names, ["crates/own.rs", "own.md"]);
+        let mut sources = Vec::new();
+        rust_files(&root.join("crates"), &mut sources);
+        let names: Vec<String> = sources.iter().map(|file| relative(&root, file)).collect();
+        assert_eq!(names, ["crates/own.rs"]);
+        assert_eq!(identifiers(&root), 0);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
     }
 }
