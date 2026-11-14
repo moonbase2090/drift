@@ -63,8 +63,8 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `flow.take` | take upstream from the tree: the plan lists the file, confirm writes it, the screen says what was done, the list refreshes, and the file on disk equals the template | planned |
 | `flow.keep` | keep mine from the tree: nothing is written to the file, the base is recorded as reviewed, and the row reads as an override | planned |
 | `flow.merge` | merge from the tree writes the merged text and a backup of the original | planned |
-| `flow.both` | `b` in the diff keeps both sides of a hunk and the written file has both | planned |
-| `flow.edit` | `e` hands a hunk to `$EDITOR`, and what the editor saves becomes the result | planned |
+| `flow.both` | `b` in the diff keeps both sides of a hunk and the written file has both | `diff::b_keeps_both_sides_in_the_result_and_write_puts_both_on_disk` |
+| `flow.edit` | `e` hands a hunk to `$EDITOR`, and what the editor saves becomes the result | `diff::e_hands_the_hunk_to_the_editor_and_write_puts_what_it_saved_on_disk` |
 | `flow.write` | `w` in the diff opens the plan for the result and confirm writes it | planned |
 | `flow.confirm` | Confirm writes exactly the files listed, creates a transaction with backups and leaves the live files as planned | planned |
 | `flow.cancel` | Cancel, `n`, `q` and Esc close the plan and nothing on disk changes | planned |
@@ -96,23 +96,23 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 
 | Id | Interaction | Tests |
 |---|---|---|
-| `diff.quit` | `q` leaves the diff for the tree | planned |
-| `diff.next` | `n` selects the next hunk | planned |
-| `diff.previous` | `p` selects the previous hunk | planned |
-| `diff.next-conflict` | `N` jumps to the next unresolved conflict and says when there is none | planned |
-| `diff.previous-conflict` | `P` jumps to the previous unresolved conflict | planned |
-| `diff.layout` | `v` cycles the layouts | planned |
-| `diff.focus-next` | Tab moves the focus to the next pane | planned |
-| `diff.focus-previous` | Shift+Tab moves it back | planned |
-| `diff.widen` | `]` widens the focused pane | planned |
-| `diff.narrow` | `[` narrows it | planned |
-| `diff.down` | Down scrolls the panes together | planned |
-| `diff.up` | Up scrolls back | planned |
-| `diff.mine` | `o` takes my side for the hunk | planned |
-| `diff.theirs` | `t` takes upstream's side for the hunk | planned |
-| `diff.both` | `b` takes both sides | planned |
-| `diff.edit` | `e` edits the hunk | planned |
-| `diff.write` | `w` writes the result | planned |
+| `diff.quit` | `q` leaves the diff for the tree | `diff::q_leaves_the_diff_for_the_tree_and_the_quit_hint_does_the_same` |
+| `diff.next` | `n` selects the next hunk | `diff::n_and_p_select_the_next_and_the_previous_hunk`, `diff::clicking_the_next_and_previous_hunk_hints_moves_between_hunks`, `diff::moving_to_a_hunk_scrolls_the_panes_to_it` |
+| `diff.previous` | `p` selects the previous hunk | `diff::n_and_p_select_the_next_and_the_previous_hunk`, `diff::clicking_the_next_and_previous_hunk_hints_moves_between_hunks` |
+| `diff.next-conflict` | `N` jumps to the next unresolved conflict and says when there is none | `diff::capital_n_jumps_to_the_next_unresolved_conflict_and_says_when_there_is_none` |
+| `diff.previous-conflict` | `P` jumps to the previous unresolved conflict | `diff::capital_p_jumps_to_the_previous_unresolved_conflict_and_says_when_there_is_none` |
+| `diff.layout` | `v` cycles the layouts | `diff::v_cycles_five_columns_two_panes_and_the_stacked_column`, `diff::clicking_the_layout_hint_cycles_the_layout` |
+| `diff.focus-next` | Tab moves the focus to the next pane | `diff::tab_and_shift_tab_move_the_pane_focus` |
+| `diff.focus-previous` | Shift+Tab moves it back | `diff::tab_and_shift_tab_move_the_pane_focus` |
+| `diff.widen` | `]` widens the focused pane | `diff::bracket_keys_widen_and_narrow_the_focused_pane`, `diff::dragging_a_divider_resizes_the_panes` |
+| `diff.narrow` | `[` narrows it | `diff::bracket_keys_widen_and_narrow_the_focused_pane`, `diff::dragging_a_divider_resizes_the_panes` |
+| `diff.down` | Down scrolls the panes together | `diff::down_and_up_scroll_every_pane_together`, `diff::the_mouse_wheel_scrolls_the_panes` |
+| `diff.up` | Up scrolls back | `diff::down_and_up_scroll_every_pane_together`, `diff::the_mouse_wheel_scrolls_the_panes` |
+| `diff.mine` | `o` takes my side for the hunk | `diff::o_keeps_mine_for_the_hunk_and_the_plan_writes_nothing`, `diff::the_choice_keys_have_click_targets_in_the_header` |
+| `diff.theirs` | `t` takes upstream's side for the hunk | `diff::t_takes_theirs_for_the_hunk_and_write_puts_it_on_disk_with_a_backup_of_the_original`, `diff::the_choice_keys_have_click_targets_in_the_header` |
+| `diff.both` | `b` takes both sides | `diff::b_keeps_both_sides_in_the_result_and_write_puts_both_on_disk` |
+| `diff.edit` | `e` edits the hunk | `diff::e_hands_the_hunk_to_the_editor_and_write_puts_what_it_saved_on_disk` |
+| `diff.write` | `w` writes the result | `diff::t_takes_theirs_for_the_hunk_and_write_puts_it_on_disk_with_a_backup_of_the_original`, `diff::the_write_hint_opens_the_plan_for_the_result` |
 
 ## Plan dialog
 
@@ -129,7 +129,8 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | Id | Interaction | Tests |
 |---|---|---|
 | `window.resize` | resizing keeps the screen, the selection and an open dialog and repaints at the new size | planned |
-| `window.layouts` | the diff shows five columns, two panes or one column by width | planned |
+| `window.resize-diff` | resizing across a width boundary switches the diff layout and keeps the selected hunk | `diff::resizing_across_a_width_boundary_follows_the_width_and_keeps_the_hunk` |
+| `window.layouts` | the diff shows five columns, two panes or one column by width | `diff::from_200_columns_the_diff_opens_in_five_columns`, `diff::from_100_columns_the_diff_opens_with_ours_and_theirs_side_by_side_and_the_result_below`, `diff::below_100_columns_the_diff_stacks_in_one_column` |
 | `theme.dark` | the dark theme draws legible status colours | planned |
 | `theme.light` | the light theme drawn from the Omarchy colours file is legible | planned |
 
