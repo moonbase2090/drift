@@ -91,7 +91,7 @@ pub fn roots_for(paths: &ScanPaths, runtime: PathBuf) -> Roots {
         live: paths.source.home.clone(),
         state: paths.resolve.state.clone(),
         omarchy_lock: runtime.join("omarchy-update.lock"),
-        pacman_lock: PathBuf::from("/var/lib/pacman/db.lck"),
+        pacman_lock: drift_source::system_path("/var/lib/pacman/db.lck"),
     }
 }
 
