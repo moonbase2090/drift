@@ -18,8 +18,8 @@ pub use catalog::{
 pub use error::Error;
 pub use inputs::{load_resolve_inputs, LoadedInputs};
 pub use installed::{
-    read_package, Check, InstalledPackage, ReadPaths, Template, Upgrade, DEFAULT_OMARCHY_PATH,
-    PACKAGE_NAME,
+    read_package, system_path, system_root, Check, InstalledPackage, ReadPaths, Template, Upgrade,
+    DEFAULT_OMARCHY_PATH, PACKAGE_NAME,
 };
 pub use report::{build_file_diff, build_report, ScanPaths};
 pub use resolve::{resolve_bases, BaseQuery, ResolvePaths, ResolvedBase};
