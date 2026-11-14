@@ -178,7 +178,7 @@ dependencies = [
 
 [[package]]
 name = "drift-apply"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "drift-core",
  "drift-fixtures",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "drift-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "drift-apply",
  "drift-core",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "drift-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "drift-fixtures",
  "serde",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "drift-fixtures"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rustix",
  "serde",
@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "drift-source"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "drift-core",
  "drift-fixtures",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "drift-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "drift-apply",
  "drift-core",
@@ -1159,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "toml 0.9.12+spec-1.1.0",
 ]
