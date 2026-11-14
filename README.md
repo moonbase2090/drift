@@ -199,3 +199,7 @@ cargo deny check
 ```
 
 See the [review policy](REVIEW_POLICY.md) for PR classification, proof, and merge requirements. Pull requests that add or change a visible widget or TUI view must include a README GIF or WebP captured from real program output.
+
+For `.json` and `.jsonc` files, comparison decodes equivalent JSON string escapes such as `\u2014` and a literal `—`. Escape spelling alone creates no changed hunk or drift status. Whitespace, comments, numbers and actual string edits still compare as written. Merging keeps the original spelling on unchanged local lines, and backup/preflight hashes always cover the original bytes.
+
+![Equivalent JSON escapes produce no hunk; a real value change still appears](docs/media/json-escapes.gif)
