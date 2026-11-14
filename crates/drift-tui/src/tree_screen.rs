@@ -82,6 +82,7 @@ pub struct TreeScreen {
     view: TreeView,
     package_version: String,
     pending: Option<(String, String)>,
+    scanning: bool,
     error: Option<String>,
     notice: Option<String>,
     outcome: Option<Outcome>,
@@ -91,7 +92,7 @@ pub struct TreeScreen {
     scroll: usize,
     follow: bool,
     area: Option<Rect>,
-    last_click: Option<(usize, Instant)>,
+    last_click: Option<(String, Instant)>,
     hover: Option<Status>,
 }
 
@@ -135,6 +136,7 @@ impl TreeScreen {
                     report.package_version.clone(),
                 )
             }),
+            scanning: false,
             error: None,
             notice: None,
             outcome: None,
@@ -147,6 +149,29 @@ impl TreeScreen {
             last_click: None,
             hover: None,
         }
+    }
+
+    pub fn replace_report(&mut self, report: &ScanReport) {
+        self.view.replace_entries(report.entries.clone());
+        self.package_version.clone_from(&report.package_version);
+        self.pending = report.update_pending().then(|| {
+            (
+                report.reviewed_version.clone().unwrap_or_default(),
+                report.package_version.clone(),
+            )
+        });
+        self.error = None;
+        self.scanning = false;
+        self.hover = None;
+    }
+
+    pub(crate) fn set_scanning(&mut self) {
+        self.scanning = true;
+    }
+
+    pub(crate) fn set_error(&mut self, message: &str) {
+        self.scanning = false;
+        self.error = Some(message.to_string());
     }
 
     pub fn failed(message: &str) -> Self {
@@ -422,10 +447,11 @@ impl TreeScreen {
                 None
             }
             Hit::Body => {
-                let double = self.last_click.is_some_and(|(at, when)| {
-                    at == target.node && now.duration_since(when) <= DOUBLE_CLICK
+                let path = self.view.path_at(index)?;
+                let double = self.last_click.as_ref().is_some_and(|(at, when)| {
+                    *at == path && now.duration_since(*when) <= DOUBLE_CLICK
                 });
-                self.last_click = Some((target.node, now));
+                self.last_click = Some((path, now));
                 if double {
                     self.last_click = None;
                     self.open()
@@ -514,7 +540,7 @@ impl TreeScreen {
     }
 
     fn panel(&self) -> Option<Panel> {
-        if self.error.is_some() {
+        if self.error.is_some() && self.view.entries().is_empty() {
             return Some(Panel::Failed);
         }
         if self.view.entries().is_empty() {
@@ -716,10 +742,13 @@ impl TreeScreen {
             );
         }
 
-        let info_style = self
-            .outcome
-            .as_ref()
-            .map_or(dim, |outcome| outcome.style(&cx, base));
+        let info_style = if self.error.is_some() && !self.view.entries().is_empty() {
+            base.fg(cx.token(Token::Fail))
+        } else {
+            self.outcome
+                .as_ref()
+                .map_or(dim, |outcome| outcome.style(&cx, base))
+        };
         put(&mut cx, found.info, &self.info_text(), info_style);
         self.settle_scroll(usize::from(found.tree.height));
         self.draw_rows(&mut cx, &found, base, dim, selected_style);
@@ -745,6 +774,18 @@ impl TreeScreen {
         let mut parts = Vec::new();
         if let Some(outcome) = &self.outcome {
             parts.push(outcome.text.clone());
+        }
+        if let Some(error) = self
+            .error
+            .as_ref()
+            .filter(|_| !self.view.entries().is_empty())
+        {
+            parts.push(format!(
+                "Scan failed: {error}. Showing the previous report; rescan before writing."
+            ));
+        }
+        if self.scanning {
+            parts.push("scanning…".to_string());
         }
         if let Some(status) = self.hover {
             parts.push(format!("{}: {}", status.label(), status.explain()));
@@ -1634,6 +1675,25 @@ mod tests {
         assert_eq!(
             screen.handle_at(&click_event(40, row), t0 + Duration::from_millis(150)),
             Some(Action::Open(".config/hypr/monitors.lua".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_report_with_new_node_ids_does_not_break_double_click_identity() {
+        let t0 = Instant::now();
+        let mut screen = opened();
+        expand_all(&mut screen);
+        let shown = text(&mut screen, 120, 36);
+        let row = row_of(&shown, "[ ] ✗ conflict");
+        screen.handle_at(&click_event(40, row), t0);
+        let mut report = sample_report();
+        report.entries.rotate_right(1);
+        screen.replace_report(&report);
+        let shown = text(&mut screen, 120, 36);
+        let row = row_of(&shown, "[ ] ✗ conflict");
+        assert_eq!(
+            screen.handle_at(&click_event(40, row), t0 + Duration::from_millis(150)),
+            Some(Action::Open(".config/hypr/monitors.lua".into()))
         );
     }
 

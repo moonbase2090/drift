@@ -24,6 +24,10 @@ In a tracked file's diff, choose the result and press `w` to review the real tra
 
 ![Scanning](docs/media/scanning.gif)
 
+Background rescans keep the current tree on screen. Expanded folders, the selected path, marks and search/filter state survive the refreshed report; navigation remains available while scanning. If a selected path becomes hidden by a filter or search, selection moves to its nearest visible ancestor. A failed rescan keeps the previous rows visible with an inline error; writes wait for a successful rescan.
+
+![Tree navigation preserved during a background refresh](docs/media/tree-refresh.gif)
+
 `drift --snapshot` prints one 80×24 frame and does not take the terminal. Pass `--width` and `--height` together to print another size.
 
 A changed file opens in five columns once the window is at least 200 cells wide, wide enough for each text pane to keep about 40 cells: the hunk list, then base, ours, theirs, and the result. The four text panes share one scroll position. `n` and `p` move between hunks, `N` and `P` jump to the next and previous conflict that is still unresolved (a note says when there is none), Tab moves focus, and `[` / `]` or a drag resizes the focused pane.
