@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "drift.status",
   "name": "Drift",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shows the drifted configuration count and opens Drift on click.",
   "kinds": ["bar-widget"],
   "entryPoints": {
