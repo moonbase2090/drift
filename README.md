@@ -10,6 +10,12 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 
 The package name is `omarchy-drift`. Follow [the signed pacman repository instructions](docs/install.md) to verify the public key and install it. [Release preparation and local signing tests](docs/releasing.md) are documented separately. AUR publishing is planned for later.
 
+## Writing a resolved diff
+
+In a tracked file's diff, choose the result and press `w` to review the real transaction. The plan names the full path and backup location. Confirming backs up an existing file before replacing it; cancelling writes nothing. If the live file or template changed since the diff opened, rescan and review it again.
+
+![Resolved diff and its real backup plan](docs/media/diff-write-plan.gif)
+
 ## Review screen
 
 `drift` opens a screen with a header, a path tree, and the key hints taken from the keymap. While a scan is running the tree shows a scanning row, and the rest of the screen still takes input. Press `r` to scan again, or `u`, on the tree, the diff or the history, to undo the newest transaction (the same plan dialog as the history opens first, and nothing is written until you confirm; in the history `u` undoes the selected row, which starts on the newest). A change under a tracked root starts one follow-up scan after a short pause, including when many changes arrive together. Press `q`, or click Quit, to leave. The terminal is restored when the screen closes. The screen follows the terminal when its size changes, whichever screen or dialog is open, and repaints at the new size.

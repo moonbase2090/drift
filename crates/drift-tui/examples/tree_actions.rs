@@ -85,6 +85,10 @@ impl Resolver for Demo {
         })
     }
 
+    fn propose_result(&mut self, _: &drift_tui::EditedFile) -> Result<drift_tui::Proposal, String> {
+        Err("Writing is unavailable in this example.".to_string())
+    }
+
     fn apply(&mut self, proposal: &Proposal) -> Result<String, String> {
         Ok(format!(
             "Demo: would apply {} file(s) as transaction {}; nothing was written.",
