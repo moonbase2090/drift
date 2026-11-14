@@ -273,18 +273,28 @@ impl Screen {
 
     fn apply_note(&mut self, note: Note) {
         self.phase = match note {
-            Note::Scanning => Phase::Scanning,
-            Note::Ready(report) => {
-                let mut review = TreeScreen::new(&report);
-                if let Some(notice) = self.notice.take() {
-                    review.set_notice(&notice);
+            Note::Scanning => {
+                if let Some(review) = self.review.as_mut() {
+                    review.set_scanning();
                 }
-                self.review = Some(review);
+                Phase::Scanning
+            }
+            Note::Ready(report) => {
+                match self.review.as_mut() {
+                    Some(review) => review.replace_report(&report),
+                    None => self.review = Some(TreeScreen::new(&report)),
+                }
+                if let Some(notice) = self.notice.take() {
+                    self.review.as_mut().unwrap().set_notice(&notice);
+                }
                 self.report = Some(report);
                 Phase::Idle
             }
             Note::Failed(message) => {
-                self.review = Some(TreeScreen::failed(&message));
+                match self.review.as_mut() {
+                    Some(review) => review.set_error(&message),
+                    None => self.review = Some(TreeScreen::failed(&message)),
+                }
                 Phase::Failed
             }
         };
@@ -653,6 +663,9 @@ impl Screen {
         };
         worker.rescan();
         self.phase = Phase::Scanning;
+        if let Some(review) = self.review.as_mut() {
+            review.set_scanning();
+        }
         self.refresh_tree();
     }
 
@@ -711,12 +724,22 @@ impl App for Screen {
             self.update_history(event);
             return ControlFlow::Continue;
         }
-        if !matches!(self.phase, Phase::Scanning) && self.review.is_some() {
+        if self.review.is_some() {
             let action = self.review.as_mut().and_then(|review| review.handle(event));
             return match action {
                 Some(Action::Quit) => ControlFlow::Break,
                 Some(Action::Rescan) => {
                     self.request_rescan();
+                    ControlFlow::Continue
+                }
+                Some(Action::Keep(_) | Action::Take(_) | Action::Merge(_) | Action::Ignore(_))
+                    if matches!(self.phase, Phase::Scanning | Phase::Failed) =>
+                {
+                    self.show(if matches!(self.phase, Phase::Failed) {
+                        "Scan failed. The action was not applied; rescan successfully before writing."
+                    } else {
+                        "Scan in progress. The action was not applied; try again when it finishes."
+                    });
                     ControlFlow::Continue
                 }
                 Some(other) => {
@@ -769,15 +792,16 @@ impl Screen {
             }
             return;
         }
-        if matches!(self.phase, Phase::Scanning) {
-            self.spin = self.spin.wrapping_add(1);
-            self.refresh_tree();
-        } else if let Some(review) = self.review.as_mut() {
+        if let Some(review) = self.review.as_mut() {
             review.render(grid, area, clusters);
             if let Some(modal) = self.modal.as_mut() {
                 modal.dialog.render(grid, area, clusters);
             }
             return;
+        }
+        if matches!(self.phase, Phase::Scanning) {
+            self.spin = self.spin.wrapping_add(1);
+            self.refresh_tree();
         }
         self.columns = area.width;
         self.rows = area.height;
@@ -843,6 +867,184 @@ mod tests {
 
     const SIZES: [(u16, u16, &str); 3] =
         [(80, 24, "80x24"), (120, 36, "120x36"), (200, 60, "200x60")];
+
+    #[test]
+    fn every_screen_and_overlay_uses_the_lunatui_line_sets() {
+        use lunatui_core::symbols::line;
+        use std::collections::BTreeSet;
+        let allowed: BTreeSet<char> = [line::NORMAL, line::ROUNDED, line::DOUBLE, line::THICK]
+            .into_iter()
+            .flat_map(|set| {
+                [
+                    set.vertical,
+                    set.horizontal,
+                    set.top_left,
+                    set.top_right,
+                    set.bottom_left,
+                    set.bottom_right,
+                ]
+            })
+            .flat_map(str::chars)
+            .collect();
+        let expected: std::collections::BTreeMap<String, Vec<String>> =
+            serde_json::from_str(include_str!("../snapshots/borders.json")).unwrap();
+        let surfaces = [
+            "tree",
+            "diff",
+            "diff-two",
+            "diff-scroll",
+            "diff-active",
+            "apply",
+            "undo",
+            "history",
+            "help-tree",
+            "help-diff",
+            "help-history",
+            "palette-tree",
+            "palette-diff",
+            "palette-history",
+        ];
+        let mut failures = Vec::new();
+        let mut checked = BTreeSet::new();
+        for surface in surfaces {
+            for (columns, rows) in [(20, 6), (80, 24), (120, 36), (200, 40)] {
+                let context =
+                    if surface.ends_with("history") || matches!(surface, "history" | "undo") {
+                        Context::History
+                    } else if surface.starts_with("diff") || surface.ends_with("diff") {
+                        Context::Diff
+                    } else {
+                        Context::Tree
+                    };
+                let (mut screen, _) = watched(context);
+                match surface {
+                    "apply" => {
+                        press(&mut screen, "jt");
+                        assert!(screen.modal.is_some());
+                    }
+                    "undo" => {
+                        enter(&mut screen);
+                        assert!(screen.modal.is_some());
+                    }
+                    "diff-two" => {
+                        screen.diff = Some(DiffScreen::without_base("mine\n", "theirs\n"));
+                    }
+                    "diff-scroll" | "diff-active" => {
+                        let base: String = (0..100).map(|n| format!("line {n}\n")).collect();
+                        let ours = base.replacen("line 1\n", "changed\n", 1);
+                        screen.diff = Some(DiffScreen::new(&base, &ours, &base));
+                    }
+                    name if name.starts_with("help-") => {
+                        press(&mut screen, "?");
+                        assert!(screen.help().is_some());
+                    }
+                    name if name.starts_with("palette-") => {
+                        press(&mut screen, ":");
+                        assert!(screen.palette().is_some());
+                    }
+                    _ => {}
+                }
+                let _ = render_once(&mut screen, columns, rows);
+                if surface == "diff-active" && columns >= 200 {
+                    let x = screen.diff().unwrap().divider_x(0).unwrap();
+                    screen.update(&Event::Mouse(MouseEvent::new(
+                        MouseKind::Down(MouseButton::Left),
+                        x,
+                        4,
+                    )));
+                }
+                let (grid, clusters) = render_once(&mut screen, columns, rows);
+                let text = grid.display_text(&clusters);
+                let key = format!("{surface}-{columns}x{rows}");
+                let cells: Vec<Vec<char>> = text.lines().map(|row| row.chars().collect()).collect();
+                let mut mask = Vec::new();
+                for (y, row) in cells.iter().enumerate() {
+                    let mut line_mask = String::new();
+                    for (x, ch) in row.iter().copied().enumerate() {
+                        if ('\u{2500}'..='\u{257f}').contains(&ch) {
+                            if !allowed.contains(&ch) {
+                                failures.push(format!("{key}: non-Lunatui border {ch} at {x},{y}"));
+                            }
+                            line_mask.push(ch);
+                        } else {
+                            line_mask.push(' ');
+                        }
+                        if ch == '|'
+                            && y >= 2
+                            && cells[y - 1].get(x) == Some(&'|')
+                            && cells[y - 2].get(x) == Some(&'|')
+                        {
+                            failures.push(format!("{key}: ASCII vertical border at {x},{y}"));
+                        }
+                        if ch == '-' && x >= 2 && row[x - 1] == '-' && row[x - 2] == '-' {
+                            failures.push(format!("{key}: ASCII horizontal border at {x},{y}"));
+                        }
+                    }
+                    mask.push(line_mask.trim_end().to_string());
+                }
+                let mask = mask.join("\n");
+                let expects_line = columns >= 80
+                    && !surface.starts_with("help-")
+                    && surface != "history"
+                    && surface != "diff"
+                    && (matches!(surface, "tree" | "apply" | "undo")
+                        || surface.starts_with("palette-")
+                        || columns >= 120);
+                if expects_line && !mask.chars().any(|c| allowed.contains(&c)) {
+                    failures.push(format!("{key}: expected a visible Lunatui border"));
+                }
+                if surface == "diff-active"
+                    && columns >= 200
+                    && !text.contains(line::THICK.vertical)
+                    && !text.contains(line::THICK.horizontal)
+                {
+                    failures.push(format!("{key}: drag did not activate a divider"));
+                }
+                if expected.get(&key).map(|rows| rows.join("\n")).as_ref() != Some(&mask) {
+                    failures.push(format!(
+                        "{key}: border positions differ from the reviewed mask"
+                    ));
+                }
+                checked.insert(key.clone());
+                if std::env::var_os("DRIFT_CAPTURE").is_some() {
+                    println!(
+                        "DRIFT_BORDERS {}",
+                        serde_json::json!({"key":key,"mask":mask})
+                    );
+                    let distinct_surface = !surface.ends_with("-diff")
+                        && !surface.ends_with("-history")
+                        && surface != "diff-active";
+                    if (distinct_surface && (columns, rows) == (120, 36))
+                        || (matches!(surface, "diff" | "diff-active") && columns == 200)
+                        || (surface == "tree" && columns == 80)
+                    {
+                        crate::proof::capture(&key, &grid, &clusters);
+                    }
+                }
+            }
+        }
+        assert!(
+            expected.keys().all(|key| checked.contains(key)),
+            "stale border mask"
+        );
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        for (name, source) in [
+            ("tree", include_str!("tree_screen.rs")),
+            ("diff", include_str!("diff.rs")),
+            ("plan", include_str!("plan_dialog.rs")),
+            ("overlays", include_str!("overlay.rs")),
+            ("history", include_str!("history_screen.rs")),
+            ("screen", include_str!("screen.rs")),
+        ] {
+            let production = source.split("#[cfg(test)]").next().unwrap();
+            assert!(
+                !production
+                    .chars()
+                    .any(|c| ('\u{2500}'..='\u{257f}').contains(&c)),
+                "{name}: hardcoded line glyph bypasses the Lunatui symbol source"
+            );
+        }
+    }
 
     #[test]
     fn snapshots_match_the_empty_screen() {
@@ -1033,6 +1235,109 @@ mod tests {
             elapsed < Duration::from_millis(200),
             "quit waited {elapsed:?}"
         );
+    }
+
+    fn capture_refresh(screen: &mut Screen, name: &str) -> String {
+        let (grid, clusters) = render_once(screen, 120, 36);
+        let text = grid.display_text(&clusters);
+        if std::env::var_os("DRIFT_CAPTURE").is_some() {
+            let colors: Vec<Vec<String>> = (0..36)
+                .map(|y| {
+                    (0..120)
+                        .map(|x| {
+                            let style = grid.get(x, y).unwrap().style();
+                            format!("{:?} {:?}", style.fg, style.bg)
+                        })
+                        .collect()
+                })
+                .collect();
+            println!(
+                "DRIFT_FRAME {}",
+                serde_json::json!({"name":name,"text":text,"colors":colors})
+            );
+        }
+        text
+    }
+
+    #[test]
+    fn refresh_keeps_expansion_selection_and_marks_even_after_a_failed_scan() {
+        for failed in [false, true] {
+            let report = ScanReport {
+                entries: vec![
+                    entry(".config/aaa/a.conf", Status::Conflict),
+                    entry(".config/zeta/a.conf", Status::LocalOverride),
+                    entry(".config/zeta/b.conf", Status::LocalOverride),
+                ],
+                ..empty_report()
+            };
+            let mut screen = Screen::with_report(&report);
+            press(&mut screen, "GlG ");
+            assert_eq!(
+                screen
+                    .review()
+                    .unwrap()
+                    .view()
+                    .selected_entry()
+                    .unwrap()
+                    .path,
+                ".config/zeta/b.conf"
+            );
+            let before = if !failed {
+                Some(capture_refresh(&mut screen, "01-before-refresh"))
+            } else {
+                None
+            };
+            screen.apply_note(Note::Scanning);
+            if let Some(before) = before {
+                let during = capture_refresh(&mut screen, "02-refresh-in-progress");
+                assert_eq!(
+                    before
+                        .lines()
+                        .zip(during.lines())
+                        .filter(|(a, b)| a != b)
+                        .count(),
+                    1
+                );
+                assert!(during.contains("b.conf"));
+                press(&mut screen, "k");
+                assert_eq!(
+                    screen
+                        .review()
+                        .unwrap()
+                        .view()
+                        .selected_entry()
+                        .unwrap()
+                        .path,
+                    ".config/zeta/a.conf"
+                );
+                press(&mut screen, "j");
+            }
+            if failed {
+                screen.apply_note(Note::Failed("temporary scan error".into()));
+                let failed = capture_refresh(&mut screen, "04-failed-scan-retains-rows");
+                assert!(failed.contains("b.conf"));
+                assert!(failed.contains("temporary scan error"));
+                press(&mut screen, "t");
+                assert!(screen.take_action().is_none());
+                assert!(notice(&screen).contains("rescan successfully"));
+            }
+            let mut updated = report.clone();
+            updated
+                .entries
+                .insert(0, entry(".config/000/new.conf", Status::Conflict));
+            screen.apply_note(Note::Ready(updated));
+            if !failed {
+                capture_refresh(&mut screen, "03-refreshed");
+            }
+            let view = screen.review().unwrap().view();
+            assert_eq!(view.selected_entry().unwrap().path, ".config/zeta/b.conf");
+            assert_eq!(view.marked_count(), 1);
+            assert!(view
+                .rows()
+                .iter()
+                .filter_map(|row| row.entry)
+                .any(|id| view.entries()[id].path == ".config/zeta/a.conf"));
+        }
     }
 
     #[test]

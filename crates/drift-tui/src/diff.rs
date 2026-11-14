@@ -6,6 +6,7 @@ use drift_core::{
     Span,
 };
 use lunatui::{App, ControlFlow};
+use lunatui_core::symbols::line;
 use lunatui_core::{clip_display_prefix, width, Attrs, Color, Grid, Rect, Style, CLUSTER_TAG};
 use lunatui_runtime::keymap::{Command, KeyChord, Keymap};
 use lunatui_term::{Event, KeyCode, Modifiers, MouseButton, MouseEvent, MouseKind, Scroll};
@@ -1456,7 +1457,11 @@ impl DiffScreen {
         );
         if top.width > 2 && top.height > 0 {
             let x = left.x.saturating_add(left.width);
-            cx.fill(Rect::new(x, top.y, 1, top.height), text, '│');
+            cx.fill(
+                Rect::new(x, top.y, 1, top.height),
+                text,
+                line::NORMAL.vertical.chars().next().unwrap(),
+            );
         }
         if self.two_way || strip.height == 0 {
             return;
@@ -2007,10 +2012,10 @@ fn paint_dividers(
     for divider in &layout.dividers {
         let on = active == Some(divider.id);
         let (glyph, style) = match (divider.axis, on) {
-            (SplitAxis::Horizontal, false) => ('│', text),
-            (SplitAxis::Horizontal, true) => ('┃', accent),
-            (SplitAxis::Vertical, false) => ('─', text),
-            (SplitAxis::Vertical, true) => ('━', accent),
+            (SplitAxis::Horizontal, false) => (line::NORMAL.vertical.chars().next().unwrap(), text),
+            (SplitAxis::Horizontal, true) => (line::THICK.vertical.chars().next().unwrap(), accent),
+            (SplitAxis::Vertical, false) => (line::NORMAL.horizontal.chars().next().unwrap(), text),
+            (SplitAxis::Vertical, true) => (line::THICK.horizontal.chars().next().unwrap(), accent),
         };
         if divider.rect.width > 0 && divider.rect.height > 0 {
             cx.fill(divider.rect, style, glyph);
@@ -2023,7 +2028,11 @@ fn paint_bar(area: Rect, content: usize, viewport: usize, offset: usize, cx: &mu
         return;
     }
     let track = usize::from(area.height);
-    cx.fill(Rect::new(area.x, area.y, 1, area.height), Style::new(), '│');
+    cx.fill(
+        Rect::new(area.x, area.y, 1, area.height),
+        Style::new(),
+        line::NORMAL.vertical.chars().next().unwrap(),
+    );
     let thumb_len = thumb_size(content, track, viewport);
     let thumb_at = thumb_position(offset, content, viewport, track, thumb_len);
     if thumb_len > 0 {

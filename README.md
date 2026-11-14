@@ -6,6 +6,16 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 
 **Status:** read-only scan, status and file diff commands are available. The review screen scans on a worker thread and shows the result as a tree. The product brief is `docs/PRD.md`.
 
+## Documentation
+
+- [User guide](docs/guide.md): what Drift tracks, how bases are found (including the first update), the screens and keys, resolving a conflict, the safety model, recovering from backups and uninstalling.
+- [Command reference](docs/cli.md): every command, flag and exit code.
+- [Bar widget](docs/widget.md).
+- [The first-update scenario](docs/first-update.md): a scripted walk through the first upgrade on a fresh install.
+- [Keys and mouse targets](docs/input-map.md).
+
+The commands in these pages are run by a test against a fixture system.
+
 ## Install
 
 The package name is `omarchy-drift`. Follow [the signed pacman repository instructions](docs/install.md) to verify the public key and install it. [Release preparation and local signing tests](docs/releasing.md) are documented separately. AUR publishing is planned for later.
@@ -23,6 +33,10 @@ In a tracked file's diff, choose the result and press `w` to review the real tra
 ![Empty Drift screen](docs/media/empty-screen.gif)
 
 ![Scanning](docs/media/scanning.gif)
+
+Background rescans keep the current tree on screen. Expanded folders, the selected path, marks and search/filter state survive the refreshed report; navigation remains available while scanning. If a selected path becomes hidden by a filter or search, selection moves to its nearest visible ancestor. A failed rescan keeps the previous rows visible with an inline error; writes wait for a successful rescan.
+
+![Tree navigation preserved during a background refresh](docs/media/tree-refresh.gif)
 
 `drift --snapshot` prints one 80×24 frame and does not take the terminal. Pass `--width` and `--height` together to print another size.
 
@@ -154,7 +168,7 @@ matching `status`. These commands write no configuration or state.
 
 ```sh
 drift resolve .config/hypr/monitors.lua --keep
-drift resolve .config/hypr/a.lua .config/waybar/style.css --upstream --dry-run
+drift resolve .config/hypr/hyprland.conf .config/waybar/style.css --upstream --dry-run
 drift resolve "$HOME/.config/hypr/looknfeel.lua" --merge --yes
 ```
 
@@ -172,8 +186,8 @@ Symlinks, files an app rewrites, files without a template and files already equa
 drift history
 drift history --json
 drift undo --dry-run
-drift undo resolve-1794539706581 --yes
-drift undo --force .config/hypr/a.lua
+drift undo <transaction> --yes
+drift undo --force .config/waybar/config.jsonc --dry-run
 ```
 
 `history` lists the transactions Drift has written, newest first: id, time, package version, file count and what was done. `undo` previews what undoing a transaction (the newest by default) would restore or remove, and writes only after you answer `y`; `--yes` skips the question, `--dry-run` only prints the preview, and without a terminal nothing is written unless `--yes` is given. Undoing also puts back the reviewed bases the transaction replaced, so an undone take upstream reads as upstream changed again and an undone keep mine is no longer acknowledged. The undo is a transaction of its own and can be undone in turn.
@@ -196,7 +210,7 @@ After that upgrade, a PostTransaction hook writes a UTC stamp to `/var/lib/drift
 
 Rust 1.99.1, pinned by `rust-toolchain.toml`. From this repository:
 
-```sh
+```bash
 cargo test
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
@@ -209,6 +223,10 @@ See the [review policy](REVIEW_POLICY.md) for PR classification, proof, and merg
 For `.json` and `.jsonc` files, comparison decodes equivalent JSON string escapes such as `\u2014` and a literal `—`. Escape spelling alone creates no changed hunk or drift status. Whitespace, comments, numbers and actual string edits still compare as written. Automatic merging keeps equivalent local string spelling even when upstream edits another value on the same line, and backup/preflight hashes always cover the original bytes.
 
 ![Equivalent JSON escapes produce no hunk; a real value change still appears](docs/media/json-escapes.gif)
+
+All borders and rules use Lunatui line sets. Apply and undo plans use its native Block; tree separators, diff dividers, active drag lines and scrollbar tracks use its line symbols. The command palette keeps its native rounded frame, and Help fills the screen.
+
+![Real tree, diff layouts, apply and undo, History, Help and command palette](docs/media/solid-modal-borders.gif)
 
 Drift uses Lunatui v0.1.32. The existing rendering snapshots match the new release without changes. These frames come from the real wide diff rendering test.
 

@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use lunatui_core::symbols::line;
 use lunatui_core::{clip_display_prefix, width, Attrs, ClusterTable, Grid, Rect, Style};
 use lunatui_term::{Event, KeyCode, KeyKind, MouseButton, MouseKind, Scroll};
 use lunatui_theme::Token;
@@ -80,6 +81,7 @@ pub struct TreeScreen {
     view: TreeView,
     package_version: String,
     pending: Option<(String, String)>,
+    scanning: bool,
     error: Option<String>,
     notice: Option<String>,
     mode: Mode,
@@ -88,7 +90,7 @@ pub struct TreeScreen {
     scroll: usize,
     follow: bool,
     area: Option<Rect>,
-    last_click: Option<(usize, Instant)>,
+    last_click: Option<(String, Instant)>,
     hover: Option<Status>,
 }
 
@@ -132,6 +134,7 @@ impl TreeScreen {
                     report.package_version.clone(),
                 )
             }),
+            scanning: false,
             error: None,
             notice: None,
             mode: Mode::Normal,
@@ -143,6 +146,29 @@ impl TreeScreen {
             last_click: None,
             hover: None,
         }
+    }
+
+    pub fn replace_report(&mut self, report: &ScanReport) {
+        self.view.replace_entries(report.entries.clone());
+        self.package_version.clone_from(&report.package_version);
+        self.pending = report.update_pending().then(|| {
+            (
+                report.reviewed_version.clone().unwrap_or_default(),
+                report.package_version.clone(),
+            )
+        });
+        self.error = None;
+        self.scanning = false;
+        self.hover = None;
+    }
+
+    pub(crate) fn set_scanning(&mut self) {
+        self.scanning = true;
+    }
+
+    pub(crate) fn set_error(&mut self, message: &str) {
+        self.scanning = false;
+        self.error = Some(message.to_string());
     }
 
     pub fn failed(message: &str) -> Self {
@@ -408,10 +434,11 @@ impl TreeScreen {
                 None
             }
             Hit::Body => {
-                let double = self.last_click.is_some_and(|(at, when)| {
-                    at == target.node && now.duration_since(when) <= DOUBLE_CLICK
+                let path = self.view.path_at(index)?;
+                let double = self.last_click.as_ref().is_some_and(|(at, when)| {
+                    *at == path && now.duration_since(*when) <= DOUBLE_CLICK
                 });
-                self.last_click = Some((target.node, now));
+                self.last_click = Some((path, now));
                 if double {
                     self.last_click = None;
                     self.open()
@@ -500,7 +527,7 @@ impl TreeScreen {
     }
 
     fn panel(&self) -> Option<Panel> {
-        if self.error.is_some() {
+        if self.error.is_some() && self.view.entries().is_empty() {
             return Some(Panel::Failed);
         }
         if self.view.entries().is_empty() {
@@ -629,7 +656,7 @@ impl TreeScreen {
             self.scroll = 0;
             return;
         }
-        if self.follow {
+        if self.follow && self.view.selected() < total {
             let selected = self.view.selected();
             if selected < self.scroll {
                 self.scroll = selected;
@@ -697,15 +724,20 @@ impl TreeScreen {
             );
         }
 
-        put(&mut cx, found.info, &self.info_text(), dim);
+        let info = if self.error.is_some() && !self.view.entries().is_empty() {
+            base.fg(cx.token(Token::Fail))
+        } else {
+            dim
+        };
+        put(&mut cx, found.info, &self.info_text(), info);
         self.settle_scroll(usize::from(found.tree.height));
         self.draw_rows(&mut cx, &found, base, dim, selected_style);
         if let Some(rect) = found.divider.filter(|_| self.panel().is_none()) {
             let style = dim;
             if rect.width == 1 {
-                cx.fill(rect, style, '|');
+                cx.fill(rect, style, line::NORMAL.vertical.chars().next().unwrap());
             } else {
-                cx.fill(rect, style, '-');
+                cx.fill(rect, style, line::NORMAL.horizontal.chars().next().unwrap());
             }
         }
         let overflow = width(&self.info_text()) > usize::from(found.info.width);
@@ -720,6 +752,18 @@ impl TreeScreen {
 
     fn info_text(&self) -> String {
         let mut parts = Vec::new();
+        if let Some(error) = self
+            .error
+            .as_ref()
+            .filter(|_| !self.view.entries().is_empty())
+        {
+            parts.push(format!(
+                "Scan failed: {error}. Showing the previous report; rescan before writing."
+            ));
+        }
+        if self.scanning {
+            parts.push("scanning…".to_string());
+        }
         if let Some(status) = self.hover {
             parts.push(format!("{}: {}", status.label(), status.explain()));
         }
@@ -1187,6 +1231,37 @@ mod tests {
     }
 
     #[test]
+    fn a_cleared_selection_does_not_pull_the_scroll_to_an_unrelated_file() {
+        let mut entries = vec![entry(".config/gone/b.conf", Status::LocalOverride)];
+        entries.extend(
+            (0..20).map(|n| entry(&format!(".local/keep/{n:02}.conf"), Status::LocalOverride)),
+        );
+        let mut report = sample_report();
+        report.entries = entries;
+        let mut screen = TreeScreen::new(&report);
+        screen.view.set_status_filter(Some(Status::LocalOverride));
+        screen.view.set_query(".conf");
+        let row = screen
+            .view
+            .rows()
+            .iter()
+            .position(|row| {
+                row.entry
+                    .is_some_and(|id| screen.view.entries()[id].path == ".config/gone/b.conf")
+            })
+            .unwrap();
+        screen.view.select(row);
+        report.entries[0].status = Status::Conflict;
+        screen.replace_report(&report);
+        assert!(screen.view.selected_row().is_none());
+        screen.scroll = 1;
+        screen.follow = true;
+        screen.settle_scroll(4);
+        assert_eq!(screen.scroll, 1);
+        assert_eq!(key(&mut screen, KeyCode::Char('t')), None);
+    }
+
+    #[test]
     fn snapshots_match_at_three_sizes() {
         for (columns, rows) in [(80, 24), (120, 36), (200, 60)] {
             let mut screen = TreeScreen::new(&sample_report());
@@ -1604,6 +1679,25 @@ mod tests {
         assert_eq!(
             screen.handle_at(&click_event(40, row), t0 + Duration::from_millis(150)),
             Some(Action::Open(".config/hypr/monitors.lua".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_report_with_new_node_ids_does_not_break_double_click_identity() {
+        let t0 = Instant::now();
+        let mut screen = opened();
+        expand_all(&mut screen);
+        let shown = text(&mut screen, 120, 36);
+        let row = row_of(&shown, "[ ] ✗ conflict");
+        screen.handle_at(&click_event(40, row), t0);
+        let mut report = sample_report();
+        report.entries.rotate_right(1);
+        screen.replace_report(&report);
+        let shown = text(&mut screen, 120, 36);
+        let row = row_of(&shown, "[ ] ✗ conflict");
+        assert_eq!(
+            screen.handle_at(&click_event(40, row), t0 + Duration::from_millis(150)),
+            Some(Action::Open(".config/hypr/monitors.lua".into()))
         );
     }
 
@@ -2200,7 +2294,7 @@ mod tests {
             let shown = text(&mut screen, columns, rows);
             let rebuilt: String = shown
                 .lines()
-                .map(|line| line.rsplit('|').next().unwrap_or(line))
+                .map(|line| line.rsplit(line::NORMAL.vertical).next().unwrap_or(line))
                 .collect::<String>()
                 .split_whitespace()
                 .collect();

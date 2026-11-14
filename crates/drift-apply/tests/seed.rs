@@ -182,7 +182,15 @@ fn the_first_scan_seeds_matching_templates_and_the_second_writes_nothing() {
     assert_eq!(config_digest(&home), before);
     let stamped = fs::symlink_metadata(&same).unwrap().modified().unwrap();
     fs::write(&same, b"tamper\n").unwrap();
+    let forward = stamped + std::time::Duration::from_secs(60);
+    fs::File::options()
+        .write(true)
+        .open(&same)
+        .unwrap()
+        .set_modified(forward)
+        .unwrap();
     let tampered = fs::symlink_metadata(&same).unwrap().modified().unwrap();
+    assert_eq!(tampered, forward);
     let second = scan(&Registry::v1(), &paths(&built), &roots(&built)).unwrap();
     assert!(second.seeded.is_empty());
     assert_eq!(second.reviewed_version.as_deref(), Some(VERSION));
