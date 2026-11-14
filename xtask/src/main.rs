@@ -17,12 +17,15 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
+    let mut entries: Vec<_> = entries
+        .flatten()
+        .filter_map(|e| Some((e.path(), e.file_type().ok()?)))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (path, kind) in entries {
+        if kind.is_dir() {
             rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
+        } else if kind.is_file() && path.extension().is_some_and(|e| e == "rs") {
             out.push(path);
         }
     }
@@ -146,18 +149,21 @@ fn text_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-    entries.sort();
-    for path in entries {
+    let mut entries: Vec<_> = entries
+        .flatten()
+        .filter_map(|e| Some((e.path(), e.file_type().ok()?)))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (path, kind) in entries {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        if path.is_dir() {
+        if kind.is_dir() {
             if name != "target" && name != ".git" {
                 text_files(&path, out);
             }
-        } else if path.is_file() {
+        } else if kind.is_file() {
             out.push(path);
         }
     }
@@ -254,5 +260,35 @@ mod tests {
         assert_eq!(failures_of("identifiers", &root), Some(1));
         assert_eq!(failures_of("no-such-check", &root), None);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_walks_do_not_follow_symlinks_into_loops_or_outside_the_checkout() {
+        let root = scratch("links");
+        let outside = scratch("links-outside");
+        let ticket = format!("see D{}", "R-5");
+        fs::write(outside.join("leak.rs"), &ticket).unwrap();
+        fs::write(outside.join("leak.md"), &ticket).unwrap();
+        fs::create_dir_all(root.join("crates")).unwrap();
+        fs::write(root.join("crates/own.rs"), "fn a() {}\n").unwrap();
+        fs::write(root.join("own.md"), "clean").unwrap();
+        std::os::unix::fs::symlink(&root, root.join("loop")).unwrap();
+        std::os::unix::fs::symlink(&root, root.join("crates/loop")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("crates/escape")).unwrap();
+        std::os::unix::fs::symlink(outside.join("leak.md"), root.join("leak-link.md")).unwrap();
+        std::os::unix::fs::symlink(outside.join("leak.rs"), root.join("crates/leak-link.rs"))
+            .unwrap();
+        let mut texts = Vec::new();
+        text_files(&root, &mut texts);
+        let names: Vec<String> = texts.iter().map(|file| relative(&root, file)).collect();
+        assert_eq!(names, ["crates/own.rs", "own.md"]);
+        let mut sources = Vec::new();
+        rust_files(&root.join("crates"), &mut sources);
+        let names: Vec<String> = sources.iter().map(|file| relative(&root, file)).collect();
+        assert_eq!(names, ["crates/own.rs"]);
+        assert_eq!(identifiers(&root), 0);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
     }
 }

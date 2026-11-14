@@ -1,6 +1,6 @@
 # Drift user guide
 
-Drift compares your Hyprland and Omarchy configuration with the templates the installed `omarchy-settings` package ships, shows the difference file by file, and lets you keep your version, take upstream's, or merge the two. It never writes anything until you confirm a plan, and every write can be undone. Drift is built for Omarchy 4.5 and reads the templates from `/usr/share/omarchy`.
+Drift compares your Hyprland and Omarchy configuration with the templates the installed `omarchy-settings` package ships, shows the difference file by file, and lets you keep your version, take upstream's, or merge the two. It never changes a configuration file until you confirm a plan, and every such change can be undone. A few commands write their own small files outside that plan; the [safety model](#safety-model) lists them. Drift is built for Omarchy 4.5 and reads the templates from `/usr/share/omarchy`.
 
 This guide covers what is in the program today. The [command reference](cli.md) lists every command, the [bar widget](widget.md) page covers the status-bar module, and [input-map.md](input-map.md) lists every key and mouse target.
 
@@ -86,10 +86,11 @@ A file with no conflicts can skip the hunks: from the tree press `m` and read th
 ## Safety model
 
 - Opening Drift, scanning, `status`, `diff`, `scan` and `history` never write configuration or state.
-- Every write goes through a plan that lists each file, its action, its backup location and a diff summary. Nothing is written until you confirm. Without a terminal, commands write nothing unless you pass `--yes`.
+- Every change to a configuration file goes through a plan that lists each file, its action, its backup location and a diff summary. Nothing is written to those files until you confirm. Without a terminal, commands write nothing unless you pass `--yes`.
 - Before a file is changed its original is copied into the backup store (`~/.local/state/drift/backups/<transaction>/`). A transaction records every file it touched with the hashes before and after, in `manifest.json`.
 - Files are replaced atomically. Symlinks, files an app rewrites on its own, files without a template and files already equal to upstream are skipped with a reason.
-- Every transaction can be undone, and an undo is a transaction that can be undone in turn. A file that changed after the transaction is left alone unless you name it with `--force`.
+- Every configuration transaction can be undone with `drift undo`, and an undo is a transaction that can be undone in turn. A file that changed after the transaction is left alone unless you name it with `--force`.
+- Some writes are outside the plan and outside `drift undo`: `drift snapshot --pre` copies the template roots into `/var/lib/drift/snapshots/` (pacman runs it before an upgrade, and nothing else is touched), `drift notify on` and `drift notify off` save the notice setting in Drift's state directory, the upgrade stamp the post-transaction hook leaves in `/var/lib/drift`, and `drift widget install`, `sync` and `remove`, which keep their own record and a timestamped backup next to a file they replace (see the [bar widget](widget.md) page). Undo them by deleting the snapshot, running `notify` on or off again, or `widget remove`.
 - Nothing is sent over the network. The only things Drift runs besides itself are `hyprctl configerrors` after a Hyprland write, `omarchy-notification-send` for the upgrade notice, and `$EDITOR` when you ask to edit a hunk.
 
 ## Recovering from backups
