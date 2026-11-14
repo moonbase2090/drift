@@ -345,7 +345,7 @@ fn an_unlocked_persistent_update_lock_allows_apply_and_preserves_the_backup() {
     let path = "config/hypr/monitors.lua";
     write_live(&fix.live(path), b"x\n", 0o644);
     let lock = fix.roots().omarchy_lock;
-    fs::write(&lock, b"").unwrap();
+    fs::write(&lock, b"previous updater contents\n").unwrap();
     let plan = one_plan(
         planned(path, Some(BEFORE), Some(AFTER), Some(0o644), None),
         &[],
@@ -356,7 +356,7 @@ fn an_unlocked_persistent_update_lock_allows_apply_and_preserves_the_backup() {
         fs::read(fix.root.join("state/backups/txn-7").join(path)).unwrap(),
         b"x\n"
     );
-    assert!(lock.exists());
+    assert_eq!(fs::read(&lock).unwrap(), b"previous updater contents\n");
 }
 
 #[test]
