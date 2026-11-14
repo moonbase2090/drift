@@ -18,7 +18,7 @@ The package name is `omarchy-drift`. Follow [the signed pacman repository instru
 
 ![Scanning](docs/media/scanning.gif)
 
-Background rescans keep the current tree on screen. Expanded folders, the selected path, marks and search/filter state survive the refreshed report; navigation remains available while scanning.
+Background rescans keep the current tree on screen. Expanded folders, the selected path, marks and search/filter state survive the refreshed report; navigation remains available while scanning. If a selected path becomes hidden by a filter or search, selection moves to its nearest visible ancestor. A failed rescan keeps the previous rows visible with an inline error; writes wait for a successful rescan.
 
 ![Tree navigation preserved during a background refresh](docs/media/tree-refresh.gif)
 

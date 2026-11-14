@@ -526,7 +526,7 @@ impl TreeScreen {
     }
 
     fn panel(&self) -> Option<Panel> {
-        if self.error.is_some() {
+        if self.error.is_some() && self.view.entries().is_empty() {
             return Some(Panel::Failed);
         }
         if self.view.entries().is_empty() {
@@ -723,7 +723,12 @@ impl TreeScreen {
             );
         }
 
-        put(&mut cx, found.info, &self.info_text(), dim);
+        let info = if self.error.is_some() && !self.view.entries().is_empty() {
+            base.fg(cx.token(Token::Fail))
+        } else {
+            dim
+        };
+        put(&mut cx, found.info, &self.info_text(), info);
         self.settle_scroll(usize::from(found.tree.height));
         self.draw_rows(&mut cx, &found, base, dim, selected_style);
         if let Some(rect) = found.divider.filter(|_| self.panel().is_none()) {
@@ -746,6 +751,11 @@ impl TreeScreen {
 
     fn info_text(&self) -> String {
         let mut parts = Vec::new();
+        if let Some(error) = &self.error {
+            parts.push(format!(
+                "Scan failed: {error}. Showing the previous report; rescan before writing."
+            ));
+        }
         if self.scanning {
             parts.push("scanning…".to_string());
         }

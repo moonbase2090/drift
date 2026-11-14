@@ -712,11 +712,13 @@ impl App for Screen {
                     ControlFlow::Continue
                 }
                 Some(Action::Keep(_) | Action::Take(_) | Action::Merge(_) | Action::Ignore(_))
-                    if matches!(self.phase, Phase::Scanning) =>
+                    if matches!(self.phase, Phase::Scanning | Phase::Failed) =>
                 {
-                    self.show(
-                        "Scan in progress. The action was not applied; try again when it finishes.",
-                    );
+                    self.show(if matches!(self.phase, Phase::Failed) {
+                        "Scan failed. The action was not applied; rescan successfully before writing."
+                    } else {
+                        "Scan in progress. The action was not applied; try again when it finishes."
+                    });
                     ControlFlow::Continue
                 }
                 Some(other) => {
@@ -1113,6 +1115,12 @@ mod tests {
             }
             if failed {
                 screen.apply_note(Note::Failed("temporary scan error".into()));
+                let failed = capture_refresh(&mut screen, "04-failed-scan-retains-rows");
+                assert!(failed.contains("b.conf"));
+                assert!(failed.contains("temporary scan error"));
+                press(&mut screen, "t");
+                assert!(screen.take_action().is_none());
+                assert!(notice(&screen).contains("rescan successfully"));
             }
             let mut updated = report.clone();
             updated

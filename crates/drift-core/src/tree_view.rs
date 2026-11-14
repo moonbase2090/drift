@@ -494,8 +494,17 @@ impl TreeView {
         self.node_files = files;
         self.node_statuses = statuses;
         self.refresh_marks();
-        let at = keep.and_then(|node| self.rows.iter().position(|row| row.node == node));
-        self.selected = at.unwrap_or_else(|| self.selected.min(self.rows.len().saturating_sub(1)));
+        let mut ancestor = keep;
+        let mut visible = None;
+        while let Some(node) = ancestor {
+            if let Some(at) = self.rows.iter().position(|row| row.node == node) {
+                visible = Some(at);
+                break;
+            }
+            ancestor = self.nodes[node].parent;
+        }
+        self.selected =
+            visible.unwrap_or_else(|| self.selected.min(self.rows.len().saturating_sub(1)));
     }
 
     fn reveal_if_buried(&mut self, node: usize) {
@@ -744,6 +753,37 @@ mod tests {
         assert_eq!(view.marked_count(), 0);
         view.replace_entries(vec![]);
         assert!(view.selected_row().is_none());
+    }
+
+    #[test]
+    fn a_removed_selection_uses_the_nearest_visible_ancestor_under_filter_and_search() {
+        for search in [false, true] {
+            let mut view = TreeView::new(vec![
+                entry(".config/gone/b.conf", Status::LocalOverride),
+                entry(".config/keep/b.conf", Status::LocalOverride),
+            ]);
+            expand_all(&mut view);
+            if search {
+                view.set_query("b.conf");
+            } else {
+                view.set_status_filter(Some(Status::LocalOverride));
+            }
+            let row = view
+                .rows()
+                .iter()
+                .position(|row| {
+                    row.entry
+                        .is_some_and(|id| view.entries()[id].path == ".config/gone/b.conf")
+                })
+                .unwrap();
+            view.select(row);
+            view.replace_entries(vec![
+                entry(".config/gone/c.conf", Status::Conflict),
+                entry(".config/keep/b.conf", Status::LocalOverride),
+            ]);
+            assert_eq!(view.selected_row().unwrap().name, ".config");
+            assert!(view.selected_entry().is_none());
+        }
     }
 
     #[test]
