@@ -2439,6 +2439,7 @@ mod tests {
         for (columns, rows) in SIZES {
             let mut screen = changed();
             let (grid, clusters) = render_once(&mut screen, columns, rows);
+            crate::proof::capture(&format!("diff-{columns}x{rows}"), &grid, &clusters);
             let text = grid.display_text(&clusters);
             assert!(text.lines().next().unwrap().contains("Diff"), "{columns}");
             let body = text.lines().nth(1).unwrap();
