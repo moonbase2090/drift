@@ -945,6 +945,16 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(read(&root, "home/.config/alacritty/alacritty.toml"), mine);
+        press(&mut screen, KeyCode::Char('?'));
+        let help = capture_screen(&mut screen, "03-help");
+        assert!(help.contains("Drift  Help"), "{help}");
+        press(&mut screen, KeyCode::Esc);
+        press(&mut screen, KeyCode::Char(':'));
+        let palette = capture_screen(&mut screen, "04-palette");
+        assert!(palette.contains("Command palette"), "{palette}");
+        for glyph in ['╭', '╮', '╰', '╯', '─', '│'] {
+            assert!(palette.contains(glyph), "missing {glyph}: {palette}");
+        }
     }
 
     #[test]

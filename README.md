@@ -205,3 +205,7 @@ cargo deny check
 ```
 
 See the [review policy](REVIEW_POLICY.md) for PR classification, proof, and merge requirements. Pull requests that add or change a visible widget or TUI view must include a README GIF or WebP captured from real program output.
+
+Apply and undo plans use Lunatui solid line borders. The command palette uses its native rounded solid frame, and Help fills the screen.
+
+![Real apply plan, Help and command palette](docs/media/solid-modal-borders.gif)
