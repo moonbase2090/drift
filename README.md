@@ -11,6 +11,7 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 - [User guide](docs/guide.md): what Drift tracks, how bases are found (including the first update), the screens and keys, resolving a conflict, the safety model, recovering from backups and uninstalling.
 - [Command reference](docs/cli.md): every command, flag and exit code.
 - [Bar widget](docs/widget.md).
+- [The first-update scenario](docs/first-update.md): a scripted walk through the first upgrade on a fresh install.
 - [Keys and mouse targets](docs/input-map.md).
 - [Feature map and interaction tests](docs/feature-map.md): every interaction and the test that drives it; [how the tests work](docs/testing.md).
 
@@ -33,6 +34,10 @@ In a tracked file's diff, choose the result and press `w` to review the real tra
 ![Empty Drift screen](docs/media/empty-screen.gif)
 
 ![Scanning](docs/media/scanning.gif)
+
+Background rescans keep the current tree on screen. Expanded folders, the selected path, marks and search/filter state survive the refreshed report; navigation remains available while scanning. If a selected path becomes hidden by a filter or search, selection moves to its nearest visible ancestor. A failed rescan keeps the previous rows visible with an inline error; writes wait for a successful rescan.
+
+![Tree navigation preserved during a background refresh](docs/media/tree-refresh.gif)
 
 `drift --snapshot` prints one 80×24 frame and does not take the terminal. Pass `--width` and `--height` together to print another size.
 
@@ -215,3 +220,7 @@ cargo deny check
 ```
 
 See the [review policy](REVIEW_POLICY.md) for PR classification, proof, and merge requirements. Pull requests that add or change a visible widget or TUI view must include a README GIF or WebP captured from real program output.
+
+Drift uses Lunatui v0.1.32. The existing rendering snapshots match the new release without changes. These frames come from the real wide diff rendering test.
+
+![Wide diff rendered with Lunatui v0.1.32](docs/media/lunatui-0.1.32.gif)

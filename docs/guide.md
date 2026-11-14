@@ -12,8 +12,8 @@ Omarchy copies starter files from the package into your home once; after that th
 |---|---|
 | unchanged | Your file equals the template. |
 | upstream changed | You have not touched the file, but the template moved on, or both changed and the changes merge cleanly (the row says `merges cleanly`). |
-| local override | You changed the file and the template did not, or both changed and there is no base to tell which side moved (the row then says `base unknown`). |
-| conflict | Both changed and at least one hunk overlaps, or the two sides cannot be merged at all (a side is not UTF-8 text or is larger than 1 MiB). |
+| local override | You changed the file and the template did not. When the file differs from the template and no base is recorded, Drift cannot tell which side moved, so it is listed here with `base unknown`. |
+| conflict | Both changed and at least one hunk overlaps, or the three-way merge cannot be computed because a side is not UTF-8 text or is larger than 1 MiB (when both sides differ from the base). |
 | user-only | A file of yours in a directory that holds templates, with no template of its own. |
 | missing | The template exists and your file does not (`deleted by you` when Drift knows any base for it: a reviewed one, a snapshot or the package cache). |
 
@@ -28,7 +28,7 @@ A three-way comparison needs the **base**: the template as it was when you last 
 3. **cache**: the previous package, read from pacman's package cache.
 4. **none**: no base could be found.
 
-Without a base, Drift compares your file with the template in two panes and cannot tell a change of yours from a change of upstream's. The row says `base unknown`, the diff opens as two panes, and `m` cannot merge it: the plan lists the file as skipped with "has no base to merge from".
+Without a base, Drift compares your file with the template in two panes and cannot tell a change of yours from a change of upstream's. The row says `base unknown`, the diff opens as two panes, and `m` cannot merge it: Drift says "Nothing to do: <path> has no base to merge from".
 
 **The first update.** On a fresh install there is no snapshot and the package cache holds no previous package, so most files start at `none`. The first time you resolve a file Drift records the template as its reviewed base, so from then on that file has an exact base. Install the pacman hooks (see [Package snapshot](../README.md#package-snapshot)) before the next upgrade and the files that differ from the template, and the files that are missing, get a snapshot base at the upgrade after that; a file identical to the template needs no base and stays at `(base: none)`.
 
@@ -41,7 +41,7 @@ Without a base, Drift compares your file with the template in two panes and cann
 | `j` `k`, Down, Up | move down and up |
 | `g` `G`, Home, End | first and last row |
 | PageDown, PageUp | half a pane down and up |
-| `h` `l`, Left, Right | collapse or expand a folder (on a file, go to its folder; on an open folder, go to its first child) |
+| `h` `l`, Left, Right | `h` and Left collapse a folder, or go from a file to its folder; `l` and Right expand a folder, or go to the first child of an open one, and do nothing on a file |
 | `Enter` | open the diff |
 | `/` | search as you type |
 | `1`–`6`, `0` | filter by status, clear the filter |
@@ -94,7 +94,7 @@ A file with no conflicts can skip the hunks: from the tree press `m` and read th
 - Before a file is changed its original is copied into the backup store (`~/.local/state/drift/backups/<transaction>/`). A transaction records every file it touched with the hashes before and after, in `manifest.json`.
 - Files are replaced atomically. Symlinks, files an app rewrites on its own, files without a template and files already equal to upstream are skipped with a reason.
 - Every configuration transaction can be undone with `drift undo`, and an undo is a transaction that can be undone in turn. A file that changed after the transaction is left alone unless you name it with `--force`.
-- Some writes are outside the plan and outside `drift undo`: `drift snapshot --pre` copies the template roots into `/var/lib/drift/snapshots/` (pacman runs it before an upgrade, and nothing else is touched), `drift notify on` and `drift notify off` save the notice setting in Drift's state directory, the upgrade stamp the post-transaction hook leaves in `/var/lib/drift` (delete `/var/lib/drift/updated` to remove it), and `drift widget install`, `sync` and `remove`, which keep their own record, and make a backup directory `~/.config/omarchy/plugins/.drift.status.bak.<time>/` only when an edited copy would be replaced (see the [bar widget](widget.md) page). Undo them by deleting the snapshot, running `notify` on or off again, or `widget remove`.
+- Some writes are outside the plan and outside `drift undo`: `drift snapshot --pre` copies the template roots into `/var/lib/drift/snapshots/` (pacman runs it before an upgrade, and nothing else is touched), `drift notify on` and `drift notify off` save the notice setting in Drift's state directory, the upgrade stamp the post-transaction hook leaves in `/var/lib/drift` (delete `/var/lib/drift/updated` to remove it), and `drift widget install`, `sync` and `remove`, which keep their own record, and make a backup directory `~/.config/omarchy/plugins/.drift.status.bak.<time>/` when they replace an edited copy, and when `remove` deletes a copy that differs from what Drift installed, even with `--yes` (see the [bar widget](widget.md) page). Undo them by deleting the snapshot, running `notify` on or off again, or `widget remove`.
 - Nothing is sent over the network. The only things Drift runs besides itself are `hyprctl configerrors` after a Hyprland write, `omarchy-notification-send` for the upgrade notice, `$EDITOR` when you ask to edit a hunk, and, for the widget commands, `omarchy-shell` to rescan plugins (all three), `omarchy plugin enable` and `omarchy bar put` (install only) and `omarchy plugin disable` (remove only).
 
 ## Recovering from backups
