@@ -22,12 +22,14 @@ pub const END: &str = "\x1b[F";
 pub const PAGE_UP: &str = "\x1b[5~";
 pub const PAGE_DOWN: &str = "\x1b[6~";
 
+const MAX_FRAMES: usize = 4096;
 const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
 const SYNC_END: &[u8] = b"\x1b[?2026l";
 
 struct Terminal {
     parser: vt100::Parser,
     shown: Vec<String>,
+    frames: Vec<Vec<String>>,
     pending: Vec<u8>,
     open: bool,
     closed: bool,
@@ -61,7 +63,14 @@ impl Terminal {
     }
 
     fn publish(&mut self) {
-        self.shown = self.rows();
+        let rows = self.rows();
+        if self.frames.last() != Some(&rows) {
+            if self.frames.len() == MAX_FRAMES {
+                self.frames.remove(0);
+            }
+            self.frames.push(rows.clone());
+        }
+        self.shown = rows;
     }
 
     fn feed(&mut self, bytes: &[u8]) {
@@ -201,6 +210,7 @@ impl Session {
             terminal: Mutex::new(Terminal {
                 parser: vt100::Parser::new(rows, columns, 0),
                 shown: vec![String::new(); usize::from(rows)],
+                frames: Vec::new(),
                 pending: Vec::new(),
                 open: false,
                 closed: false,
@@ -267,6 +277,20 @@ impl Session {
         self.wait_for(&format!("{needle:?} on the screen"), |screen| {
             screen.contains(needle)
         })
+    }
+
+    pub fn mark(&self) -> usize {
+        self.shared.lock().frames.len()
+    }
+
+    pub fn frames_since(&self, mark: usize) -> Vec<Screen> {
+        self.shared
+            .lock()
+            .frames
+            .iter()
+            .skip(mark)
+            .map(|rows| Screen { rows: rows.clone() })
+            .collect()
     }
 
     pub fn send(&mut self, bytes: &str) {

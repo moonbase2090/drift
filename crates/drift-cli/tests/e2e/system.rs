@@ -206,6 +206,10 @@ impl System {
         std::fs::read_to_string(self.home().join(".config").join(rel)).ok()
     }
 
+    pub fn write(&self, rel: &str, bytes: impl AsRef<[u8]>) {
+        self.root.overwrite(rel, bytes).unwrap();
+    }
+
     pub fn root(&self) -> &Path {
         self.root.path()
     }
