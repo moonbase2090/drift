@@ -1338,6 +1338,12 @@ mod tests {
     #[test]
     fn a_failed_apply_after_confirm_is_reported_and_not_hidden() {
         let world = World::build(true);
+        let held = std::fs::File::open(world.roots().omarchy_lock).unwrap();
+        use std::os::fd::AsRawFd;
+        assert_eq!(
+            unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
         let (plan, bytes) = apply_plan();
         let payloads: Vec<Payload<'_>> = bytes
             .iter()
