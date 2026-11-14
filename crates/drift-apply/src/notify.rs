@@ -296,7 +296,18 @@ mod tests {
             .materialize()
             .unwrap();
         let notice = notice_for(2).unwrap();
-        send(&root.path().join("bin/notify"), &notice).unwrap();
+        let program = root.path().join("bin/notify");
+        let mut tries = 0;
+        loop {
+            match send(&program, &notice) {
+                Ok(()) => break,
+                Err(error) if error.message.contains("Text file busy") && tries < 1000 => {
+                    tries += 1;
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("{}", error.message),
+            }
+        }
         let recorded = fs::read_to_string(root.path().join("bin/args")).unwrap();
         let mut expected = format!(
             "--app-name\n{APP_NAME}\n-u\n{}\n{}\n--exec\n",
