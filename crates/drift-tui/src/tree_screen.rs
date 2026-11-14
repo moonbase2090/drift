@@ -674,7 +674,7 @@ impl TreeScreen {
             self.scroll = 0;
             return;
         }
-        if self.follow {
+        if self.follow && self.view.selected() < total {
             let selected = self.view.selected();
             if selected < self.scroll {
                 self.scroll = selected;
@@ -742,12 +742,12 @@ impl TreeScreen {
             );
         }
 
-        let info_style = if self.error.is_some() && !self.view.entries().is_empty() {
+        let info_style = if let Some(outcome) = &self.outcome {
+            outcome.style(&cx, base)
+        } else if self.error.is_some() && !self.view.entries().is_empty() {
             base.fg(cx.token(Token::Fail))
         } else {
-            self.outcome
-                .as_ref()
-                .map_or(dim, |outcome| outcome.style(&cx, base))
+            dim
         };
         put(&mut cx, found.info, &self.info_text(), info_style);
         self.settle_scroll(usize::from(found.tree.height));
@@ -1255,6 +1255,37 @@ mod tests {
             "tree-collapsed-80x24" => include_str!("../snapshots/tree-collapsed-80x24.txt"),
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn a_cleared_selection_does_not_pull_the_scroll_to_an_unrelated_file() {
+        let mut entries = vec![entry(".config/gone/b.conf", Status::LocalOverride)];
+        entries.extend(
+            (0..20).map(|n| entry(&format!(".local/keep/{n:02}.conf"), Status::LocalOverride)),
+        );
+        let mut report = sample_report();
+        report.entries = entries;
+        let mut screen = TreeScreen::new(&report);
+        screen.view.set_status_filter(Some(Status::LocalOverride));
+        screen.view.set_query(".conf");
+        let row = screen
+            .view
+            .rows()
+            .iter()
+            .position(|row| {
+                row.entry
+                    .is_some_and(|id| screen.view.entries()[id].path == ".config/gone/b.conf")
+            })
+            .unwrap();
+        screen.view.select(row);
+        report.entries[0].status = Status::Conflict;
+        screen.replace_report(&report);
+        assert!(screen.view.selected_row().is_none());
+        screen.scroll = 1;
+        screen.follow = true;
+        screen.settle_scroll(4);
+        assert_eq!(screen.scroll, 1);
+        assert_eq!(key(&mut screen, KeyCode::Char('t')), None);
     }
 
     #[test]

@@ -217,3 +217,6 @@ A refused write shows a persistent red `NOT APPLIED` message with the reason. Op
 Apply and undo plans use Lunatui solid line borders. The command palette uses its native rounded solid frame, and Help fills the screen.
 
 ![Real apply plan, Help and command palette](docs/media/solid-modal-borders.gif)
+Drift uses Lunatui v0.1.32. The existing rendering snapshots match the new release without changes. These frames come from the real wide diff rendering test.
+
+![Wide diff rendered with Lunatui v0.1.32](docs/media/lunatui-0.1.32.gif)
