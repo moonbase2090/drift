@@ -525,6 +525,7 @@ impl Screen {
     }
 
     fn show(&mut self, text: &str) {
+        self.clear_outcome();
         if let Some(diff) = self.diff.as_mut() {
             diff.set_notice(text);
             return;
@@ -2058,6 +2059,23 @@ mod tests {
         assert_outcome_color(&mut screen, "NOT APPLIED:", Token::Fail);
         escape(&mut screen);
         assert!(notice(&screen).starts_with("NOT APPLIED:"));
+    }
+
+    #[test]
+    fn a_new_error_remains_visible_after_a_persistent_action_outcome() {
+        let (reader, _) = differing(true, false);
+        let mut screen = reader.with_resolver(Box::new(Fake {
+            log: Rc::new(RefCell::new(Log::default())),
+            fail_propose: false,
+            fail_apply: true,
+        }));
+        let _ = shown(&mut screen);
+        press(&mut screen, "jty");
+        assert!(notice(&screen).starts_with("NOT APPLIED:"));
+        enter(&mut screen);
+        assert!(screen.diff().is_none());
+        assert_eq!(notice(&screen), "the package database is unreadable");
+        assert!(shown(&mut screen).contains("the package database is unreadable"));
     }
 
     #[test]
