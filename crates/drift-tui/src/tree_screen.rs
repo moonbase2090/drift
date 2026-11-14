@@ -751,7 +751,11 @@ impl TreeScreen {
 
     fn info_text(&self) -> String {
         let mut parts = Vec::new();
-        if let Some(error) = &self.error {
+        if let Some(error) = self
+            .error
+            .as_ref()
+            .filter(|_| !self.view.entries().is_empty())
+        {
             parts.push(format!(
                 "Scan failed: {error}. Showing the previous report; rescan before writing."
             ));
