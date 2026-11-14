@@ -30,11 +30,11 @@ A three-way comparison needs the **base**: the template as it was when you last 
 
 Without a base, Drift compares your file with the template in two panes and cannot tell a change of yours from a change of upstream's. The row says `base unknown`, the diff opens as two panes, and merging is not offered for the file.
 
-**The first update.** On a fresh install there is no snapshot and the package cache holds no previous package, so most files start at `none`. The first time you resolve a file Drift records the template as its reviewed base, so from then on that file has an exact base. Install the pacman hooks (see [Package snapshot](../README.md#package-snapshot)) before the next upgrade and every tracked file gets a snapshot base at the upgrade after that.
+**The first update.** On a fresh install there is no snapshot and the package cache holds no previous package, so most files start at `none`. The first time you resolve a file Drift records the template as its reviewed base, so from then on that file has an exact base. Install the pacman hooks (see [Package snapshot](../README.md#package-snapshot)) before the next upgrade and the files that differ from the template, and the files that are missing, get a snapshot base at the upgrade after that; a file identical to the template needs no base and stays at `(base: none)`.
 
 ## The review screen
 
-`drift` with no arguments opens the review screen. It is read-only: opening Drift never writes configuration. The header counts every status and doubles as the filter buttons, the tree lists the files that need review (it opens only as far as the first one), and a summary pane shows the selected file's template, base, hashes and state.
+`drift` with no arguments opens the review screen. It is read-only: opening Drift never writes configuration. The header counts every status and doubles as the filter buttons, the tree lists every tracked file (it opens only as far as the first drifted or locally overridden one), and a summary pane shows the selected file's template, base, hashes and state.
 
 | Key | Action |
 |---|---|
@@ -90,8 +90,8 @@ A file with no conflicts can skip the hunks: from the tree press `m` and read th
 - Before a file is changed its original is copied into the backup store (`~/.local/state/drift/backups/<transaction>/`). A transaction records every file it touched with the hashes before and after, in `manifest.json`.
 - Files are replaced atomically. Symlinks, files an app rewrites on its own, files without a template and files already equal to upstream are skipped with a reason.
 - Every configuration transaction can be undone with `drift undo`, and an undo is a transaction that can be undone in turn. A file that changed after the transaction is left alone unless you name it with `--force`.
-- Some writes are outside the plan and outside `drift undo`: `drift snapshot --pre` copies the template roots into `/var/lib/drift/snapshots/` (pacman runs it before an upgrade, and nothing else is touched), `drift notify on` and `drift notify off` save the notice setting in Drift's state directory, the upgrade stamp the post-transaction hook leaves in `/var/lib/drift`, and `drift widget install`, `sync` and `remove`, which keep their own record and a timestamped backup next to a file they replace (see the [bar widget](widget.md) page). Undo them by deleting the snapshot, running `notify` on or off again, or `widget remove`.
-- Nothing is sent over the network. The only things Drift runs besides itself are `hyprctl configerrors` after a Hyprland write, `omarchy-notification-send` for the upgrade notice, and `$EDITOR` when you ask to edit a hunk.
+- Some writes are outside the plan and outside `drift undo`: `drift snapshot --pre` copies the template roots into `/var/lib/drift/snapshots/` (pacman runs it before an upgrade, and nothing else is touched), `drift notify on` and `drift notify off` save the notice setting in Drift's state directory, the upgrade stamp the post-transaction hook leaves in `/var/lib/drift` (delete `/var/lib/drift/updated` to remove it), and `drift widget install`, `sync` and `remove`, which keep their own record and a timestamped backup next to a file they replace (see the [bar widget](widget.md) page). Undo them by deleting the snapshot, running `notify` on or off again, or `widget remove`.
+- Nothing is sent over the network. The only things Drift runs besides itself are `hyprctl configerrors` after a Hyprland write, `omarchy-notification-send` for the upgrade notice, `$EDITOR` when you ask to edit a hunk, and, for `drift widget install`, `sync` and `remove`, `omarchy-shell` (to rescan plugins), `omarchy plugin enable` and `disable`, and `omarchy bar put`.
 
 ## Recovering from backups
 
@@ -111,4 +111,4 @@ Drift keeps everything it needs to put a file back.
 4. Remove the program. With the package, `sudo pacman -Rns omarchy-drift` removes the binary, the pacman hooks, the user units and the packaged plugin copy. If you installed by hand, delete the binary and whatever you copied, including the two hooks in `/usr/share/libalpm/hooks/` (`10-drift-snapshot.hook`, `20-drift-updated.hook`) if you added them. Either way, `/var/lib/drift/` (the template snapshots and the upgrade stamp) belongs to neither the package nor your home, so removing the package leaves it behind: delete it yourself with `sudo rm -r /var/lib/drift`.
 5. Optionally delete Drift's own data: `~/.local/state/drift` (backups, transaction records, notification setting) and `~/.local/share/drift` (recorded bases). Do this last: it is what undo reads, so after it Drift can no longer put files back.
 
-None of this touches your configuration files; they stay exactly as they are now.
+None of this changes the template files Drift tracked; they stay exactly as they are now. Steps 1 and 2 do remove what Drift added under `~/.config`: the menu row, the update hook and the widget copy.
