@@ -772,6 +772,12 @@ pub(crate) mod tests {
         let paths = scan_paths(&root);
         let mut roots = roots_for(&paths, root.path().join("runtime"));
         roots.omarchy_lock = root.path().join("home/.config/hypr/a.lua");
+        let held = std::fs::File::open(&roots.omarchy_lock).unwrap();
+        use std::os::fd::AsRawFd;
+        assert_eq!(
+            unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
         let env = Environment {
             paths: &paths,
             roots: &roots,

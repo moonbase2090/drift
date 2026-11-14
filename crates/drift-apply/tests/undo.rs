@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -720,13 +721,28 @@ fn a_tampered_or_missing_backup_blocks_the_undo() {
 }
 
 #[test]
+fn an_unlocked_persistent_update_lock_allows_undo() {
+    let fix = Fixture::new();
+    write_live(&fix.live(A), b"mine\n", 0o644);
+    do_apply(&fix, "txn-1", 1, &[edit(A, b"theirs\n", None)]).unwrap();
+    fs::write(fix.roots().omarchy_lock, b"").unwrap();
+    restored(do_undo(&fix, "txn-1", "undo-1"));
+    assert_eq!(fs::read(fix.live(A)).unwrap(), b"mine\n");
+    assert!(fix.roots().omarchy_lock.exists());
+}
+
+#[test]
 fn foreign_locks_and_our_lock_refuse_the_undo() {
     let fix = Fixture::new();
     write_live(&fix.live(A), b"mine\n", 0o644);
     do_apply(&fix, "txn-1", 1, &[edit(A, b"theirs\n", None)]).unwrap();
     let snapshot = tree(&fix);
 
-    fs::write(fix.root.join("runtime/omarchy-update.lock"), b"").unwrap();
+    let held = fs::File::create(fix.root.join("runtime/omarchy-update.lock")).unwrap();
+    assert_eq!(
+        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
     let error = undo(&fix.roots(), &request("txn-1", "undo-1")).unwrap_err();
     assert!(error.message.contains("omarchy"), "{}", error.message);
     assert!(
@@ -739,6 +755,7 @@ fn foreign_locks_and_our_lock_refuse_the_undo() {
         "{}",
         error.message
     );
+    drop(held);
     fs::remove_file(fix.root.join("runtime/omarchy-update.lock")).unwrap();
 
     fs::write(fix.root.join("pacman/db.lck"), b"").unwrap();
