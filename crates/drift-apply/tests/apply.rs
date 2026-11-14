@@ -1,4 +1,5 @@
 use std::fs::{self, File};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -339,6 +340,43 @@ fn an_override_replaces_a_symlink_node_and_a_volatile_file() {
 }
 
 #[test]
+fn an_unlocked_persistent_update_lock_allows_apply_and_preserves_the_backup() {
+    let fix = Fixture::new();
+    let path = "config/hypr/monitors.lua";
+    write_live(&fix.live(path), b"x\n", 0o644);
+    let lock = fix.roots().omarchy_lock;
+    fs::write(&lock, b"").unwrap();
+    let plan = one_plan(
+        planned(path, Some(BEFORE), Some(AFTER), Some(0o644), None),
+        &[],
+    );
+    apply_one(&fix, &plan, b"hi\n").unwrap();
+    assert_eq!(fs::read(fix.live(path)).unwrap(), b"hi\n");
+    assert_eq!(
+        fs::read(fix.root.join("state/backups/txn-7").join(path)).unwrap(),
+        b"x\n"
+    );
+    assert!(lock.exists());
+}
+
+#[test]
+fn an_invalid_update_lock_refuses_without_touching_the_file() {
+    let fix = Fixture::new();
+    let path = "config/hypr/monitors.lua";
+    write_live(&fix.live(path), b"x\n", 0o644);
+    fs::create_dir(fix.roots().omarchy_lock).unwrap();
+    let plan = one_plan(
+        planned(path, Some(BEFORE), Some(AFTER), Some(0o644), None),
+        &[],
+    );
+    let error = apply_one(&fix, &plan, b"hi\n").unwrap_err();
+    assert!(error.message.contains("not a regular file"));
+    assert!(error.applied.is_empty());
+    assert_eq!(fs::read(fix.live(path)).unwrap(), b"x\n");
+    assert!(!fix.root.join("state/backups").exists());
+}
+
+#[test]
 fn foreign_locks_and_our_lock_refuse_the_write() {
     let path = "config/hypr/monitors.lua";
     let cases = [
@@ -353,7 +391,13 @@ fn foreign_locks_and_our_lock_refuse_the_write() {
         if let Some(parent) = lock_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        File::create(&lock_path).unwrap();
+        let lock_file = File::create(&lock_path).unwrap();
+        if lock == "runtime/omarchy-update.lock" {
+            assert_eq!(
+                unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0
+            );
+        }
         let plan = one_plan(
             planned(path, Some(BEFORE), Some(AFTER), Some(0o644), None),
             &[],
