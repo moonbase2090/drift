@@ -186,8 +186,13 @@ pub fn merge_file(path: &str, base: &str, ours: &str, theirs: &str) -> Merge {
     let bk = crate::comparison_text(path, base);
     let ok = crate::comparison_text(path, ours);
     let tk = crate::comparison_text(path, theirs);
-    let ours_regions = regions(&lines(&bk), &lines(&ok));
-    let theirs_regions = regions(&lines(&bk), &lines(&tk));
+    let bk_lines = lines(&bk);
+    let ok_lines = lines(&ok);
+    let tk_lines = lines(&tk);
+    let ours_regions = regions(&bk_lines, &ok_lines);
+    let theirs_regions = regions(&bk_lines, &tk_lines);
+    let ours_keys = stable_side(&bk_lines, &ok_lines, &ours_regions);
+    let theirs_keys = stable_side(&bk_lines, &tk_lines, &theirs_regions);
     let ours_base = stable_side(&b, &o, &ours_regions);
     let theirs_base = stable_side(&b, &t, &theirs_regions);
     let groups = group(ours_regions, theirs_regions);
@@ -208,8 +213,8 @@ pub fn merge_file(path: &str, base: &str, ours: &str, theirs: &str) -> Merge {
             HunkKind::OursOnly
         } else if g.ours.is_empty() {
             HunkKind::TheirsOnly
-        } else if crate::comparison_text(path, &ours_text)
-            == crate::comparison_text(path, &theirs_text)
+        } else if side_text(&ours_keys, &ok_lines, &g.base, &g.ours)
+            == side_text(&theirs_keys, &tk_lines, &g.base, &g.theirs)
         {
             HunkKind::BothSame
         } else {
@@ -367,6 +372,29 @@ mod tests {
         assert_eq!(merged.hunks().next().unwrap().kind, HunkKind::TheirsOnly);
         assert_eq!(merged.auto().unwrap(), ours.replace(": 1", ": 2"));
         assert_eq!(merge_file("a.conf", base, ours, base).hunk_count(), 1);
+    }
+
+    #[test]
+    fn json_hunks_keep_the_whole_file_comment_and_invalid_escape_context() {
+        for (base, ours, theirs) in [
+            (
+                "/*\n\"old\"\n*/\n{}\n",
+                "/*\n\"\\u2014\"\n*/\n{}\n",
+                "/*\n\"—\"\n*/\n{}\n",
+            ),
+            (
+                "{\n\"x\":\"old\",\n\"bad\":\"\\q\"\n}\n",
+                "{\n\"x\":\"\\u2014\",\n\"bad\":\"\\q\"\n}\n",
+                "{\n\"x\":\"—\",\n\"bad\":\"\\q\"\n}\n",
+            ),
+        ] {
+            let merged = merge_file("a.jsonc", base, ours, theirs);
+            assert_eq!(merged.conflict_count(), 1);
+            assert_eq!(
+                merged.hunks().next().unwrap().ours,
+                ours.lines().nth(1).unwrap().to_string() + "\n"
+            );
+        }
     }
 
     #[test]
