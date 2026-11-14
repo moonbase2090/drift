@@ -51,6 +51,10 @@ impl drift_tui::Resolver for NoResolver {
         Err("Writing is unavailable in this example.".to_string())
     }
 
+    fn ignore(&mut self, _: &[String]) -> Result<String, String> {
+        Err("not used".to_string())
+    }
+
     fn apply(&mut self, _: &drift_tui::Proposal) -> Result<String, String> {
         Err("not used".to_string())
     }
