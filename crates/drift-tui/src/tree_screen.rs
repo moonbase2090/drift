@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use lunatui_core::symbols::line;
 use lunatui_core::{clip_display_prefix, width, Attrs, ClusterTable, Grid, Rect, Style};
 use lunatui_term::{Event, KeyCode, KeyKind, MouseButton, MouseKind, Scroll};
 use lunatui_theme::Token;
@@ -703,9 +704,9 @@ impl TreeScreen {
         if let Some(rect) = found.divider.filter(|_| self.panel().is_none()) {
             let style = dim;
             if rect.width == 1 {
-                cx.fill(rect, style, '|');
+                cx.fill(rect, style, line::NORMAL.vertical.chars().next().unwrap());
             } else {
-                cx.fill(rect, style, '-');
+                cx.fill(rect, style, line::NORMAL.horizontal.chars().next().unwrap());
             }
         }
         let overflow = width(&self.info_text()) > usize::from(found.info.width);
@@ -2200,7 +2201,7 @@ mod tests {
             let shown = text(&mut screen, columns, rows);
             let rebuilt: String = shown
                 .lines()
-                .map(|line| line.rsplit('|').next().unwrap_or(line))
+                .map(|line| line.rsplit(line::NORMAL.vertical).next().unwrap_or(line))
                 .collect::<String>()
                 .split_whitespace()
                 .collect();
