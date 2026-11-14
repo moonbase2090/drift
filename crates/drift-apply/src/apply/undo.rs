@@ -93,12 +93,7 @@ pub(super) fn undo_locked<T>(
     before: impl FnOnce() -> Result<T, ApplyError>,
     after: impl FnOnce(T, Result<UndoOutcome, ApplyError>) -> Result<UndoOutcome, ApplyError>,
 ) -> Result<UndoOutcome, ApplyError> {
-    if node_exists(&roots.omarchy_lock) {
-        return Err(bare(format!(
-            "omarchy update lock is held ({})",
-            roots.omarchy_lock.display()
-        )));
-    }
+    let _update_lock = update_lock(&roots.omarchy_lock)?;
     if node_exists(&roots.pacman_lock) {
         return Err(bare(format!(
             "pacman database lock is held ({})",
