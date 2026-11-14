@@ -116,6 +116,24 @@ fn resizing_across_a_width_boundary_follows_the_width_and_keeps_the_hunk() {
     assert_eq!(current_hunk(&again), Some(2));
 }
 
+fn layout_at(columns: u16) -> (System, Session) {
+    let system = rules();
+    let session = open_diff(&system, "rules.lua", (columns, 24));
+    (system, session)
+}
+
+#[test]
+fn the_layout_edges_are_at_exactly_200_and_100_columns() {
+    let at_200 = layout_at(200);
+    at_200.1.wait_for("five columns at 200", is_four);
+    let at_199 = layout_at(199);
+    at_199.1.wait_for("two panes at 199", is_two);
+    let at_100 = layout_at(100);
+    at_100.1.wait_for("two panes at 100", is_two);
+    let at_99 = layout_at(99);
+    at_99.1.wait_for("a stacked column at 99", is_stacked);
+}
+
 #[test]
 fn n_and_p_select_the_next_and_the_previous_hunk() {
     let system = rules();
@@ -461,4 +479,42 @@ fn the_write_hint_opens_the_plan_for_the_result() {
     session.click_text("[W] Write");
     let plan = session.wait_for("the plan", |screen| screen.contains("Apply plan"));
     assert!(plan.contains(".config/hypr/bindings.lua"));
+}
+
+#[test]
+fn clicking_both_in_the_header_keeps_both_sides() {
+    let system = bindings();
+    let mut session = open_diff(&system, "bindings.lua", (120, 24));
+    session.click_text("[b] both");
+    session.wait_for("both sides in the result", |screen| {
+        screen.contains("+1 bind = SUPER, A, seven") && screen.contains("+2 bind = SUPER, A, nine")
+    });
+}
+
+#[test]
+fn clicking_edit_in_the_header_runs_the_editor() {
+    let system = bindings();
+    let mut session = open_diff(&system, "bindings.lua", (120, 24));
+    session.click_text("[e] edit");
+    session.wait_for("the edited text in the result", |screen| {
+        screen.contains("bind = SUPER, A, edited")
+    });
+}
+
+#[test]
+fn the_stacked_column_follows_the_selected_hunk() {
+    let system = rules();
+    let mut session = open_diff(&system, "rules.lua", (80, 12));
+    session.wait_for("the first hunk", |screen| {
+        is_stacked(screen) && screen.contains("< ours rule = a-ours")
+    });
+    session.press("n");
+    let second = session.wait_for("the second hunk", |screen| {
+        screen.contains("< ours rule = z-ours")
+    });
+    assert!(!second.contains("rule = a-ours"));
+    session.press("p");
+    session.wait_for("the first hunk again", |screen| {
+        screen.contains("< ours rule = a-ours")
+    });
 }

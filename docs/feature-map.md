@@ -98,7 +98,7 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | Id | Interaction | Tests |
 |---|---|---|
 | `diff.quit` | `q` leaves the diff for the tree | `diff::q_leaves_the_diff_for_the_tree_and_the_quit_hint_does_the_same` |
-| `diff.next` | `n` selects the next hunk | `diff::n_and_p_select_the_next_and_the_previous_hunk`, `diff::clicking_the_next_and_previous_hunk_hints_moves_between_hunks`, `diff::moving_to_a_hunk_scrolls_the_panes_to_it` |
+| `diff.next` | `n` selects the next hunk | `diff::n_and_p_select_the_next_and_the_previous_hunk`, `diff::clicking_the_next_and_previous_hunk_hints_moves_between_hunks`, `diff::moving_to_a_hunk_scrolls_the_panes_to_it`, `diff::the_stacked_column_follows_the_selected_hunk` |
 | `diff.previous` | `p` selects the previous hunk | `diff::n_and_p_select_the_next_and_the_previous_hunk`, `diff::clicking_the_next_and_previous_hunk_hints_moves_between_hunks` |
 | `diff.next-conflict` | `N` jumps to the next unresolved conflict and says when there is none | `diff::capital_n_jumps_to_the_next_unresolved_conflict_and_says_when_there_is_none` |
 | `diff.previous-conflict` | `P` jumps to the previous unresolved conflict | `diff::capital_p_jumps_to_the_previous_unresolved_conflict_and_says_when_there_is_none` |
@@ -111,8 +111,8 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `diff.up` | Up scrolls back | `diff::down_and_up_scroll_every_pane_together`, `diff::the_mouse_wheel_scrolls_the_panes` |
 | `diff.mine` | `o` takes my side for the hunk | `diff::o_keeps_mine_for_the_hunk_and_the_plan_writes_nothing`, `diff::the_choice_keys_have_click_targets_in_the_header` |
 | `diff.theirs` | `t` takes upstream's side for the hunk | `diff::t_takes_theirs_for_the_hunk_and_write_puts_it_on_disk_with_a_backup_of_the_original`, `diff::the_choice_keys_have_click_targets_in_the_header` |
-| `diff.both` | `b` takes both sides | `diff::b_keeps_both_sides_in_the_result_and_write_puts_both_on_disk` |
-| `diff.edit` | `e` edits the hunk | `diff::e_hands_the_hunk_to_the_editor_and_write_puts_what_it_saved_on_disk` |
+| `diff.both` | `b` takes both sides | `diff::b_keeps_both_sides_in_the_result_and_write_puts_both_on_disk`, `diff::clicking_both_in_the_header_keeps_both_sides` |
+| `diff.edit` | `e` edits the hunk | `diff::e_hands_the_hunk_to_the_editor_and_write_puts_what_it_saved_on_disk`, `diff::clicking_edit_in_the_header_runs_the_editor` |
 | `diff.write` | `w` writes the result | `diff::t_takes_theirs_for_the_hunk_and_write_puts_it_on_disk_with_a_backup_of_the_original`, `diff::the_write_hint_opens_the_plan_for_the_result` |
 
 ## Plan dialog
@@ -131,7 +131,7 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 |---|---|---|
 | `window.resize` | resizing keeps the screen, the selection and an open dialog and repaints at the new size | planned |
 | `window.resize-diff` | resizing across a width boundary switches the diff layout and keeps the selected hunk | `diff::resizing_across_a_width_boundary_follows_the_width_and_keeps_the_hunk` |
-| `window.layouts` | the diff shows five columns (hunks, base, ours, theirs, result) from 200 columns, ours and theirs side by side with the result underneath from 100 columns, and one stacked column below that | `diff::from_200_columns_the_diff_opens_in_five_columns`, `diff::from_100_columns_the_diff_opens_with_ours_and_theirs_side_by_side_and_the_result_below`, `diff::below_100_columns_the_diff_stacks_in_one_column` |
+| `window.layouts` | the diff shows five columns (hunks, base, ours, theirs, result) from 200 columns, ours and theirs side by side with the result underneath from 100 columns, and one stacked column below that | `diff::from_200_columns_the_diff_opens_in_five_columns`, `diff::from_100_columns_the_diff_opens_with_ours_and_theirs_side_by_side_and_the_result_below`, `diff::below_100_columns_the_diff_stacks_in_one_column`, `diff::the_layout_edges_are_at_exactly_200_and_100_columns` |
 | `theme.dark` | the dark theme draws legible status colours | planned |
 | `theme.light` | the light theme drawn from the Omarchy colours file is legible | planned |
 
