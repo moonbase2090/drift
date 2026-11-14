@@ -49,9 +49,9 @@ pub fn paths_from(source: SourcePaths, lookup: &dyn Fn(&str) -> Option<OsString>
         resolve: ResolvePaths {
             share: drift_share(&data_home),
             state: drift_state(&state_home),
-            snapshots: PathBuf::from("/var/lib/drift/snapshots"),
-            cache: PathBuf::from("/var/cache/pacman/pkg"),
-            log: PathBuf::from("/var/log/pacman.log"),
+            snapshots: drift_source::system_path("/var/lib/drift/snapshots"),
+            cache: drift_source::system_path("/var/cache/pacman/pkg"),
+            log: drift_source::system_path("/var/log/pacman.log"),
         },
         source,
     }
