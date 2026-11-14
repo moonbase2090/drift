@@ -2,6 +2,8 @@
 set -euo pipefail
 
 BIN=${DRIFT_BIN:?set DRIFT_BIN to the drift binary}
+[ -f "$BIN" ] && [ -x "$BIN" ] || { echo "FAIL: DRIFT_BIN is not an executable file: $BIN" >&2; exit 1; }
+BIN=$(cd "$(dirname "$BIN")" && pwd -P)/$(basename "$BIN")
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 PKG=$HERE/packaging
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/drift-first-update.XXXXXX")
