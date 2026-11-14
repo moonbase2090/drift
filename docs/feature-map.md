@@ -22,8 +22,8 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `tree.expand` | `l` and Right expand a folder, or go to its first child | `tree::h_and_left_collapse_a_folder_and_l_and_right_expand_it`, `tree::h_on_a_file_goes_to_its_folder_and_l_on_an_open_folder_goes_to_its_first_child` |
 | `tree.top` | `g` and Home jump to the first row | `tree::g_and_home_jump_to_the_first_row_and_capital_g_and_end_to_the_last` |
 | `tree.bottom` | `G` and End jump to the last row | `tree::g_and_home_jump_to_the_first_row_and_capital_g_and_end_to_the_last` |
-| `tree.page-down` | PageDown moves by a screenful | `tree::page_down_and_page_up_move_by_a_screenful` |
-| `tree.page-up` | PageUp moves back by a screenful | `tree::page_down_and_page_up_move_by_a_screenful` |
+| `tree.page-down` | PageDown moves down by half the height of the tree pane | `tree::page_down_and_page_up_move_by_half_the_tree_pane` |
+| `tree.page-up` | PageUp moves up by half the height of the tree pane | `tree::page_down_and_page_up_move_by_half_the_tree_pane` |
 | `tree.open` | Enter opens a file's diff and toggles a folder; a click on a row selects it | `tree::enter_opens_the_diff_of_a_file_and_toggles_a_folder`, `tree::clicking_a_row_selects_it_and_clicking_the_caret_toggles_the_folder` |
 | `tree.search` | `/` opens a search that narrows the tree as you type, Backspace widens it, Enter keeps it, Esc clears it, and a no-match search shows 0 files | `filter::slash_opens_a_search_that_narrows_the_tree_as_you_type`, `filter::backspace_widens_the_search_again`, `filter::enter_keeps_the_search_and_leaves_the_input_and_escape_clears_it`, `filter::a_search_with_no_match_says_so_and_escape_recovers`, `filter::clicking_the_search_hint_opens_the_search` |
 | `tree.filter-unchanged` | `1` shows only unchanged files | `filter::the_number_keys_filter_the_tree_by_status_and_zero_clears_the_filter` |
@@ -35,7 +35,7 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `tree.clear-filter` | `0` clears the status filter | `filter::the_number_keys_filter_the_tree_by_status_and_zero_clears_the_filter` |
 | `tree.mark` | Space marks or unmarks the row (a folder marks everything under it, shown as `[-]` when partly marked); a click on the checkbox marks that file | `filter::space_marks_the_selected_folder_and_everything_under_it`, `filter::clicking_a_checkbox_marks_that_row` |
 | `tree.mark-all` | `a` marks every file in view, which a filter narrows | `filter::a_marks_everything_in_view_and_escape_clears_the_marks`, `filter::a_marks_only_what_the_filter_shows` |
-| `tree.back` | Esc clears the search, then the filter, then the marks | `filter::escape_clears_the_search_the_filter_and_the_marks_one_after_another`, `filter::a_marks_everything_in_view_and_escape_clears_the_marks` |
+| `tree.back` | Esc clears the search, then the filter, then the marks, one per press | `filter::escape_clears_the_search_then_the_filter_then_the_marks`, `filter::a_marks_everything_in_view_and_escape_clears_the_marks` |
 | `tree.keep` | `o` opens the keep-mine plan for the marked files or the selected one | planned |
 | `tree.take` | `t` opens the take-upstream plan | planned |
 | `tree.merge` | `m` opens the merge plan for a file that merges cleanly | planned |
@@ -52,7 +52,7 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `state.conflict` | a conflict is listed with `✗ conflict` and opens the four-pane diff | planned |
 | `state.user-only` | a file with no template is listed with `+ user-only` and is never written | planned |
 | `state.missing` | a template with no file is listed with `? missing`, and take creates the file | planned |
-| `badge.merges-cleanly` | `[merges cleanly]` marks a conflict whose edits touch different lines, and merge writes it | planned |
+| `badge.merges-cleanly` | `[merges cleanly]` marks an `upstream changed` file you also edited on different lines, and merge writes the combined text | planned |
 | `badge.base-unknown` | `[base unknown]` marks a file whose reviewed base is missing, and the diff says so | planned |
 | `badge.deleted-by-you` | `[deleted by you]` marks a file you removed that upstream changed | planned |
 
@@ -89,8 +89,8 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `history.up` | `k` and Up move up | planned |
 | `history.top` | `g` and Home select the newest | planned |
 | `history.bottom` | `G` and End select the oldest | planned |
-| `history.page-down` | PageDown moves by a screenful | planned |
-| `history.page-up` | PageUp moves back by a screenful | planned |
+| `history.page-down` | PageDown moves down by a page of rows | planned |
+| `history.page-up` | PageUp moves up by a page of rows | planned |
 
 ## Diff
 

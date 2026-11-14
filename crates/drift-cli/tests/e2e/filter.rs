@@ -165,7 +165,17 @@ fn a_marks_only_what_the_filter_shows() {
     session.press("4");
     session.wait_for_text("filter: conflict");
     session.press("a");
-    session.wait_for_text("1 marked");
+    let marked = session.wait_for("one marked", |screen| screen.contains("1 marked"));
+    session.press("0");
+    let all = session.wait_for("the filter cleared", |screen| !screen.contains("filter:"));
+    assert_eq!(
+        mark_of(&all, "bindings.lua"),
+        Some('x'),
+        "{}",
+        marked.text()
+    );
+    assert_eq!(mark_of(&all, "looknfeel.lua"), Some(' '));
+    assert_eq!(mark_of(&all, "input.lua"), Some(' '));
 }
 
 #[test]
@@ -180,19 +190,28 @@ fn clicking_a_checkbox_marks_that_row() {
 }
 
 #[test]
-fn escape_clears_the_search_the_filter_and_the_marks_one_after_another() {
+fn escape_clears_the_search_then_the_filter_then_the_marks() {
     let (_system, mut session) = opened();
     session.press("a");
+    session.wait_for_text("8 marked");
     session.press("4");
-    session.wait_for("filter and marks", |screen| {
-        screen.contains("filter: conflict") && screen.contains("marked")
+    session.wait_for_text("filter: conflict");
+    session.press("/");
+    session.press("b");
+    session.press(ENTER);
+    let all = session.wait_for("search, filter and marks together", |screen| {
+        screen.contains("search: b") && !screen.contains("search: b_")
     });
+    assert!(all.contains("filter: conflict"));
+    assert!(all.contains("8 marked"));
     session.press(ESC);
-    session.wait_for("something cleared", |screen| {
-        !screen.contains("filter: conflict") || !screen.contains("marked")
-    });
+    let first = session.wait_for("the search cleared", |screen| !screen.contains("search:"));
+    assert!(first.contains("filter: conflict"), "{}", first.text());
+    assert!(first.contains("8 marked"), "{}", first.text());
     session.press(ESC);
-    session.wait_for("everything cleared", |screen| {
-        !screen.contains("filter:") && !screen.contains("marked")
-    });
+    let second = session.wait_for("the filter cleared", |screen| !screen.contains("filter:"));
+    assert!(second.contains("8 marked"), "{}", second.text());
+    session.press(ESC);
+    let third = session.wait_for("the marks cleared", |screen| !screen.contains("marked"));
+    assert!(third.contains("8 of 8 files"));
 }

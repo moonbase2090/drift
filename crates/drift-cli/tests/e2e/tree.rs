@@ -109,19 +109,34 @@ fn g_and_home_jump_to_the_first_row_and_capital_g_and_end_to_the_last() {
 }
 
 #[test]
-fn page_down_and_page_up_move_by_a_screenful() {
-    let system = System::world();
-    let mut session = system.launch(&[], (120, 12));
-    session.wait_for_text("looknfeel.lua");
-    session.press(PAGE_DOWN);
-    let moved = session.wait_for("selection to leave the first row", |screen| {
-        !selected_is(screen, ".config/")
-    });
-    assert!(!selected(&moved).is_empty());
-    session.press(PAGE_UP);
-    session.wait_for("selection back on the first row", |screen| {
-        selected_is(screen, ".config/")
-    });
+fn page_down_and_page_up_move_by_half_the_tree_pane() {
+    for (height, step) in [(12_u16, 4), (16, 6), (20, 8)] {
+        let system = System::world();
+        let mut session = system.launch(&[], (120, height));
+        session.wait_for_text("looknfeel.lua");
+        let rows = [
+            "hypr/",
+            "autostart.lua",
+            "bindings.lua",
+            "input.lua",
+            "looknfeel.lua",
+            "mine.lua",
+            "monitors.lua",
+            "windows.lua",
+            "waybar/",
+        ];
+        session.press(PAGE_DOWN);
+        let target = rows[step - 1];
+        session.wait_for(
+            &format!("{target} after one page at height {height}"),
+            |screen| selected_is(screen, target),
+        );
+        session.press(PAGE_UP);
+        session.wait_for(
+            &format!("the first row after paging back at height {height}"),
+            |screen| selected_is(screen, ".config/"),
+        );
+    }
 }
 
 #[test]
