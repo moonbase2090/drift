@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -137,15 +138,8 @@ fn apply_locked(
     request: &Request<'_>,
     committed: &mut dyn FnMut(&ApplyReport),
 ) -> Result<ApplyReport, ApplyError> {
-    if node_exists(&roots.omarchy_lock) {
-        return Err(refused(
-            request.plan,
-            format!(
-                "omarchy update lock is held ({})",
-                roots.omarchy_lock.display()
-            ),
-        ));
-    }
+    let _update_lock =
+        update_lock(&roots.omarchy_lock).map_err(|error| refused(request.plan, error.message))?;
     if node_exists(&roots.pacman_lock) {
         return Err(refused(
             request.plan,
@@ -218,6 +212,36 @@ fn finish(
     }
     let pruned = remove_transactions(&roots.state, plan.prune())?;
     Ok(ApplyReport { applied, pruned })
+}
+
+fn update_lock(path: &Path) -> Result<Option<File>, ApplyError> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(bare_io(path, source)),
+    };
+    if !file
+        .metadata()
+        .map_err(|source| bare_io(path, source))?
+        .is_file()
+    {
+        return Err(bare(format!(
+            "cannot check omarchy update lock ({}): not a regular file",
+            path.display()
+        )));
+    }
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(Some(file));
+    }
+    let source = std::io::Error::last_os_error();
+    if source.kind() == std::io::ErrorKind::WouldBlock {
+        Err(bare(format!(
+            "omarchy update lock is held ({})",
+            path.display()
+        )))
+    } else {
+        Err(bare_io(path, source))
+    }
 }
 
 struct DriftLock {
