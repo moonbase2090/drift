@@ -9,7 +9,7 @@ drift widget install --dry-run
 drift widget install
 ```
 
-`install` copies the `plugin/` folder to `~/.config/omarchy/plugins/drift.status`, rescans the plugins, enables the widget and puts it on the bar. `--dry-run` shows the files and the commands first, and `--no-place` skips the bar. After a package upgrade `drift widget sync` refreshes the copy; if you edited it, Drift asks (`--force` to replace it, with a backup) instead of overwriting. `drift widget remove` disables the widget and deletes your copy. All of this is in the [command reference](cli.md#bar-widget).
+`install` copies the `plugin/` folder to `~/.config/omarchy/plugins/drift.status`, rescans the plugins, enables the widget and puts it on the bar. `--dry-run` shows the files and the commands first, and `--no-place` skips the bar. After a package upgrade `drift widget sync` refreshes the copy; if you edited it, Drift asks (`--force` to replace it, with a backup) instead of overwriting. `drift widget remove` disables the widget and deletes your copy; if the copy differs from what Drift installed, it first saves a `.drift.status.bak.<time>/` backup, even with `--yes`. All of this is in the [command reference](cli.md#bar-widget).
 
 If `drift` is missing, the widget says "Drift missing" with a pointer to the install steps; if its version does not match the widget it says "Drift mismatch" and what to update; if `drift status --bar` fails it says "Drift error". It never installs anything.
 

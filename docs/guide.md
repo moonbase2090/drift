@@ -28,7 +28,7 @@ A three-way comparison needs the **base**: the template as it was when you last 
 3. **cache**: the previous package, read from pacman's package cache.
 4. **none**: no base could be found.
 
-Without a base, Drift compares your file with the template in two panes and cannot tell a change of yours from a change of upstream's. The row says `base unknown`, the diff opens as two panes, and `m` cannot merge it: Drift says "Nothing to do: <path> has no base to merge from".
+Without a base, Drift compares your file with the template in two panes and cannot tell a change of yours from a change of upstream's. The row says `base unknown`, the diff opens as two panes (stacked below 100 columns), and `m` cannot merge it: Drift says "Nothing to do: <path> has no base to merge from".
 
 **The first update.** On a fresh install there is no snapshot and the package cache holds no previous package, so most files start at `none`. The first time you resolve a file Drift records the template as its reviewed base, so from then on that file has an exact base. Install the pacman hooks (see [Package snapshot](../README.md#package-snapshot)) before the next upgrade and the files that differ from the template, and the files that are missing, get a snapshot base at the upgrade after that; a file identical to the template needs no base and stays at `(base: none)`.
 
@@ -41,13 +41,13 @@ Without a base, Drift compares your file with the template in two panes and cann
 | `j` `k`, Down, Up | move down and up |
 | `g` `G`, Home, End | first and last row |
 | PageDown, PageUp | half a pane down and up |
-| `h` `l`, Left, Right | `h` and Left collapse a folder, or go from a file to its folder; `l` and Right expand a folder, or go to the first child of an open one, and do nothing on a file |
+| `h` `l`, Left, Right | `h` and Left collapse an open folder, or go from a file or a collapsed folder to its parent; `l` and Right expand a folder, or go to the first child of an open one, and do nothing on a file |
 | `Enter` | open the diff |
 | `/` | search as you type |
 | `1`–`6`, `0` | filter by status, clear the filter |
 | `Space`, `a` | mark a file, mark everything in view |
 | `o` `t` `m` | keep mine, take upstream, merge (act on the marked files or the selection) |
-| `i` | ignore the selected file |
+| `i` | not wired up yet: the key does nothing today |
 | Esc | clear the search, then the filter, then the marks |
 | `H` | history |
 | `u` | undo the newest transaction |
