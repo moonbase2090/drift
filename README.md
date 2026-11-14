@@ -213,3 +213,7 @@ See the [review policy](REVIEW_POLICY.md) for PR classification, proof, and merg
 A refused write shows a persistent red `NOT APPLIED` message with the reason. Opening the diff keeps that message visible and labels its result as a preview. A successful action names the changed paths in green and the next scan updates their status. Update-lock diagnostics distinguish an unlocked leftover file from a lock that is actually held.
 
 ![A refused take remains visible in the tree and diff, then succeeds after unlocking](docs/media/action-feedback.gif)
+
+Apply and undo plans use Lunatui solid line borders. The command palette uses its native rounded solid frame, and Help fills the screen.
+
+![Real apply plan, Help and command palette](docs/media/solid-modal-borders.gif)
