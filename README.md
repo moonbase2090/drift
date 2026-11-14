@@ -6,6 +6,15 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 
 **Status:** read-only scan, status and file diff commands are available. The review screen scans on a worker thread and shows the result as a tree. The product brief is `docs/PRD.md`.
 
+## Documentation
+
+- [User guide](docs/guide.md): what Drift tracks, how bases are found (including the first update), the screens and keys, resolving a conflict, the safety model, recovering from backups and uninstalling.
+- [Command reference](docs/cli.md): every command, flag and exit code.
+- [Bar widget](docs/widget.md).
+- [Keys and mouse targets](docs/input-map.md).
+
+The commands in these pages are run by a test against a fixture system.
+
 ## Install
 
 The package name is `omarchy-drift`. Follow [the signed pacman repository instructions](docs/install.md) to verify the public key and install it. [Release preparation and local signing tests](docs/releasing.md) are documented separately. AUR publishing is planned for later.
@@ -148,7 +157,7 @@ matching `status`. These commands write no configuration or state.
 
 ```sh
 drift resolve .config/hypr/monitors.lua --keep
-drift resolve .config/hypr/a.lua .config/waybar/style.css --upstream --dry-run
+drift resolve .config/hypr/hyprland.conf .config/waybar/style.css --upstream --dry-run
 drift resolve "$HOME/.config/hypr/looknfeel.lua" --merge --yes
 ```
 
@@ -166,8 +175,8 @@ Symlinks, files an app rewrites, files without a template and files already equa
 drift history
 drift history --json
 drift undo --dry-run
-drift undo resolve-1794539706581 --yes
-drift undo --force .config/hypr/a.lua
+drift undo <transaction> --yes
+drift undo --force .config/waybar/config.jsonc --dry-run
 ```
 
 `history` lists the transactions Drift has written, newest first: id, time, package version, file count and what was done. `undo` previews what undoing a transaction (the newest by default) would restore or remove, and writes only after you answer `y`; `--yes` skips the question, `--dry-run` only prints the preview, and without a terminal nothing is written unless `--yes` is given. Undoing also puts back the reviewed bases the transaction replaced, so an undone take upstream reads as upstream changed again and an undone keep mine is no longer acknowledged. The undo is a transaction of its own and can be undone in turn.
@@ -190,7 +199,7 @@ After that upgrade, a PostTransaction hook writes a UTC stamp to `/var/lib/drift
 
 Rust 1.99.1, pinned by `rust-toolchain.toml`. From this repository:
 
-```sh
+```bash
 cargo test
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings

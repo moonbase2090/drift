@@ -55,7 +55,7 @@ fn roots_from(lookup: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<Roo
         live: config.join("omarchy"),
         state: state.join("drift"),
         omarchy_lock: runtime.join("omarchy-update.lock"),
-        pacman_lock: PathBuf::from("/var/lib/pacman/db.lck"),
+        pacman_lock: drift_source::system_path("/var/lib/pacman/db.lck"),
     })
 }
 

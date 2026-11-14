@@ -127,6 +127,74 @@ pub fn feature_violations(manifest: &str) -> Vec<String> {
         .collect()
 }
 
+pub struct Identifier {
+    pub line: usize,
+    pub what: String,
+}
+
+const SEAT: &str = concat!("omarchy.", "seat-");
+
+const ALLOWED_MAIL_DOMAINS: [&str; 4] = [
+    "users.noreply.github.com",
+    "example.com",
+    "example.org",
+    "example.net",
+];
+
+pub fn identifier_violations(text: &str) -> Vec<Identifier> {
+    let mut found = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let bytes = line.as_bytes();
+        let mut at = 0;
+        while let Some(offset) = line[at..].find("DR-") {
+            let start = at + offset;
+            let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+            let digits = bytes[start + 3..]
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+            if before_ok && digits > 0 {
+                found.push(Identifier {
+                    line: index + 1,
+                    what: line[start..start + 3 + digits].to_string(),
+                });
+            }
+            at = start + 3;
+        }
+        if let Some(start) = line.find(SEAT) {
+            found.push(Identifier {
+                line: index + 1,
+                what: line[start..]
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string(),
+            });
+        }
+        for word in line.split(|c: char| c.is_whitespace() || "<>()\"',;`[]".contains(c)) {
+            let Some((local, domain)) = word.split_once('@') else {
+                continue;
+            };
+            let domain = domain.trim_end_matches('.');
+            let plausible = !local.is_empty()
+                && local
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "._%+-".contains(c))
+                && domain.contains('.')
+                && domain
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".-".contains(c));
+            if plausible && !ALLOWED_MAIL_DOMAINS.contains(&domain) {
+                found.push(Identifier {
+                    line: index + 1,
+                    what: word.to_string(),
+                });
+            }
+        }
+    }
+    found
+}
+
 pub fn comment_violations(source: &str) -> Vec<usize> {
     scan(source).comment_lines
 }
@@ -140,6 +208,37 @@ mod tests {
             .into_iter()
             .map(|v| v.what)
             .collect()
+    }
+
+    #[test]
+    fn tracker_identifiers_are_flagged() {
+        let (ticket, other, seat) = (
+            "D".to_string() + "R-52",
+            "D".to_string() + "R-12",
+            "omarchy.".to_string() + "seat-1",
+        );
+        let text = format!(
+            "fixes {ticket} and ADR-7\nsee {seat}\nD{}\nFDR-9 {other}.",
+            "R-"
+        );
+        let got = identifier_violations(&text);
+        let whats: Vec<&str> = got.iter().map(|item| item.what.as_str()).collect();
+        assert_eq!(whats, [ticket.as_str(), seat.as_str(), other.as_str()]);
+        assert_eq!(got[0].line, 1);
+        assert_eq!(got[1].line, 2);
+        assert_eq!(got[2].line, 4);
+    }
+
+    #[test]
+    fn personal_mail_addresses_are_flagged_but_noreply_and_examples_are_not() {
+        let person = "someone".to_string() + "@corp.dev";
+        let text = format!(
+            "a <{person}> b\n1+x@users.noreply.github.com c\nme@example.com\nnot an@address\n"
+        );
+        let got = identifier_violations(&text);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].what, person);
+        assert_eq!(got[0].line, 1);
     }
 
     #[test]
