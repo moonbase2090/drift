@@ -2,8 +2,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use drift_core::{
-    merge3, Action, Choice, DiffContent, DiffRows, FileContents, FileDiff, Hunk, HunkKind, Mark,
-    Merge, Plan, PlanView, PlannedFile, Row, Span,
+    merge3, Choice, DiffContent, DiffRows, FileDiff, Hunk, HunkKind, Mark, Merge, Row, Span,
 };
 use lunatui::{App, ControlFlow};
 use lunatui_core::{clip_display_prefix, width, Attrs, Color, Grid, Rect, Style, CLUSTER_TAG};
@@ -79,7 +78,8 @@ pub struct DiffScreen {
     choices: Vec<Option<Choice>>,
     editor: Box<dyn FnMut(String) -> Result<String, String>>,
     notice: Option<String>,
-    plan: Option<crate::PlanDialog>,
+    source: Option<FileDiff>,
+    write: Option<crate::EditedFile>,
     chips: Vec<Chip>,
     aligned: Aligned,
     scroll: CodeViewState,
@@ -248,7 +248,9 @@ impl DiffScreen {
                 Self::without_base(&ours, &theirs)
             }
         };
-        Ok(screen.with_title(&diff.path))
+        let mut screen = screen.with_title(&diff.path);
+        screen.source = Some(diff.clone());
+        Ok(screen)
     }
 
     pub fn with_palette(mut self, palette: DiffPalette) -> Self {
@@ -285,7 +287,8 @@ impl DiffScreen {
             choices,
             editor,
             notice: None,
-            plan: None,
+            source: None,
+            write: None,
             chips: Vec::new(),
             aligned,
             scroll: CodeViewState::new(),
@@ -313,8 +316,8 @@ impl DiffScreen {
         self.merge.render(&self.choices)
     }
 
-    pub fn plan_open(&self) -> bool {
-        self.plan.is_some()
+    pub(crate) fn take_write(&mut self) -> Option<crate::EditedFile> {
+        self.write.take()
     }
 
     pub(crate) fn set_notice(&mut self, text: &str) {
@@ -539,34 +542,30 @@ impl DiffScreen {
         self.force_redraw.store(true, Ordering::Relaxed);
     }
 
-    fn write_plan(&mut self) {
+    fn request_write(&mut self) {
         self.revise();
-        let after = match self.merge.render(&self.choices) {
-            Ok(text) => text,
+        let result = match self.result_text() {
+            Ok(text) => text.into_bytes(),
             Err(_) => {
-                self.notice = Some(String::from("unresolved conflict blocks write"));
-                self.plan = None;
+                self.notice = Some("unresolved conflict blocks write".to_string());
                 return;
             }
         };
-        let file = PlannedFile::new(
-            "config",
-            Action::Merge,
-            None,
-            None,
-            None,
-            Some("backup/config"),
-        )
-        .expect("plan path");
-        let plan = Plan::new("preview", "now", "0", vec![file], &[]).expect("plan");
-        let contents = [FileContents {
-            path: String::from("config"),
-            before: Some(ours_bytes(&self.merge)),
-            after: Some(after.into_bytes()),
-        }];
-        let view = PlanView::build(&plan, "state", &contents);
-        self.notice = None;
-        self.plan = Some(crate::PlanDialog::new(view));
+        let Some(source) = self.source.as_ref() else {
+            self.notice =
+                Some("Open a tracked file from the review screen before writing.".to_string());
+            return;
+        };
+        let bytes = |content: &DiffContent| match content {
+            DiffContent::Text { text, .. } => Some(text.as_bytes().to_vec()),
+            _ => None,
+        };
+        self.write = Some(crate::EditedFile {
+            path: source.path.clone(),
+            before: bytes(&source.ours),
+            template: bytes(&source.theirs),
+            result,
+        });
     }
 
     fn header_line(&mut self, area: Rect) -> String {
@@ -675,17 +674,6 @@ fn default_editor(text: String) -> Result<String, String> {
         return Err(String::from("editor is not set"));
     };
     crate::suspend::around_editor(|| drift_apply::edit_text(&text, &program))
-}
-
-fn ours_bytes(merge: &Merge) -> Vec<u8> {
-    let mut text = String::new();
-    for segment in merge.segments() {
-        match segment {
-            drift_core::Segment::Stable(part) => text.push_str(part),
-            drift_core::Segment::Hunk(hunk) => text.push_str(&hunk.ours),
-        }
-    }
-    text.into_bytes()
 }
 
 fn width_class(columns: u16, rows: u16) -> WidthClass {
@@ -1166,22 +1154,6 @@ fn contains(area: Rect, column: u16, row: u16) -> bool {
 
 impl App for DiffScreen {
     fn update(&mut self, event: &Event) -> ControlFlow {
-        if self.plan.is_some() {
-            if let Event::Mouse(mouse) = event {
-                if mouse_quits(self.columns, self.rows, mouse) {
-                    return ControlFlow::Break;
-                }
-            }
-            let done = self
-                .plan
-                .as_mut()
-                .is_some_and(|plan| plan.handle(event).is_some());
-            if done {
-                self.plan = None;
-                self.revise();
-            }
-            return ControlFlow::Continue;
-        }
         if let Event::Mouse(mouse) = event {
             if mouse_quits(self.columns, self.rows, mouse) {
                 return ControlFlow::Break;
@@ -1202,11 +1174,6 @@ impl App for DiffScreen {
         self.columns = area.width;
         self.rows = area.height;
         self.note_class();
-        if let Some(plan) = self.plan.as_mut() {
-            plan.render(grid, area, clusters);
-            self.painted = None;
-            return;
-        }
         let theme = crate::diff_palette::active_theme();
         let variant = theme.variant();
         if let Some(painted) = &self.painted {
@@ -1333,7 +1300,7 @@ impl DiffScreen {
                 ControlFlow::Continue
             }
             WRITE => {
-                self.write_plan();
+                self.request_write();
                 ControlFlow::Continue
             }
             LAYOUT => {
@@ -1347,7 +1314,7 @@ impl DiffScreen {
 
 impl DiffScreen {
     pub(crate) fn hint_press(&self, mouse: &MouseEvent) -> Option<Event> {
-        if self.plan.is_some() || !matches!(mouse.kind, MouseKind::Down(MouseButton::Left)) {
+        if self.write.is_some() || !matches!(mouse.kind, MouseKind::Down(MouseButton::Left)) {
             return None;
         }
         let hint = regions(Rect::new(0, 0, self.columns, self.rows)).2;
@@ -3051,7 +3018,7 @@ mod tests {
             screen.hunk,
             screen.focus,
             layout,
-            screen.plan.is_some(),
+            screen.write.is_some(),
             format!("{:?}", screen.choices),
         )
     }
@@ -3131,16 +3098,21 @@ mod tests {
     }
 
     #[test]
-    fn the_hint_bar_shows_write_and_a_click_on_it_opens_the_plan() {
-        let mut screen = changed();
+    fn the_hint_bar_shows_write_and_a_click_requests_the_real_plan() {
+        let mut screen = DiffScreen::from_file_diff(&file_diff(
+            content("old\n"),
+            content("old\n"),
+            content("new\n"),
+        ))
+        .unwrap();
         let (grid, clusters) = render_once(&mut screen, 80, 24);
         let text = grid.display_text(&clusters);
         let bar = text.lines().last().unwrap();
         assert!(bar.contains("[W] Write"), "{bar}");
         let column = u16::try_from(bar.find("[W]").unwrap()).unwrap();
-        assert!(screen.plan.is_none());
+        assert!(screen.write.is_none());
         click(&mut screen, column + 2, 23);
-        assert!(screen.plan.is_some());
+        assert!(screen.write.is_some());
     }
 
     #[test]
@@ -3242,35 +3214,29 @@ mod tests {
         let (base, ours, theirs) = conflict_files();
         let mut screen = DiffScreen::new(base, ours, theirs);
         press(&mut screen, 'w');
-        assert!(!screen.plan_open());
+        assert!(screen.write.is_none());
         assert_eq!(screen.notice(), Some("unresolved conflict blocks write"));
         let (grid, clusters) = render_once(&mut screen, 200, 40);
         let text = grid.display_text(&clusters);
         assert!(text.contains("unresolved conflict blocks write"), "{text}");
-        assert!(!screen.plan_open());
+        assert!(screen.write.is_none());
     }
 
     #[test]
-    fn a_clean_merge_opens_the_plan() {
-        let mut screen = DiffScreen::new(
-            include_str!(
-                "../../drift-fixtures/fixtures/status/merges-cleanly/base/hypr/looknfeel.lua"
-            ),
-            include_str!(
-                "../../drift-fixtures/fixtures/status/merges-cleanly/ours/hypr/looknfeel.lua"
-            ),
-            include_str!(
-                "../../drift-fixtures/fixtures/status/merges-cleanly/theirs/hypr/looknfeel.lua"
-            ),
-        );
-        assert_eq!(screen.result_text().unwrap(), "alpha\nours\ntheirs\n");
+    fn a_clean_merge_requests_a_real_plan_with_original_bytes() {
+        let mut screen = DiffScreen::from_file_diff(&file_diff(
+            content("alpha\nold\n"),
+            content("alpha\nmine\n"),
+            content("alpha\nnew\n"),
+        ))
+        .unwrap();
+        press(&mut screen, 't');
         press(&mut screen, 'w');
-        assert!(screen.plan_open());
-        let (grid, clusters) = render_once(&mut screen, 200, 40);
-        let text = grid.display_text(&clusters);
-        assert!(text.contains("merge"), "{text}");
-        press(&mut screen, 'n');
-        assert!(!screen.plan_open());
+        let request = screen.take_write().unwrap();
+        assert_eq!(request.path, ".config/hypr/a.lua");
+        assert_eq!(request.before, Some(b"alpha\nmine\n".to_vec()));
+        assert_eq!(request.template, Some(b"alpha\nnew\n".to_vec()));
+        assert_eq!(request.result, b"alpha\nnew\n");
     }
 
     #[test]

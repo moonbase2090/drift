@@ -34,7 +34,8 @@ pub use registry::{
 };
 pub use report::{counts_as_drift, BackupSummary, ScanEntry, ScanReport, SCHEMA};
 pub use resolve_plan::{
-    prepare, BaseRecord, Prepared, ResolveInput, Skip, SkipReason, Write as PlannedWrite,
+    prepare, prepare_result, BaseRecord, Prepared, ResolveInput, Skip, SkipReason,
+    Write as PlannedWrite,
 };
 pub use rows::{
     DiffRows, LineEnding, LineNumbers, Mark, Row, RowCache, Span, MAX_SPAN_GRAPHEMES, TAB_WIDTH,

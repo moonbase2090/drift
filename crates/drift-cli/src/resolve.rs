@@ -225,6 +225,34 @@ impl LiveResolver {
             registry,
         }
     }
+    fn proposal(
+        &self,
+        prepared: Prepared,
+        id: String,
+        package_version: String,
+    ) -> drift_tui::Proposal {
+        let skipped = prepared
+            .skipped
+            .iter()
+            .map(|skip| format!("{} {}", skip.path, skip.reason.label()))
+            .collect();
+        let state = self.roots.state.display().to_string();
+        let view = match prepared.plan.as_ref() {
+            Some(plan) => PlanView::build(plan, &state, &prepared.contents),
+            None => PlanView {
+                id,
+                time: String::new(),
+                package_version,
+                files: Vec::new(),
+                prune: Vec::new(),
+            },
+        };
+        drift_tui::Proposal {
+            prepared,
+            view,
+            skipped,
+        }
+    }
 }
 
 fn now_millis() -> Duration {
@@ -257,27 +285,37 @@ impl drift_tui::Resolver for LiveResolver {
             &prune_refs,
         )
         .map_err(|error| error.to_string())?;
-        let skipped = prepared
-            .skipped
-            .iter()
-            .map(|skip| format!("{} {}", skip.path, skip.reason.label()))
-            .collect();
-        let state = self.roots.state.display().to_string();
-        let view = match prepared.plan.as_ref() {
-            Some(plan) => PlanView::build(plan, &state, &prepared.contents),
-            None => PlanView {
-                id,
-                time: String::new(),
-                package_version: loaded.package_version,
-                files: Vec::new(),
-                prune: Vec::new(),
-            },
-        };
-        Ok(drift_tui::Proposal {
-            prepared,
-            view,
-            skipped,
-        })
+        Ok(self.proposal(prepared, id, loaded.package_version))
+    }
+
+    fn propose_result(
+        &mut self,
+        file: &drift_tui::EditedFile,
+    ) -> Result<drift_tui::Proposal, String> {
+        let target = live_path(&self.paths, &file.path)?;
+        let loaded = load_resolve_inputs(&self.registry, &self.paths, &BTreeSet::new(), &[target])
+            .map_err(|error| error.to_string())?;
+        let input = loaded
+            .inputs
+            .first()
+            .ok_or_else(|| format!("unknown tracked path '{}'", file.path))?;
+        if input.ours != file.before || input.theirs != file.template {
+            return Err("File or template changed since this diff was opened. Rescan and review it again. Nothing was written.".to_string());
+        }
+        let elapsed = now_millis();
+        let id = format!("resolve-{}", elapsed.as_millis());
+        let prune = pending_prune(&self.roots.state).map_err(|error| error.to_string())?;
+        let refs: Vec<&str> = prune.iter().map(String::as_str).collect();
+        let prepared = drift_core::prepare_result(
+            input,
+            &file.result,
+            &id,
+            &utc_timestamp(elapsed.as_secs()),
+            &loaded.package_version,
+            &refs,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(self.proposal(prepared, id, loaded.package_version))
     }
 
     fn apply(&mut self, proposal: &drift_tui::Proposal) -> Result<String, String> {
@@ -807,6 +845,161 @@ pub(crate) mod tests {
             Box::new(Checker(status)),
             drift_core::Registry::v1(),
         )
+    }
+
+    fn capture_screen(screen: &mut drift_tui::Screen, name: &str) -> String {
+        let (grid, clusters) = lunatui::render_once(screen, 120, 36);
+        let text = grid.display_text(&clusters);
+        if std::env::var_os("DRIFT_CAPTURE").is_some() {
+            let colors: Vec<Vec<String>> = (0..36)
+                .map(|y| {
+                    (0..120)
+                        .map(|x| {
+                            let style = grid.get(x, y).unwrap().style();
+                            format!("{:?} {:?}", style.fg, style.bg)
+                        })
+                        .collect()
+                })
+                .collect();
+            println!(
+                "DRIFT_FRAME {}",
+                serde_json::json!({"name": name, "text": text, "colors": colors})
+            );
+        }
+        text
+    }
+
+    #[test]
+    fn diff_write_uses_the_real_plan_and_backs_up_the_existing_file_before_apply() {
+        use lunatui::App;
+        use lunatui_term::{Event, KeyCode, KeyEvent};
+        let theirs = "family = \"Monospace\"\nstyle = \"Regular\"\n";
+        let mine = "family = \"My font\"\n";
+        let root = world(&[
+            ("alacritty/alacritty.toml", theirs, Some(mine), Some(theirs)),
+            ("hypr/other.lua", "upstream\n", Some("old\n"), Some("old\n")),
+        ]);
+        let paths = scan_paths(&root);
+        let report =
+            drift_source::build_report(&drift_core::Registry::v1(), &paths, &BTreeSet::new())
+                .unwrap();
+        let mut screen = drift_tui::Screen::with_report(&report)
+            .with_resolver(Box::new(live(&root, HyprlandStatus::Clean)))
+            .with_differ(Box::new(crate::diff::LiveDiffer::new(
+                scan_paths(&root),
+                drift_core::Registry::v1(),
+            )));
+        let press = |screen: &mut drift_tui::Screen, code| {
+            screen.update(&Event::Key(KeyEvent::press(code)));
+        };
+        for _ in 0..8 {
+            if screen
+                .review()
+                .unwrap()
+                .view()
+                .selected_entry()
+                .is_some_and(|e| e.path == ".config/alacritty/alacritty.toml")
+            {
+                break;
+            }
+            press(&mut screen, KeyCode::Down);
+        }
+        press(&mut screen, KeyCode::Enter);
+        assert!(screen.diff().is_some());
+        press(&mut screen, KeyCode::Char('t'));
+        assert_eq!(screen.diff().unwrap().result_text().unwrap(), theirs);
+        capture_screen(&mut screen, "01-theirs");
+        press(&mut screen, KeyCode::Char('w'));
+        let preview = capture_screen(&mut screen, "02-real-plan");
+        assert!(
+            preview.contains(".config/alacritty/alacritty.toml"),
+            "{preview}"
+        );
+        assert!(!preview.contains("none (new file)"), "{preview}");
+        assert_eq!(read(&root, "home/.config/alacritty/alacritty.toml"), mine);
+        assert!(!root.path().join("state/backups").exists());
+        press(&mut screen, KeyCode::Char('y'));
+        assert_eq!(read(&root, "home/.config/alacritty/alacritty.toml"), theirs);
+        let rows = drift_apply::history(&root.path().join("state")).unwrap();
+        let id = rows.entries[0].id().to_string();
+        assert_eq!(
+            read(
+                &root,
+                &format!("state/backups/{id}/.config/alacritty/alacritty.toml")
+            ),
+            mine
+        );
+        let paths = scan_paths(&root);
+        let roots = roots_for(&paths, root.path().join("runtime"));
+        drift_apply::undo_with_bases(
+            &roots,
+            &paths.resolve.share,
+            &drift_apply::UndoRequest {
+                target: &id,
+                id: "undo-diff",
+                time: "2026-11-14T00:00:00Z",
+                package_version: "4.5.0-3",
+                restore_anyway: &[],
+                fail_at: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(read(&root, "home/.config/alacritty/alacritty.toml"), mine);
+    }
+
+    #[test]
+    fn edited_results_refuse_changed_live_or_template_bytes_and_show_real_new_files() {
+        use drift_tui::{EditedFile, Resolver};
+        let root = world(&[(
+            "alacritty/alacritty.toml",
+            "shipped\n",
+            Some("mine\n"),
+            Some("old\n"),
+        )]);
+        let mut resolver = live(&root, HyprlandStatus::Clean);
+        let mut file = EditedFile {
+            path: ".config/alacritty/alacritty.toml".into(),
+            before: Some(b"outdated\n".to_vec()),
+            template: Some(b"shipped\n".to_vec()),
+            result: b"resolved\n".to_vec(),
+        };
+        assert!(resolver
+            .propose_result(&file)
+            .unwrap_err()
+            .contains("changed"));
+        file.before = Some(b"mine\n".to_vec());
+        file.template = Some(b"outdated\n".to_vec());
+        assert!(resolver
+            .propose_result(&file)
+            .unwrap_err()
+            .contains("changed"));
+        file.template = Some(b"shipped\n".to_vec());
+        let proposal = resolver.propose_result(&file).unwrap();
+        assert!(proposal.view.files[0].backup.contains("backups/"));
+        root.overwrite(
+            "home/.config/alacritty/alacritty.toml",
+            b"external change\n",
+        )
+        .unwrap();
+        assert!(resolver.apply(&proposal).is_err());
+        assert_eq!(
+            read(&root, "home/.config/alacritty/alacritty.toml"),
+            "external change\n"
+        );
+        let fresh = world(&[("alacritty/alacritty.toml", "shipped\n", None, None)]);
+        let mut resolver = live(&fresh, HyprlandStatus::Clean);
+        let file = EditedFile {
+            before: None,
+            template: Some(b"shipped\n".to_vec()),
+            ..file
+        };
+        let proposal = resolver.propose_result(&file).unwrap();
+        assert_eq!(proposal.view.files[0].backup, "none (new file)");
+        resolver.apply(&proposal).unwrap();
+        assert_eq!(
+            read(&fresh, "home/.config/alacritty/alacritty.toml"),
+            "resolved\n"
+        );
     }
 
     #[test]
