@@ -1,6 +1,6 @@
 .pragma library
 
-var WIDGET_VERSION = "0.1.0"
+var WIDGET_VERSION = "0.1.1"
 var VERSION_COMMAND = ["sh", "-c", "drift --version 2>/dev/null; echo \"exit:$?\""]
 var STATUS_COMMAND = ["sh", "-c", "drift status --bar 2>/dev/null; echo \"exit:$?\""]
 
