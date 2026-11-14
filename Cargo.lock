@@ -259,6 +259,7 @@ dependencies = [
  "lunatui-test",
  "lunatui-theme",
  "lunatui-widgets",
+ "serde_json",
  "sha2",
  "terminal_size",
  "unicode-width",
