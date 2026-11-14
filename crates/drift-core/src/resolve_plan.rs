@@ -173,13 +173,65 @@ pub fn prepare(
     package_version: &str,
     prune: &[&str],
 ) -> Result<Prepared, Error> {
+    prepare_outcomes(action, inputs, id, time, package_version, prune, |input| {
+        decide(action, input)
+    })
+}
+
+pub fn prepare_result(
+    input: &ResolveInput,
+    result: &[u8],
+    id: &str,
+    time: &str,
+    package_version: &str,
+    prune: &[&str],
+) -> Result<Prepared, Error> {
+    let action = if input.ours.as_deref() == Some(result) {
+        Action::KeepMine
+    } else {
+        Action::Merge
+    };
+    prepare_outcomes(
+        action,
+        std::slice::from_ref(input),
+        id,
+        time,
+        package_version,
+        prune,
+        |input| {
+            if input.theirs.is_none() {
+                Outcome::Skip(SkipReason::NoTemplate)
+            } else if let Some(reason) = refuse(input) {
+                Outcome::Skip(reason)
+            } else if input.volatile {
+                Outcome::Skip(SkipReason::Volatile)
+            } else if result.len() > MAX_MERGE_BYTES || std::str::from_utf8(result).is_err() {
+                Outcome::Skip(SkipReason::NotText)
+            } else if action == Action::KeepMine {
+                decide(action, input)
+            } else {
+                Outcome::Write(result.to_vec())
+            }
+        },
+    )
+}
+
+fn prepare_outcomes(
+    action: Action,
+    inputs: &[ResolveInput],
+    id: &str,
+    time: &str,
+    package_version: &str,
+    prune: &[&str],
+    outcome: impl Fn(&ResolveInput) -> Outcome,
+) -> Result<Prepared, Error> {
     let mut files = Vec::new();
     let mut writes = Vec::new();
     let mut bases = Vec::new();
     let mut contents = Vec::new();
     let mut skipped = Vec::new();
     for input in inputs {
-        let outcome = decide(action, input);
+        let outcome = outcome(input);
         let (after, replaces) = match outcome {
             Outcome::Skip(reason) => {
                 skipped.push(Skip {
@@ -279,6 +331,61 @@ mod tests {
 
     fn sha(text: &str) -> String {
         digest(text.as_bytes())
+    }
+
+    #[test]
+    fn a_resolved_result_keeps_the_original_hash_and_the_shipped_base() {
+        let file = input(
+            "alacritty/alacritty.toml",
+            Some("old\n"),
+            Some("mine\n"),
+            Some("shipped\n"),
+        );
+        let prepared = prepare_result(&file, b"edited result\n", "txn-1", "t", "v", &[]).unwrap();
+        let plan = prepared.plan.as_ref().unwrap();
+        assert_eq!(
+            plan.files()[0].path().as_str(),
+            ".config/alacritty/alacritty.toml"
+        );
+        assert_eq!(
+            plan.files()[0].sha256_before(),
+            Some(sha("mine\n").as_str())
+        );
+        assert_eq!(
+            plan.files()[0].sha256_after(),
+            Some(sha("edited result\n").as_str())
+        );
+        assert_eq!(prepared.writes[0].bytes, b"edited result\n");
+        assert_eq!(prepared.bases[0].bytes, b"shipped\n");
+        let view = crate::PlanView::build(plan, "STATE", &prepared.contents);
+        assert_eq!(
+            view.files[0].backup,
+            "STATE/backups/txn-1/.config/alacritty/alacritty.toml"
+        );
+    }
+
+    #[test]
+    fn resolved_results_refuse_unsafe_inputs_and_keep_mine_records_without_writing() {
+        for (link, volatile, unreadable) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let mut file = input("a.conf", Some("old"), Some("mine"), Some("shipped"));
+            file.link = link;
+            file.volatile = volatile;
+            file.unreadable = unreadable;
+            let prepared = prepare_result(&file, b"result", "txn", "t", "v", &[]).unwrap();
+            assert!(prepared.plan.is_none());
+            assert!(prepared.writes.is_empty());
+            assert_eq!(prepared.skipped.len(), 1);
+        }
+        let file = input("a.conf", Some("old"), Some("mine"), Some("shipped"));
+        let prepared = prepare_result(&file, b"mine", "txn", "t", "v", &[]).unwrap();
+        assert_eq!(prepared.action, Action::KeepMine);
+        assert_eq!(prepared.bases[0].bytes, b"shipped");
+        let plan = prepared.plan.as_ref().unwrap();
+        assert_eq!(plan.files()[0].action(), Action::KeepMine);
     }
 
     #[test]

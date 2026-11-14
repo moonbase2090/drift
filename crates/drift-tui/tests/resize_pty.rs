@@ -70,6 +70,10 @@ impl drift_tui::Resolver for NoResolver {
         Err("not used".to_string())
     }
 
+    fn propose_result(&mut self, _: &drift_tui::EditedFile) -> Result<drift_tui::Proposal, String> {
+        Err("Writing is unavailable in this example.".to_string())
+    }
+
     fn apply(&mut self, _: &drift_tui::Proposal) -> Result<String, String> {
         Err("not used".to_string())
     }
