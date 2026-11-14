@@ -1,6 +1,6 @@
 # Drift user guide
 
-Drift compares your Hyprland and Omarchy configuration with the templates the installed `omarchy-settings` package ships, shows the difference file by file, and lets you keep your version, take upstream's, or merge the two. It never writes anything until you confirm a plan, and every write can be undone. Drift is built for Omarchy 4.5 and reads the templates from `/usr/share/omarchy`.
+Drift compares your Hyprland and Omarchy configuration with the templates the installed `omarchy-settings` package ships, shows the difference file by file, and lets you keep your version, take upstream's, or merge the two. It never changes a configuration file until you confirm a plan, and every such change can be undone. A few commands write their own small files outside that plan; the [safety model](#safety-model) lists them. Drift is built for Omarchy 4.5 and reads the templates from `/usr/share/omarchy`.
 
 This guide covers what is in the program today. The [command reference](cli.md) lists every command, the [bar widget](widget.md) page covers the status-bar module, and [input-map.md](input-map.md) lists every key and mouse target.
 
@@ -86,10 +86,11 @@ A file with no conflicts can skip the hunks: from the tree press `m` and read th
 ## Safety model
 
 - Opening Drift, scanning, `status`, `diff`, `scan` and `history` never write configuration or state.
-- Every write goes through a plan that lists each file, its action, its backup location and a diff summary. Nothing is written until you confirm. Without a terminal, commands write nothing unless you pass `--yes`.
+- Every change to a configuration file goes through a plan that lists each file, its action, its backup location and a diff summary. Nothing is written to those files until you confirm. Without a terminal, commands write nothing unless you pass `--yes`.
 - Before a file is changed its original is copied into the backup store (`~/.local/state/drift/backups/<transaction>/`). A transaction records every file it touched with the hashes before and after, in `manifest.json`.
 - Files are replaced atomically. Symlinks, files an app rewrites on its own, files without a template and files already equal to upstream are skipped with a reason.
-- Every transaction can be undone, and an undo is a transaction that can be undone in turn. A file that changed after the transaction is left alone unless you name it with `--force`.
+- Every configuration transaction can be undone with `drift undo`, and an undo is a transaction that can be undone in turn. A file that changed after the transaction is left alone unless you name it with `--force`.
+- Some writes are outside the plan and outside `drift undo`: `drift snapshot --pre` copies the template roots into `/var/lib/drift/snapshots/` (pacman runs it before an upgrade, and nothing else is touched), `drift notify on` and `drift notify off` save the notice setting in Drift's state directory, the upgrade stamp the post-transaction hook leaves in `/var/lib/drift`, and `drift widget install`, `sync` and `remove`, which keep their own record and a timestamped backup next to a file they replace (see the [bar widget](widget.md) page). Undo them by deleting the snapshot, running `notify` on or off again, or `widget remove`.
 - Nothing is sent over the network. The only things Drift runs besides itself are `hyprctl configerrors` after a Hyprland write, `omarchy-notification-send` for the upgrade notice, and `$EDITOR` when you ask to edit a hunk.
 
 ## Recovering from backups
@@ -107,7 +108,7 @@ Drift keeps everything it needs to put a file back.
 1. Remove the hook Drift added to Omarchy: delete `~/.config/omarchy/hooks/post-update.d/drift`, and the `drift` row in `~/.config/omarchy/extensions/omarchy-menu.jsonc` (both were added by `drift integrate`, which showed you the change first).
 2. Remove the bar widget: `drift widget remove` disables it and deletes your copy (do this before removing the binary).
 3. Stop the upgrade notice: `systemctl --user disable --now drift-notify.path` if you enabled the packaged user unit.
-4. Remove the package or binary. The pacman hooks and `/var/lib/drift/` (snapshots and the upgrade stamp) go with the package; `sudo rm -r /var/lib/drift` if you installed by hand.
+4. Remove the program. With the package, `sudo pacman -Rns omarchy-drift` removes the binary, the pacman hooks, the user units and the packaged plugin copy. If you installed by hand, delete the binary and whatever you copied, including the two hooks in `/usr/share/libalpm/hooks/` (`10-drift-snapshot.hook`, `20-drift-updated.hook`) if you added them. Either way, `/var/lib/drift/` (the template snapshots and the upgrade stamp) belongs to neither the package nor your home, so removing the package leaves it behind: delete it yourself with `sudo rm -r /var/lib/drift`.
 5. Optionally delete Drift's own data: `~/.local/state/drift` (backups, transaction records, notification setting) and `~/.local/share/drift` (recorded bases). Do this last: it is what undo reads, so after it Drift can no longer put files back.
 
 None of this touches your configuration files; they stay exactly as they are now.
