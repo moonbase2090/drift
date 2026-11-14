@@ -288,6 +288,21 @@ impl Session {
         ));
     }
 
+    pub fn double_click_text(&mut self, needle: &str) {
+        let screen = self.screen();
+        let (column, row) = screen
+            .position(needle)
+            .unwrap_or_else(|| panic!("{needle:?} is not on the screen:\n{}", screen.text()));
+        let one = format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            column + 2,
+            row + 1,
+            column + 2,
+            row + 1
+        );
+        self.send(&format!("{one}{one}"));
+    }
+
     pub fn click_text(&mut self, needle: &str) {
         let screen = self.screen();
         let (column, row) = screen

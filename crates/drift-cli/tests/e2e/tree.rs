@@ -155,6 +155,14 @@ fn enter_opens_the_diff_of_a_file_and_toggles_a_folder() {
 }
 
 #[test]
+fn double_clicking_a_file_opens_its_diff() {
+    let (_system, mut session) = opened();
+    session.double_click_text("bindings.lua");
+    let diff = session.wait_for("the diff", |screen| screen.first().contains("Diff"));
+    assert!(diff.first().contains("bindings.lua"));
+}
+
+#[test]
 fn clicking_a_row_selects_it_and_clicking_the_caret_toggles_the_folder() {
     let (_system, mut session) = opened();
     session.click_text("bindings.lua");

@@ -18,4 +18,4 @@ Termwright (0.2.0) does the same job, and was tried first. It pulls in an async 
 
 - It guards behaviour a user would notice, and fails when that behaviour breaks. A test that only restates the code is not accepted.
 - It is deterministic: no sleeps, no timing windows, no order between tests.
-- Every entry in the feature map has a test, and every test is linked from the map.
+- Every entry in the feature map is linked to a test or marked planned, and every test is linked from the map.
