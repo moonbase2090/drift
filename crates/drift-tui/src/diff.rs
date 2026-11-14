@@ -912,7 +912,19 @@ fn push_hunk(
         .push(format!("{} {}", index + 1, hunk_name(hunk.kind)));
     let lines = hunk_lines(hunk, rows);
     aligned.stacked_hunk_rows.push(aligned.stacked.len());
-    let chosen = choice.and_then(|_| merge.hunk_text(index, choice));
+    let automatic = merge.hunk_text(index, None);
+    let original = match hunk.kind {
+        HunkKind::TheirsOnly => Some(hunk.theirs.as_str()),
+        HunkKind::OursOnly | HunkKind::BothSame => Some(hunk.ours.as_str()),
+        HunkKind::Conflict => None,
+    };
+    let chosen = if choice.is_some() {
+        merge.hunk_text(index, choice)
+    } else if automatic.as_deref() != original {
+        automatic
+    } else {
+        None
+    };
     if let Some(text) = chosen.as_deref() {
         for line in kinded(raw_lines(text), RowKind::Added) {
             aligned.stacked.push(prefixed("= ", line));
@@ -923,11 +935,8 @@ fn push_hunk(
             aligned.stacked.push(prefixed(prefix, line));
         }
     }
-    let result = if choice.is_some() {
-        kinded(
-            raw_lines(merge.hunk_text(index, choice).as_deref().unwrap_or("")),
-            RowKind::Added,
-        )
+    let result = if let Some(text) = chosen.as_deref() {
+        kinded(raw_lines(text), RowKind::Added)
     } else {
         lines.result
     };
@@ -2264,6 +2273,36 @@ mod tests {
             "alpha\nhello WORLD\nomega\n",
             "alpha\nhello world\nomega\n",
         )
+    }
+
+    #[test]
+    fn one_line_json_auto_result_retains_local_escapes_and_theirs_stays_raw() {
+        let base = r#"{"a":"—","n":1}"#;
+        let ours = r#"{"a":"\u2014","n":1}"#;
+        let theirs = r#"{"a":"—","n":2}"#;
+        let expected = r#"{"a":"\u2014","n":2}"#;
+        let content = |text: &str| DiffContent::Text {
+            sha256: "test".into(),
+            text: text.into(),
+        };
+        let diff = FileDiff {
+            path: ".config/waybar/config.jsonc".into(),
+            status: drift_core::Status::UpstreamChanged,
+            badge: None,
+            provenance: drift_core::BaseProvenance::Reviewed,
+            note: String::new(),
+            base: content(base),
+            ours: content(ours),
+            theirs: content(theirs),
+        };
+        let mut screen = DiffScreen::from_file_diff(&diff).unwrap();
+        assert_eq!(screen.result_text().unwrap(), expected);
+        assert_eq!(screen.aligned.theirs[0].text, theirs);
+        assert_eq!(screen.aligned.result[0].text, expected);
+        let (grid, clusters) = render_once(&mut screen, 200, 40);
+        crate::proof::capture("one-line-json-auto-result", &grid, &clusters);
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('t'))));
+        assert_eq!(screen.result_text().unwrap(), theirs);
     }
 
     #[test]

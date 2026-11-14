@@ -876,6 +876,38 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn merging_one_line_json_preserves_local_escapes_and_backs_up_the_exact_original() {
+        let base = r#"{"a":"—","n":1}"#;
+        let ours = r#"{"a":"\u2014","n":1}"#;
+        let theirs = r#"{"a":"—","n":2}"#;
+        let expected = r#"{"a":"\u2014","n":2}"#;
+        let root = world(&[("waybar/config.jsonc", theirs, Some(ours), Some(base))]);
+        let ran = go(
+            &root,
+            &[".config/waybar/config.jsonc", "--merge", "--yes"],
+            false,
+            "",
+            &clean(),
+        );
+        assert_eq!(ran.result, Ok(0), "{}", ran.err);
+        assert_eq!(read(&root, "home/.config/waybar/config.jsonc"), expected);
+        assert_eq!(
+            read(
+                &root,
+                "state/backups/resolve-1800000000123/.config/waybar/config.jsonc"
+            ),
+            ours
+        );
+        let report = drift_source::build_report(
+            &drift_core::Registry::v1(),
+            &scan_paths(&root),
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert_eq!(report.entries[0].status, drift_core::Status::Unchanged);
+    }
+
+    #[test]
     fn diff_write_uses_the_real_plan_and_backs_up_the_existing_file_before_apply() {
         use lunatui::App;
         use lunatui_term::{Event, KeyCode, KeyEvent};

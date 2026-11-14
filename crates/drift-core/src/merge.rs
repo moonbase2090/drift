@@ -43,6 +43,7 @@ pub enum Choice {
 pub struct Merge {
     segments: Vec<Segment>,
     terminator: &'static str,
+    auto_theirs: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +196,10 @@ pub fn merge_file(path: &str, base: &str, ours: &str, theirs: &str) -> Merge {
     let theirs_keys = stable_side(&bk_lines, &tk_lines, &theirs_regions);
     let ours_base = stable_side(&b, &o, &ours_regions);
     let theirs_base = stable_side(&b, &t, &theirs_regions);
+    let retained = crate::json_strings::preserve_local_strings(path, ours, theirs);
+    let retained_lines = lines(&retained);
+    let retained_base = stable_side(&b, &retained_lines, &theirs_regions);
+    let mut auto_theirs = Vec::new();
     let groups = group(ours_regions, theirs_regions);
     let mut segments = Vec::new();
     let mut cursor = 0;
@@ -220,6 +225,13 @@ pub fn merge_file(path: &str, base: &str, ours: &str, theirs: &str) -> Merge {
         } else {
             HunkKind::Conflict
         };
+        let automatic = if kind == HunkKind::TheirsOnly {
+            let text = side_text(&retained_base, &retained_lines, &g.base, &g.theirs);
+            (text != theirs_text).then_some(text)
+        } else {
+            None
+        };
+        auto_theirs.push(automatic);
         segments.push(Segment::Hunk(Hunk {
             kind,
             base: base_text,
@@ -238,6 +250,7 @@ pub fn merge_file(path: &str, base: &str, ours: &str, theirs: &str) -> Merge {
     Merge {
         segments,
         terminator: terminator_for(ours),
+        auto_theirs,
     }
 }
 
@@ -316,7 +329,9 @@ impl Merge {
                         (Some(Choice::Theirs), _) => out.push_str(&hunk.theirs),
                         (Some(Choice::Both), _) => out.push_str(&both(hunk, self.terminator)),
                         (Some(Choice::Custom(text)), _) => out.push_str(text),
-                        (None, HunkKind::TheirsOnly) => out.push_str(&hunk.theirs),
+                        (None, HunkKind::TheirsOnly) => {
+                            out.push_str(self.auto_theirs[index].as_deref().unwrap_or(&hunk.theirs))
+                        }
                         (None, HunkKind::OursOnly | HunkKind::BothSame) => out.push_str(&hunk.ours),
                         (None, HunkKind::Conflict) => return Err(Error::UnresolvedHunk(index)),
                     }
@@ -339,7 +354,10 @@ impl Merge {
             Some(Choice::Both) => both(hunk, self.terminator),
             Some(Choice::Custom(text)) => text.clone(),
             None => match hunk.kind {
-                HunkKind::TheirsOnly => hunk.theirs.clone(),
+                HunkKind::TheirsOnly => self.auto_theirs[index]
+                    .as_ref()
+                    .unwrap_or(&hunk.theirs)
+                    .clone(),
                 HunkKind::OursOnly | HunkKind::BothSame => hunk.ours.clone(),
                 HunkKind::Conflict => return None,
             },
@@ -357,6 +375,19 @@ mod tests {
 
     fn auto(base: &str, ours: &str, theirs: &str) -> String {
         merge3(base, ours, theirs).auto().unwrap()
+    }
+
+    #[test]
+    fn automatic_json_line_merge_retains_equal_local_lexemes() {
+        let base = r#"{"a":"—","n":1}"#;
+        let ours = r#"{"a":"\u2014","n":1}"#;
+        let theirs = r#"{"a":"—","n":2}"#;
+        let expected = r#"{"a":"\u2014","n":2}"#;
+        let merged = merge_file("a.json", base, ours, theirs);
+        assert_eq!(merged.auto().unwrap(), expected);
+        assert_eq!(merged.hunk_text(0, None).unwrap(), expected);
+        assert_eq!(merged.hunks().next().unwrap().theirs, theirs);
+        assert_eq!(merged.render(&[Some(Choice::Theirs)]).unwrap(), theirs);
     }
 
     #[test]
