@@ -289,6 +289,23 @@ mod tests {
     use super::{dirs, new_directory, readable, relevant};
 
     #[test]
+    fn notification_and_widget_state_files_are_outside_the_watched_roots() {
+        let watched = dirs(
+            &Registry::v1(),
+            Path::new("/fixture/home"),
+            Path::new("/fixture/package"),
+        );
+        for state in [
+            "/fixture/home/.local/state/drift/widget-installed.json",
+            "/fixture/var/lib/drift/updated",
+        ] {
+            assert!(!watched
+                .iter()
+                .any(|root| Path::new(state).starts_with(root)));
+        }
+    }
+
+    #[test]
     fn tracked_roots_watch_the_live_tree_and_the_package_templates() {
         let registry = Registry::v1();
         let watched = dirs(

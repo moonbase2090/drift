@@ -82,12 +82,95 @@ impl TreeView {
         view
     }
 
+    pub fn replace_entries(&mut self, entries: Vec<ScanEntry>) {
+        let unselected = self.selected_row().is_none();
+        let paths = self.node_paths();
+        let directories: BTreeMap<&str, bool> = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.entry.is_none())
+            .map(|(id, _)| (paths[id].as_str(), self.collapsed.contains(&id)))
+            .collect();
+        let marked: HashSet<&str> = self
+            .marked
+            .iter()
+            .map(|id| self.entries[*id].path.as_str())
+            .collect();
+        let mut selection = Vec::new();
+        let mut node = self.selected_node();
+        while let Some(id) = node {
+            selection.push(paths[id].as_str());
+            node = self.nodes[id].parent;
+        }
+        let mut next = Self::new(entries);
+        let next_paths = next.node_paths();
+        for (id, path) in next_paths.iter().enumerate() {
+            if let Some(collapsed) = directories.get(path.as_str()) {
+                if *collapsed {
+                    next.collapsed.insert(id);
+                } else {
+                    next.collapsed.remove(&id);
+                }
+            }
+        }
+        next.marked = next
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| marked.contains(entry.path.as_str()))
+            .map(|(id, _)| id)
+            .collect();
+        next.status_filter = self.status_filter;
+        next.query.clone_from(&self.query);
+        next.query_lower.clone_from(&self.query_lower);
+        next.selected = self.selected;
+        let lookup: BTreeMap<&str, usize> = next_paths
+            .iter()
+            .enumerate()
+            .map(|(id, path)| (path.as_str(), id))
+            .collect();
+        let keep = selection.iter().find_map(|path| lookup.get(path).copied());
+        next.rebuild(keep);
+        if unselected {
+            next.selected = next.rows.len();
+        }
+        *self = next;
+    }
+
+    fn node_paths(&self) -> Vec<String> {
+        let mut paths = vec![String::new(); self.nodes.len()];
+        for (id, node) in self.nodes.iter().enumerate().skip(1) {
+            let parent = node.parent.unwrap_or(0);
+            paths[id] = if paths[parent].is_empty() {
+                node.name.clone()
+            } else {
+                format!("{}/{}", paths[parent], node.name)
+            };
+        }
+        paths
+    }
+
     pub fn entries(&self) -> &[ScanEntry] {
         &self.entries
     }
 
     pub fn rows(&self) -> &[TreeRow] {
         &self.rows
+    }
+
+    pub fn path_at(&self, row: usize) -> Option<String> {
+        let mut current = Some(self.rows.get(row)?.node);
+        let mut parts = Vec::new();
+        while let Some(id) = current {
+            let node = &self.nodes[id];
+            if node.parent.is_some() {
+                parts.push(node.name.as_str());
+            }
+            current = node.parent;
+        }
+        parts.reverse();
+        Some(parts.join("/"))
     }
 
     pub fn selected(&self) -> usize {
@@ -333,6 +416,7 @@ impl TreeView {
     }
 
     fn rebuild(&mut self, keep: Option<usize>) {
+        let unselected = !self.rows.is_empty() && self.selected >= self.rows.len();
         let opening = self.query_lower.is_empty() && self.status_filter.is_none();
         if opening {
             if let Some(node) = keep {
@@ -415,8 +499,22 @@ impl TreeView {
         self.node_files = files;
         self.node_statuses = statuses;
         self.refresh_marks();
-        let at = keep.and_then(|node| self.rows.iter().position(|row| row.node == node));
-        self.selected = at.unwrap_or_else(|| self.selected.min(self.rows.len().saturating_sub(1)));
+        let mut ancestor = keep;
+        let mut visible = None;
+        while let Some(node) = ancestor {
+            if let Some(at) = self.rows.iter().position(|row| row.node == node) {
+                visible = Some(at);
+                break;
+            }
+            ancestor = self.nodes[node].parent;
+        }
+        self.selected = visible.unwrap_or_else(|| {
+            if keep.is_some() || unselected {
+                self.rows.len()
+            } else {
+                self.selected.min(self.rows.len().saturating_sub(1))
+            }
+        });
     }
 
     fn reveal_if_buried(&mut self, node: usize) {
@@ -607,6 +705,132 @@ mod tests {
             )
         }) {
             view.toggle(row);
+        }
+    }
+
+    #[test]
+    fn report_replacement_tracks_paths_not_node_or_entry_indices() {
+        let mut view = TreeView::new(vec![
+            entry(".config/aaa/a.conf", Status::Conflict),
+            entry(".config/zeta/a.conf", Status::LocalOverride),
+            entry(".config/zeta/b.conf", Status::LocalOverride),
+        ]);
+        let aaa = view.rows.iter().position(|row| row.name == "aaa").unwrap();
+        view.toggle(aaa);
+        let zeta = view.rows.iter().position(|row| row.name == "zeta").unwrap();
+        view.toggle(zeta);
+        view.set_status_filter(Some(Status::LocalOverride));
+        view.set_query("zeta");
+        view.bottom();
+        view.toggle_mark(view.selected());
+        view.replace_entries(vec![
+            entry(".config/000/new.conf", Status::Conflict),
+            entry(".config/zeta/b.conf", Status::LocalOverride),
+            entry(".config/zeta/a.conf", Status::LocalOverride),
+            entry(".config/aaa/a.conf", Status::Conflict),
+        ]);
+        assert_eq!(view.selected_entry().unwrap().path, ".config/zeta/b.conf");
+        assert_eq!(view.marked()[0].path, ".config/zeta/b.conf");
+        assert_eq!(view.query(), "zeta");
+        assert_eq!(view.status_filter(), Some(Status::LocalOverride));
+        view.set_query("");
+        view.set_status_filter(None);
+        assert!(matches!(
+            view.rows.iter().find(|row| row.name == "aaa").unwrap().kind,
+            RowKind::Dir {
+                expanded: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            view.rows
+                .iter()
+                .find(|row| row.name == "zeta")
+                .unwrap()
+                .kind,
+            RowKind::Dir { expanded: true, .. }
+        ));
+        assert_eq!(view.counts()[status_index(Status::Conflict)], 2);
+    }
+
+    #[test]
+    fn a_removed_selection_falls_back_to_its_surviving_parent_and_drops_removed_marks() {
+        let mut view = TreeView::new(vec![entry(".config/zeta/b.conf", Status::LocalOverride)]);
+        view.bottom();
+        view.toggle_mark(view.selected());
+        view.replace_entries(vec![entry(".config/zeta/c.conf", Status::LocalOverride)]);
+        assert_eq!(view.selected_row().unwrap().name, "zeta");
+        assert_eq!(view.marked_count(), 0);
+        view.replace_entries(vec![]);
+        assert!(view.selected_row().is_none());
+    }
+
+    #[test]
+    fn a_removed_selection_uses_the_nearest_visible_ancestor_under_filter_and_search() {
+        for search in [false, true] {
+            let mut view = TreeView::new(vec![
+                entry(".config/gone/b.conf", Status::LocalOverride),
+                entry(".config/keep/b.conf", Status::LocalOverride),
+            ]);
+            expand_all(&mut view);
+            if search {
+                view.set_query("b.conf");
+            } else {
+                view.set_status_filter(Some(Status::LocalOverride));
+            }
+            let row = view
+                .rows()
+                .iter()
+                .position(|row| {
+                    row.entry
+                        .is_some_and(|id| view.entries()[id].path == ".config/gone/b.conf")
+                })
+                .unwrap();
+            view.select(row);
+            view.replace_entries(vec![
+                entry(".config/gone/c.conf", Status::Conflict),
+                entry(".config/keep/b.conf", Status::LocalOverride),
+            ]);
+            assert_eq!(view.selected_row().unwrap().name, ".config");
+            assert!(view.selected_entry().is_none());
+        }
+    }
+
+    #[test]
+    fn a_filtered_selection_with_no_visible_ancestor_stays_cleared_across_reports() {
+        for query in ["", ".conf"] {
+            let mut view = TreeView::new(vec![
+                entry(".config/gone/b.conf", Status::LocalOverride),
+                entry(".local/keep/a.conf", Status::LocalOverride),
+            ]);
+            expand_all(&mut view);
+            view.set_status_filter(Some(Status::LocalOverride));
+            view.set_query(query);
+            let row = view
+                .rows()
+                .iter()
+                .position(|row| {
+                    row.entry
+                        .is_some_and(|id| view.entries()[id].path == ".config/gone/b.conf")
+                })
+                .unwrap();
+            view.select(row);
+            let updated = vec![
+                entry(".config/gone/b.conf", Status::Conflict),
+                entry(".local/keep/a.conf", Status::LocalOverride),
+            ];
+            for _ in 0..2 {
+                view.replace_entries(updated.clone());
+                assert_eq!(view.visible_files(), 1);
+                assert!(view.rows().iter().any(|row| row
+                    .entry
+                    .is_some_and(|id| view.entries()[id].path == ".local/keep/a.conf")));
+                assert_eq!(view.selected(), view.rows().len());
+                assert!(view.selected_row().is_none());
+                assert!(view.selected_entry().is_none());
+            }
+            view.top();
+            assert!(view.selected_row().is_some());
         }
     }
 
