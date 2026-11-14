@@ -17,15 +17,18 @@ def frame_svg(frame):
     colors = frame['colors']
     rows, columns = len(colors), len(colors[0])
     cell_width, cell_height = 8, 16
-    base = tuple(map(int, re.findall(r'\d+', colors[0][0])))[3:]
-    assert len(base) == 3
+    defaults = tuple(map(int, re.findall(r'\d+', frame.get('defaults', colors[0][0]))))
+    assert len(defaults) == 6
+    base = defaults[3:]
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{columns * cell_width}" height="{rows * cell_height}">']
     for y, line in enumerate(frame['text'].splitlines()):
         for x, character in enumerate(line):
             if x >= columns:
                 break
             values = tuple(map(int, re.findall(r'\d+', colors[y][x])))
-            if len(values) == 3:
+            if not values:
+                values = defaults
+            elif len(values) == 3:
                 values += base
             assert len(values) == 6
             out.append(f'<rect x="{x * cell_width}" y="{y * cell_height}" width="8" height="16" fill="{rgb(values[3:])}"/>')
@@ -47,7 +50,13 @@ def main():
             path = Path(scratch) / f'{index:03}.svg'
             path.write_text(frame_svg(frame))
             paths.append(str(path))
-        subprocess.run(['magick', '-delay', '180', *paths, '-loop', '0', str(output)], check=True)
+        width = max(len(frame['colors'][0]) for frame in frames) * 8
+        height = max(len(frame['colors']) for frame in frames) * 16
+        defaults = frames[0].get('defaults', frames[0]['colors'][0][0])
+        background = rgb(tuple(map(int, re.findall(r'\d+', defaults)))[3:])
+        subprocess.run(['magick', '-delay', '180', *paths, '-background', background,
+                        '-gravity', 'NorthWest', '-extent', f'{width}x{height}', '+repage',
+                        '-loop', '0', str(output)], check=True)
     print(f'{len(frames)} real rendered frames: {output}')
 
 
