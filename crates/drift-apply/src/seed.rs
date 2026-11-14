@@ -237,8 +237,24 @@ fn ensure_anchor(dir: &Path) -> Result<(), ()> {
         return require_real_dir(dir);
     }
     let parent = dir.parent().ok_or(())?;
+    create_missing_parents(parent)?;
     require_real_dir(parent)?;
     fs::create_dir(dir).map_err(|_| ())
+}
+
+fn create_missing_parents(dir: &Path) -> Result<(), ()> {
+    match fs::symlink_metadata(dir) {
+        Ok(_) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            let parent = dir.parent().ok_or(())?;
+            create_missing_parents(parent)?;
+            require_real_dir(parent)?;
+            std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)
+                .create(dir)
+                .map_err(|_| ())
+        }
+        Err(_) => Err(()),
+    }
 }
 
 fn ensure_real_dir(anchor: &Path, dir: &Path) -> Result<(), ()> {
