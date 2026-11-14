@@ -291,12 +291,21 @@ mod tests {
     fn a_fake_notifier_records_the_text_urgency_and_click_command() {
         let script = "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/args\"\n";
         let root = drift_fixtures::RootBuilder::new()
-            .file_with_mode("bin/notify", script, 0o755)
+            .file("bin/.keep", b"")
             .unwrap()
             .materialize()
             .unwrap();
+        let program = root.path().join("bin/notify");
+        let written = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("printf '%s' \"$0\" > \"$1\" && chmod 755 \"$1\"")
+            .arg(script)
+            .arg(&program)
+            .status()
+            .unwrap();
+        assert!(written.success());
         let notice = notice_for(2).unwrap();
-        send(&root.path().join("bin/notify"), &notice).unwrap();
+        send(&program, &notice).unwrap();
         let recorded = fs::read_to_string(root.path().join("bin/args")).unwrap();
         let mut expected = format!(
             "--app-name\n{APP_NAME}\n-u\n{}\n{}\n--exec\n",
