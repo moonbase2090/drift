@@ -1,6 +1,6 @@
 # Feature map
 Every user interaction in Drift, the test that drives it, and what the test checks. The tests live in `crates/drift-cli/tests/e2e/`. Each one starts the real `drift` binary on a pseudo-terminal against a fixture system, waits on what is drawn, and checks the files on disk after a write. `the_feature_map_matches_the_tests` keeps this page, the key map in [input-map.md](input-map.md) and the test files in step.
-The harness is described in [testing.md](testing.md). An entry marked `planned` has no test yet.
+The harness is described in [testing.md](testing.md). An entry marked `planned` has no test yet, and the behaviour may not exist yet either.
 
 ## Everywhere
 
@@ -15,7 +15,7 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | Id | Interaction | Tests |
 |---|---|---|
 | `tree.quit` | `q` or a click on `[Q] Quit` leaves with exit code 0 | `tree::q_quits_and_exits_cleanly`, `tree::clicking_the_quit_hint_quits` |
-| `tree.rescan` | `r` scans again; once the tree-state change lands it keeps the list, the selection and the marks while the scan runs | planned |
+| `tree.rescan` | `r` scans again and keeps the list, the selection (by file, even when rows appear above it) and the marks, with no frame that drops rows | `tree::r_rescans_and_keeps_the_list_the_selection_and_the_marks` |
 | `tree.down` | `j` and Down move the selection down | `tree::j_and_down_move_the_selection_down` |
 | `tree.up` | `k` and Up move the selection up | `tree::k_and_up_move_the_selection_up` |
 | `tree.collapse` | `h` and Left collapse a folder, or go from a file to its folder; a click on the caret collapses | `tree::h_and_left_collapse_a_folder_and_l_and_right_expand_it`, `tree::h_on_a_file_goes_to_its_folder_and_l_on_an_open_folder_goes_to_its_first_child`, `tree::clicking_a_row_selects_it_and_clicking_the_caret_toggles_the_folder` |
@@ -53,7 +53,7 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `state.user-only` | a file with no template is listed with `+ user-only` and is never written | planned |
 | `state.missing` | a template with no file is listed with `? missing`, and take creates the file | planned |
 | `badge.merges-cleanly` | `[merges cleanly]` marks an `upstream changed` file you also edited on different lines, and merge writes the combined text | planned |
-| `badge.base-unknown` | `[base unknown]` marks a file with no reviewed, snapshot or package-cache base, and the diff says so | planned |
+| `badge.base-unknown` | `[base unknown]` marks a local override whose file differs from the template and has no recorded base (no reviewed, snapshot or package-cache base); the diff header has its own separate base-unknown note | planned |
 | `badge.deleted-by-you` | `[deleted by you]` marks a missing file for which some base is known (reviewed, snapshot or cache); it does not need an upstream change | planned |
 
 ## Flows
@@ -74,7 +74,8 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `refusal.stale-lock` | a lock file that exists but is not held does not refuse a write | planned |
 | `refusal.pacman-lock` | pacman's database lock refuses the write | planned |
 | `refusal.changed-since-plan` | a file changed after the plan was made is refused with a stale-hash message | planned |
-| `reload.keeps-list` | a reload after a write or a rescan never empties or flashes the list, and (with the tree-state change) keeps the selection and the marks | planned |
+| `reload.keeps-list` | a rescan never empties or flashes the list | `tree::r_rescans_and_keeps_the_list_the_selection_and_the_marks` |
+| `reload.after-write` | the list after a confirmed write refreshes in place, keeps the selection and shows the written file as unchanged | planned |
 | `modal.borders` | a dialog is drawn with solid borders | planned |
 
 ## History

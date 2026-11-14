@@ -188,6 +188,10 @@ impl System {
         builder.user_only(USER_ONLY.0, USER_ONLY.1).build()
     }
 
+    pub fn write(&self, rel: &str, bytes: impl AsRef<[u8]>) {
+        self.root.overwrite(rel, bytes).unwrap();
+    }
+
     pub fn root(&self) -> &Path {
         self.root.path()
     }

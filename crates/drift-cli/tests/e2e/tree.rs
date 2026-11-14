@@ -174,3 +174,43 @@ fn clicking_a_row_selects_it_and_clicking_the_caret_toggles_the_folder() {
     session.click(column, row);
     session.wait_for("hypr collapsed", |screen| !has_row(screen, "autostart.lua"));
 }
+
+#[test]
+fn r_rescans_and_keeps_the_list_the_selection_and_the_marks() {
+    let (system, mut session) = opened();
+    for _ in 0..3 {
+        session.press("j");
+    }
+    session.press(SPACE);
+    session.press("j");
+    session.wait_for("bindings marked and input selected", |screen| {
+        mark_of(screen, "bindings.lua") == Some('x') && selected_is(screen, "input.lua")
+    });
+    system.write(
+        "home/.config/hypr/looknfeel.lua",
+        "gaps = 8\nrounding = 2\n",
+    );
+    system.write("home/.config/hypr/aaa.lua", "-- new, above everything\n");
+    let mark = session.mark();
+    session.press("r");
+    let scanned = session.wait_for(
+        "the rescan to show the new file and looknfeel unchanged",
+        |screen| {
+            has_row(screen, "aaa.lua")
+                && screen
+                    .rows()
+                    .iter()
+                    .any(|row| row.contains("✓ unchanged") && row.contains("looknfeel.lua"))
+        },
+    );
+    assert!(selected_is(&scanned, "input.lua"), "{}", scanned.text());
+    assert_eq!(mark_of(&scanned, "bindings.lua"), Some('x'));
+    assert!(scanned.contains("1 marked"));
+    for frame in session.frames_since(mark) {
+        assert!(
+            has_row(&frame, "bindings.lua") && has_row(&frame, "monitors.lua"),
+            "the list collapsed or flashed:\n{}",
+            frame.text()
+        );
+    }
+}
