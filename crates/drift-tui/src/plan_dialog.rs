@@ -5,7 +5,7 @@ use lunatui::{run, App, ControlFlow, RunOptions};
 use lunatui_core::{clip_display_prefix, width, Attrs, ClusterTable, Grid, Rect, Style};
 use lunatui_term::{Event, KeyCode, KeyKind, MouseButton, MouseKind, Scroll};
 use lunatui_theme::Token;
-use lunatui_widgets::RenderCx;
+use lunatui_widgets::{Block, BorderType, RenderCx, Widget};
 
 use drift_core::{Action, PlanView};
 
@@ -415,22 +415,11 @@ fn put(cx: &mut RenderCx<'_>, rect: Rect, text: &str, style: Style) {
 }
 
 fn draw_border(cx: &mut RenderCx<'_>, rect: Rect, title: &str, border: Style, title_style: Style) {
-    let right = rect.x + rect.width - 1;
-    let bottom = rect.y + rect.height - 1;
-    let inner_width = rect.width.saturating_sub(2);
-    let inner_height = rect.height.saturating_sub(2);
-    cx.fill(Rect::new(rect.x + 1, rect.y, inner_width, 1), border, '-');
-    cx.fill(Rect::new(rect.x + 1, bottom, inner_width, 1), border, '-');
-    cx.fill(Rect::new(rect.x, rect.y + 1, 1, inner_height), border, '|');
-    cx.fill(Rect::new(right, rect.y + 1, 1, inner_height), border, '|');
-    for (x, y) in [
-        (rect.x, rect.y),
-        (right, rect.y),
-        (rect.x, bottom),
-        (right, bottom),
-    ] {
-        cx.put_str(x, y, "+", border);
-    }
+    Block::bordered()
+        .border_type(BorderType::Plain)
+        .border_style(border)
+        .style(border)
+        .render(rect, cx);
     let room = rect.width.saturating_sub(4);
     cx.put_str(
         rect.x + 2,
@@ -802,6 +791,29 @@ mod tests {
             "expanded-120x36" => include_str!("../snapshots/plan-expanded-120x36.txt"),
             "small-20x6" => include_str!("../snapshots/plan-small-20x6.txt"),
             _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn plan_modal_uses_the_native_solid_border_at_every_supported_size() {
+        for (w, h) in [(30, 9), (80, 24), (120, 36), (200, 60)] {
+            let mut dialog = PlanDialog::new(sample_view(&[]));
+            let shown = text(&mut dialog, w, h);
+            let frame = layout(Rect::new(0, 0, w, h), &dialog.view).unwrap().dialog;
+            let rows: Vec<Vec<char>> = shown.lines().map(|line| line.chars().collect()).collect();
+            let x = usize::from(frame.x);
+            let y = usize::from(frame.y);
+            let right = usize::from(frame.x + frame.width - 1);
+            let bottom = usize::from(frame.y + frame.height - 1);
+            assert_eq!(rows[y][x], '┌');
+            assert_eq!(rows[y][right], '┐');
+            assert_eq!(rows[bottom][x], '└');
+            assert_eq!(rows[bottom][right], '┘');
+            assert!(rows[bottom][x + 1..right].iter().all(|c| *c == '─'));
+            for row in &rows[y + 1..bottom] {
+                assert_eq!(row[x], '│');
+                assert_eq!(row[right], '│');
+            }
         }
     }
 

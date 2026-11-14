@@ -220,6 +220,9 @@ cargo deny check
 
 See the [review policy](REVIEW_POLICY.md) for PR classification, proof, and merge requirements. Pull requests that add or change a visible widget or TUI view must include a README GIF or WebP captured from real program output.
 
+All borders and rules use Lunatui line sets. Apply and undo plans use its native Block; tree separators, diff dividers, active drag lines and scrollbar tracks use its line symbols. The command palette keeps its native rounded frame, and Help fills the screen.
+
+![Real tree, diff layouts, apply and undo, History, Help and command palette](docs/media/solid-modal-borders.gif)
 Drift uses Lunatui v0.1.32. The existing rendering snapshots match the new release without changes. These frames come from the real wide diff rendering test.
 
 ![Wide diff rendered with Lunatui v0.1.32](docs/media/lunatui-0.1.32.gif)
