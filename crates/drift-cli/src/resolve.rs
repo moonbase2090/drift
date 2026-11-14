@@ -325,7 +325,23 @@ impl drift_tui::Resolver for LiveResolver {
             &proposal.prepared,
             self.checker.as_ref(),
         )
-        .map_err(|error| error.describe())?;
+        .map_err(|error| {
+            let label = if error.applied.is_empty() {
+                "NOT APPLIED"
+            } else {
+                "PARTLY APPLIED"
+            };
+            let mut message = format!("{label}: {}", error.describe());
+            if !error.applied.is_empty() {
+                message.push_str(&format!(" Changed files: {}.", error.applied.join(", ")));
+            }
+            if let Some(diagnostic) = drift_apply::update_lock_diagnostic(&self.roots.omarchy_lock)
+            {
+                message.push(' ');
+                message.push_str(&diagnostic);
+            }
+            message
+        })?;
         let mut message = format!(
             "Applied {} file(s) as transaction {}; {} reviewed base(s) recorded.",
             done.checked.report.applied.len(),
@@ -341,6 +357,10 @@ impl drift_tui::Resolver for LiveResolver {
         if let Some(alert) = done.checked.followup.alert() {
             message.push(' ');
             message.push_str(&alert.replace('\n', " "));
+        }
+        if let Some(diagnostic) = drift_apply::update_lock_diagnostic(&self.roots.omarchy_lock) {
+            message.push(' ');
+            message.push_str(&diagnostic);
         }
         Ok(message)
     }
@@ -873,6 +893,88 @@ pub(crate) mod tests {
             );
         }
         text
+    }
+
+    #[test]
+    fn refused_take_is_visible_in_the_tree_and_diff_then_unlock_allows_apply() {
+        use lunatui::App;
+        use lunatui_term::{Event, KeyCode, KeyEvent};
+        use std::os::fd::AsRawFd;
+        let root = world(&[
+            (
+                "hypr/a.lua",
+                "upstream\n",
+                Some("mine\n"),
+                Some("upstream\n"),
+            ),
+            ("hypr/z.lua", "new\n", Some("old\n"), Some("old\n")),
+        ]);
+        let paths = scan_paths(&root);
+        let report =
+            drift_source::build_report(&drift_core::Registry::v1(), &paths, &BTreeSet::new())
+                .unwrap();
+        let mut resolver = live(&root, HyprlandStatus::Clean);
+        resolver.roots.omarchy_lock = root.path().join("home/.config/hypr/a.lua");
+        let held = std::fs::File::open(&resolver.roots.omarchy_lock).unwrap();
+        assert_eq!(
+            unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let mut screen = drift_tui::Screen::with_report(&report)
+            .with_resolver(Box::new(resolver))
+            .with_differ(Box::new(crate::diff::LiveDiffer::new(
+                scan_paths(&root),
+                drift_core::Registry::v1(),
+            )));
+        let press = |screen: &mut drift_tui::Screen, code| {
+            screen.update(&Event::Key(KeyEvent::press(code)));
+        };
+        for _ in 0..8 {
+            if screen.review().unwrap().view().selected_entry().is_some() {
+                break;
+            }
+            press(&mut screen, KeyCode::Down);
+        }
+        press(&mut screen, KeyCode::Char('t'));
+        press(&mut screen, KeyCode::Char('y'));
+        let refused = capture_screen(&mut screen, "01-refused-tree");
+        assert!(refused.contains("NOT APPLIED:"), "{refused}");
+        let notice = screen.review().unwrap().notice().unwrap();
+        assert!(notice.contains("actually held"), "{notice}");
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "mine\n");
+        assert!(!root.path().join("state/backups").exists());
+        press(&mut screen, KeyCode::Enter);
+        let diff = capture_screen(&mut screen, "02-refused-diff");
+        assert!(
+            diff.contains("NOT APPLIED:") && diff.contains("[preview]"),
+            "{diff}"
+        );
+        assert!(screen
+            .diff()
+            .unwrap()
+            .notice()
+            .unwrap()
+            .contains("actually held"));
+        press(&mut screen, KeyCode::Esc);
+        drop(held);
+        press(&mut screen, KeyCode::Char('t'));
+        press(&mut screen, KeyCode::Char('y'));
+        let applied = capture_screen(&mut screen, "03-applied");
+        assert!(applied.contains("APPLIED: take upstream"), "{applied}");
+        assert!(screen
+            .review()
+            .unwrap()
+            .notice()
+            .unwrap()
+            .contains("unlocked"));
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "upstream\n");
+        assert_eq!(
+            drift_apply::history(&root.path().join("state"))
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@ use crate::diff::DiffScreen;
 use crate::differ::Differ;
 use crate::historian::{Historian, UndoProposal};
 use crate::history_screen::{HistoryAction, HistoryScreen};
+use crate::outcome::{Outcome as ActionOutcome, Tone};
 use crate::overlay::{Help, Outcome, Palette};
 use crate::plan_dialog::{Decision, PlanDialog};
 use crate::resolver::{Proposal, Resolver};
@@ -52,6 +53,7 @@ pub struct Screen {
     history: Option<HistoryScreen>,
     modal: Option<Modal>,
     notice: Option<String>,
+    outcome: Option<ActionOutcome>,
     review: Option<TreeScreen>,
     action: Option<Action>,
     keymap: Keymap,
@@ -76,6 +78,7 @@ impl Screen {
             history: None,
             modal: None,
             notice: None,
+            outcome: None,
             review: None,
             action: None,
             keymap: keymap(),
@@ -279,12 +282,15 @@ impl Screen {
                 if let Some(notice) = self.notice.take() {
                     review.set_notice(&notice);
                 }
+                review.set_outcome(self.outcome.clone());
                 self.review = Some(review);
                 self.report = Some(report);
                 Phase::Idle
             }
             Note::Failed(message) => {
-                self.review = Some(TreeScreen::failed(&message));
+                let mut review = TreeScreen::failed(&message);
+                review.set_outcome(self.outcome.clone());
+                self.review = Some(review);
                 Phase::Failed
             }
         };
@@ -329,6 +335,7 @@ impl Screen {
                 return;
             }
         };
+        self.clear_outcome();
         let Some(resolver) = self.resolver.as_mut() else {
             self.action = Some(match resolve {
                 ResolveAction::KeepMine => Action::Keep(paths),
@@ -347,8 +354,11 @@ impl Screen {
                     pending: Pending::Resolve(proposal),
                 });
             }
-            Ok(proposal) => self.show(&format!("Nothing to do: {}", proposal.skipped.join("; "))),
-            Err(message) => self.show(&message),
+            Ok(proposal) => self.show_outcome(
+                format!("NO CHANGES: {}", proposal.skipped.join("; ")),
+                Tone::Cancelled,
+            ),
+            Err(message) => self.show_outcome(format!("NOT APPLIED: {message}"), Tone::Error),
         }
     }
 
@@ -362,7 +372,10 @@ impl Screen {
             .and_then(|found| DiffScreen::from_file_diff(&found))
             .map(|screen| screen.with_palette(crate::diff_palette::DiffPalette::active()))
         {
-            Ok(screen) => self.diff = Some(screen),
+            Ok(mut screen) => {
+                screen.set_outcome(self.outcome.clone());
+                self.diff = Some(screen);
+            }
             Err(message) => self.show(&message),
         }
     }
@@ -454,12 +467,16 @@ impl Screen {
             self.diff = None;
             return;
         }
-        if let Some(file) = self.diff.as_mut().and_then(DiffScreen::take_write) {
-            self.propose_result(file);
+        if let Some(result) = self.diff.as_mut().and_then(DiffScreen::take_write) {
+            match result {
+                Ok(file) => self.propose_result(file),
+                Err(message) => self.show_outcome(format!("NOT APPLIED: {message}"), Tone::Error),
+            }
         }
     }
 
     fn propose_result(&mut self, file: crate::EditedFile) {
+        self.clear_outcome();
         let outcome = self
             .resolver
             .as_mut()
@@ -471,12 +488,40 @@ impl Screen {
                     pending: Pending::Resolve(proposal),
                 });
             }
-            Some(Ok(proposal)) => {
-                self.show(&format!("Nothing to do: {}", proposal.skipped.join("; ")))
-            }
-            Some(Err(message)) => self.show(&format!("Write was NOT applied: {message}")),
-            None => self.show("Writing is unavailable in this view. Nothing was applied."),
+            Some(Ok(proposal)) => self.show_outcome(
+                format!("NO CHANGES: {}", proposal.skipped.join("; ")),
+                Tone::Cancelled,
+            ),
+            Some(Err(message)) => self.show_outcome(format!("NOT APPLIED: {message}"), Tone::Error),
+            None => self.show_outcome(
+                "NOT APPLIED: writing is unavailable in this view.".to_string(),
+                Tone::Error,
+            ),
         }
+    }
+
+    fn clear_outcome(&mut self) {
+        self.outcome = None;
+        if let Some(review) = self.review.as_mut() {
+            review.set_outcome(None);
+        }
+        if let Some(diff) = self.diff.as_mut() {
+            diff.set_outcome(None);
+        }
+    }
+
+    fn show_outcome(&mut self, text: String, tone: Tone) {
+        let outcome = ActionOutcome { text, tone };
+        if let Some(review) = self.review.as_mut() {
+            review.set_outcome(Some(outcome.clone()));
+        }
+        if let Some(diff) = self.diff.as_mut() {
+            diff.set_outcome(Some(outcome.clone()));
+        }
+        if let Some(history) = self.history.as_mut() {
+            history.set_notice(&outcome.text);
+        }
+        self.outcome = Some(outcome);
     }
 
     fn show(&mut self, text: &str) {
@@ -593,7 +638,10 @@ impl Screen {
             return;
         };
         match decision {
-            Decision::Cancel => self.show("Cancelled. Nothing was written."),
+            Decision::Cancel => self.show_outcome(
+                "NOT APPLIED: Cancelled. Nothing was written.".to_string(),
+                Tone::Cancelled,
+            ),
             Decision::Confirm => self.confirm(modal.pending),
         }
     }
@@ -608,14 +656,37 @@ impl Screen {
                 match outcome {
                     Some(Ok(message)) => {
                         self.diff = None;
-                        if self.worker.is_some() {
-                            self.notice = Some(message.clone());
-                        }
-                        self.show(&message);
+                        let label = if proposal.prepared.action == ResolveAction::KeepMine {
+                            "RECORDED"
+                        } else {
+                            "APPLIED"
+                        };
+                        let files = proposal
+                            .prepared
+                            .plan
+                            .as_ref()
+                            .map(|plan| {
+                                plan.files()
+                                    .iter()
+                                    .map(|file| file.path().as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .unwrap_or_default();
+                        self.show_outcome(
+                            format!(
+                                "{label}: {} — {files}. {message}",
+                                proposal.prepared.action.label()
+                            ),
+                            Tone::Applied,
+                        );
                         self.request_rescan();
                     }
-                    Some(Err(message)) => self.show(&message),
-                    None => self.show("No resolver is attached."),
+                    Some(Err(message)) => self.show_outcome(message, Tone::Error),
+                    None => self.show_outcome(
+                        "NOT APPLIED: no file writer is available.".to_string(),
+                        Tone::Error,
+                    ),
                 }
             }
             Pending::Undo(proposal) => {
@@ -1382,7 +1453,7 @@ mod tests {
             let id = proposal.view.id.clone();
             self.log.borrow_mut().applied.push(id.clone());
             if self.fail_apply {
-                return Err("the files changed on disk".to_string());
+                return Err("NOT APPLIED: the files changed on disk".to_string());
             }
             Ok(format!(
                 "Applied {} file(s) as {id}.",
@@ -1531,7 +1602,11 @@ mod tests {
                 }
             }
             assert_eq!(log.borrow().applied, ["txn-1"], "{method}");
-            assert_eq!(notice(&screen), "Applied 1 file(s) as txn-1.", "{method}");
+            assert_eq!(
+                notice(&screen),
+                "APPLIED: take upstream — .config/b.conf. Applied 1 file(s) as txn-1.",
+                "{method}"
+            );
             assert!(!shown(&mut screen).contains("Apply plan"), "{method}");
         }
     }
@@ -1571,7 +1646,7 @@ mod tests {
         press(&mut screen, "jjjt");
         assert_eq!(log.borrow().proposed.len(), 1);
         assert!(
-            notice(&screen).starts_with("Nothing to do: .config/same.conf nothing to do"),
+            notice(&screen).starts_with("NO CHANGES: .config/same.conf nothing to do"),
             "{}",
             notice(&screen)
         );
@@ -1584,14 +1659,14 @@ mod tests {
         let (mut screen, log) = actionable(true, false);
         let _ = shown(&mut screen);
         press(&mut screen, "jjt");
-        assert_eq!(notice(&screen), "cannot load the files");
+        assert_eq!(notice(&screen), "NOT APPLIED: cannot load the files");
         assert!(log.borrow().applied.is_empty());
 
         let (mut screen, log) = actionable(false, true);
         let _ = shown(&mut screen);
         press(&mut screen, "jjty");
         assert_eq!(log.borrow().applied.len(), 1);
-        assert_eq!(notice(&screen), "the files changed on disk");
+        assert_eq!(notice(&screen), "NOT APPLIED: the files changed on disk");
     }
 
     #[test]
@@ -1645,7 +1720,10 @@ mod tests {
         assert!(screen.needs_animation_frames());
         screen.apply_note(Note::Ready(report));
         assert!(!screen.needs_animation_frames());
-        assert_eq!(notice(&screen), "Applied 1 file(s) as txn-1.");
+        assert_eq!(
+            notice(&screen),
+            "APPLIED: take upstream — .config/a.conf. Applied 1 file(s) as txn-1."
+        );
         drop(unlock);
         drop(screen);
     }
@@ -1942,6 +2020,68 @@ mod tests {
         (screen, log)
     }
 
+    fn assert_outcome_color(screen: &mut Screen, label: &str, token: Token) {
+        let (grid, clusters) = render_once(screen, 120, 36);
+        let text = grid.display_text(&clusters);
+        let (y, line) = text
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains(label))
+            .unwrap();
+        let at = line.find(label).unwrap();
+        let x = line[..at].chars().count();
+        assert_eq!(
+            grid.get(x as u16, y as u16).unwrap().style().fg,
+            crate::diff_palette::active_theme().resolve(token)
+        );
+    }
+
+    #[test]
+    fn a_refused_action_stays_error_colored_when_the_file_is_opened_in_the_diff() {
+        let (reader, _) = differing(false, false);
+        let mut screen = reader.with_resolver(Box::new(Fake {
+            log: Rc::new(RefCell::new(Log::default())),
+            fail_propose: false,
+            fail_apply: true,
+        }));
+        let _ = shown(&mut screen);
+        press(&mut screen, "jty");
+        assert!(notice(&screen).starts_with("NOT APPLIED:"));
+        assert_outcome_color(&mut screen, "NOT APPLIED:", Token::Fail);
+        enter(&mut screen);
+        assert!(screen.diff().is_some());
+        let text = shown(&mut screen);
+        assert!(
+            text.contains("NOT APPLIED:") && text.contains("[preview]"),
+            "{text}"
+        );
+        assert_outcome_color(&mut screen, "NOT APPLIED:", Token::Fail);
+        escape(&mut screen);
+        assert!(notice(&screen).starts_with("NOT APPLIED:"));
+    }
+
+    #[test]
+    fn a_successful_action_survives_the_refreshed_row_and_uses_the_success_color() {
+        let (mut screen, _) = actionable(false, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jty");
+        assert!(notice(&screen).starts_with("APPLIED:"));
+        let updated = ScanReport {
+            entries: vec![
+                entry(".config/a.conf", Status::Unchanged),
+                entry(".config/b.conf", Status::Conflict),
+            ],
+            ..empty_report()
+        };
+        screen.apply_note(Note::Ready(updated));
+        assert!(notice(&screen).contains("APPLIED: take upstream"));
+        assert_eq!(
+            screen.review().unwrap().view().entries()[0].status,
+            Status::Unchanged
+        );
+        assert_outcome_color(&mut screen, "APPLIED:", Token::Ok);
+    }
+
     #[test]
     fn every_global_key_acts_on_every_screen() {
         for context in [Context::Tree, Context::History, Context::Diff] {
@@ -2007,7 +2147,10 @@ mod tests {
             press(&mut screen, keys);
             assert!(log.borrow().applied.is_empty(), "{keys}");
             assert!(screen.history().is_some(), "{keys}");
-            assert_eq!(history_notice(&screen), "Cancelled. Nothing was written.");
+            assert_eq!(
+                history_notice(&screen),
+                "NOT APPLIED: Cancelled. Nothing was written."
+            );
             assert!(!shown(&mut screen).contains("Apply plan"));
         }
     }
