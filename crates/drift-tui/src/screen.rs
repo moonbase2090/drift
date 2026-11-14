@@ -273,18 +273,28 @@ impl Screen {
 
     fn apply_note(&mut self, note: Note) {
         self.phase = match note {
-            Note::Scanning => Phase::Scanning,
-            Note::Ready(report) => {
-                let mut review = TreeScreen::new(&report);
-                if let Some(notice) = self.notice.take() {
-                    review.set_notice(&notice);
+            Note::Scanning => {
+                if let Some(review) = self.review.as_mut() {
+                    review.set_scanning();
                 }
-                self.review = Some(review);
+                Phase::Scanning
+            }
+            Note::Ready(report) => {
+                match self.review.as_mut() {
+                    Some(review) => review.replace_report(&report),
+                    None => self.review = Some(TreeScreen::new(&report)),
+                }
+                if let Some(notice) = self.notice.take() {
+                    self.review.as_mut().unwrap().set_notice(&notice);
+                }
                 self.report = Some(report);
                 Phase::Idle
             }
             Note::Failed(message) => {
-                self.review = Some(TreeScreen::failed(&message));
+                match self.review.as_mut() {
+                    Some(review) => review.set_error(&message),
+                    None => self.review = Some(TreeScreen::failed(&message)),
+                }
                 Phase::Failed
             }
         };
@@ -632,6 +642,9 @@ impl Screen {
         };
         worker.rescan();
         self.phase = Phase::Scanning;
+        if let Some(review) = self.review.as_mut() {
+            review.set_scanning();
+        }
         self.refresh_tree();
     }
 
@@ -690,12 +703,20 @@ impl App for Screen {
             self.update_history(event);
             return ControlFlow::Continue;
         }
-        if !matches!(self.phase, Phase::Scanning) && self.review.is_some() {
+        if self.review.is_some() {
             let action = self.review.as_mut().and_then(|review| review.handle(event));
             return match action {
                 Some(Action::Quit) => ControlFlow::Break,
                 Some(Action::Rescan) => {
                     self.request_rescan();
+                    ControlFlow::Continue
+                }
+                Some(Action::Keep(_) | Action::Take(_) | Action::Merge(_) | Action::Ignore(_))
+                    if matches!(self.phase, Phase::Scanning) =>
+                {
+                    self.show(
+                        "Scan in progress. The action was not applied; try again when it finishes.",
+                    );
                     ControlFlow::Continue
                 }
                 Some(other) => {
@@ -748,15 +769,16 @@ impl Screen {
             }
             return;
         }
-        if matches!(self.phase, Phase::Scanning) {
-            self.spin = self.spin.wrapping_add(1);
-            self.refresh_tree();
-        } else if let Some(review) = self.review.as_mut() {
+        if let Some(review) = self.review.as_mut() {
             review.render(grid, area, clusters);
             if let Some(modal) = self.modal.as_mut() {
                 modal.dialog.render(grid, area, clusters);
             }
             return;
+        }
+        if matches!(self.phase, Phase::Scanning) {
+            self.spin = self.spin.wrapping_add(1);
+            self.refresh_tree();
         }
         self.columns = area.width;
         self.rows = area.height;
@@ -1012,6 +1034,103 @@ mod tests {
             elapsed < Duration::from_millis(200),
             "quit waited {elapsed:?}"
         );
+    }
+
+    fn capture_refresh(screen: &mut Screen, name: &str) -> String {
+        let (grid, clusters) = render_once(screen, 120, 36);
+        let text = grid.display_text(&clusters);
+        if std::env::var_os("DRIFT_CAPTURE").is_some() {
+            let colors: Vec<Vec<String>> = (0..36)
+                .map(|y| {
+                    (0..120)
+                        .map(|x| {
+                            let style = grid.get(x, y).unwrap().style();
+                            format!("{:?} {:?}", style.fg, style.bg)
+                        })
+                        .collect()
+                })
+                .collect();
+            println!(
+                "DRIFT_FRAME {}",
+                serde_json::json!({"name":name,"text":text,"colors":colors})
+            );
+        }
+        text
+    }
+
+    #[test]
+    fn refresh_keeps_expansion_selection_and_marks_even_after_a_failed_scan() {
+        for failed in [false, true] {
+            let report = ScanReport {
+                entries: vec![
+                    entry(".config/aaa/a.conf", Status::Conflict),
+                    entry(".config/zeta/a.conf", Status::LocalOverride),
+                    entry(".config/zeta/b.conf", Status::LocalOverride),
+                ],
+                ..empty_report()
+            };
+            let mut screen = Screen::with_report(&report);
+            press(&mut screen, "GlG ");
+            assert_eq!(
+                screen
+                    .review()
+                    .unwrap()
+                    .view()
+                    .selected_entry()
+                    .unwrap()
+                    .path,
+                ".config/zeta/b.conf"
+            );
+            let before = if !failed {
+                Some(capture_refresh(&mut screen, "01-before-refresh"))
+            } else {
+                None
+            };
+            screen.apply_note(Note::Scanning);
+            if let Some(before) = before {
+                let during = capture_refresh(&mut screen, "02-refresh-in-progress");
+                assert_eq!(
+                    before
+                        .lines()
+                        .zip(during.lines())
+                        .filter(|(a, b)| a != b)
+                        .count(),
+                    1
+                );
+                assert!(during.contains("b.conf"));
+                press(&mut screen, "k");
+                assert_eq!(
+                    screen
+                        .review()
+                        .unwrap()
+                        .view()
+                        .selected_entry()
+                        .unwrap()
+                        .path,
+                    ".config/zeta/a.conf"
+                );
+                press(&mut screen, "j");
+            }
+            if failed {
+                screen.apply_note(Note::Failed("temporary scan error".into()));
+            }
+            let mut updated = report.clone();
+            updated
+                .entries
+                .insert(0, entry(".config/000/new.conf", Status::Conflict));
+            screen.apply_note(Note::Ready(updated));
+            if !failed {
+                capture_refresh(&mut screen, "03-refreshed");
+            }
+            let view = screen.review().unwrap().view();
+            assert_eq!(view.selected_entry().unwrap().path, ".config/zeta/b.conf");
+            assert_eq!(view.marked_count(), 1);
+            assert!(view
+                .rows()
+                .iter()
+                .filter_map(|row| row.entry)
+                .any(|id| view.entries()[id].path == ".config/zeta/a.conf"));
+        }
     }
 
     #[test]
