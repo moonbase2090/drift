@@ -209,3 +209,7 @@ See the [review policy](REVIEW_POLICY.md) for PR classification, proof, and merg
 For `.json` and `.jsonc` files, comparison decodes equivalent JSON string escapes such as `\u2014` and a literal `—`. Escape spelling alone creates no changed hunk or drift status. Whitespace, comments, numbers and actual string edits still compare as written. Merging keeps the original spelling on unchanged local lines, and backup/preflight hashes always cover the original bytes.
 
 ![Equivalent JSON escapes produce no hunk; a real value change still appears](docs/media/json-escapes.gif)
+
+Drift uses Lunatui v0.1.32. The existing rendering snapshots match the new release without changes. These frames come from the real wide diff rendering test.
+
+![Wide diff rendered with Lunatui v0.1.32](docs/media/lunatui-0.1.32.gif)
