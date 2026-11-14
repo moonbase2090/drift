@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -254,7 +255,11 @@ fn an_unparseable_menu_file_is_left_alone() {
 #[test]
 fn a_held_update_lock_refuses_the_write() {
     let fix = Fixture::new();
-    fs::write(fix.root.join("runtime/omarchy-update.lock"), b"").unwrap();
+    let held = fs::File::create(fix.root.join("runtime/omarchy-update.lock")).unwrap();
+    assert_eq!(
+        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
     let (result, _) = fix.go("integrate-1", IntegrateMode::Yes, false);
     assert!(result.unwrap_err().contains("omarchy update lock"));
     assert_eq!(fs::read_to_string(fix.live(MENU_PATH)).unwrap(), STOCK);

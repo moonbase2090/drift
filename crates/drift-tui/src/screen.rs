@@ -437,11 +437,7 @@ impl Screen {
                 match key.code {
                     KeyCode::Char('?') => return self.open_help(),
                     KeyCode::Char(':') => return self.open_palette(),
-                    KeyCode::Char('u')
-                        if self.diff.as_ref().is_some_and(|diff| !diff.plan_open()) =>
-                    {
-                        return self.undo_last();
-                    }
+                    KeyCode::Char('u') => return self.undo_last(),
                     _ => {}
                 }
             }
@@ -456,6 +452,30 @@ impl Screen {
         };
         if closes {
             self.diff = None;
+            return;
+        }
+        if let Some(file) = self.diff.as_mut().and_then(DiffScreen::take_write) {
+            self.propose_result(file);
+        }
+    }
+
+    fn propose_result(&mut self, file: crate::EditedFile) {
+        let outcome = self
+            .resolver
+            .as_mut()
+            .map(|resolver| resolver.propose_result(&file));
+        match outcome {
+            Some(Ok(proposal)) if proposal.prepared.plan.is_some() => {
+                self.modal = Some(Modal {
+                    dialog: PlanDialog::new(proposal.view.clone()),
+                    pending: Pending::Resolve(proposal),
+                });
+            }
+            Some(Ok(proposal)) => {
+                self.show(&format!("Nothing to do: {}", proposal.skipped.join("; ")))
+            }
+            Some(Err(message)) => self.show(&format!("Write was NOT applied: {message}")),
+            None => self.show("Writing is unavailable in this view. Nothing was applied."),
         }
     }
 
@@ -587,6 +607,7 @@ impl Screen {
                     .map(|resolver| resolver.apply(&proposal));
                 match outcome {
                     Some(Ok(message)) => {
+                        self.diff = None;
                         if self.worker.is_some() {
                             self.notice = Some(message.clone());
                         }
@@ -1320,6 +1341,43 @@ mod tests {
             })
         }
 
+        fn propose_result(&mut self, file: &crate::EditedFile) -> Result<Proposal, String> {
+            if self.fail_propose {
+                return Err("cannot load the files".to_string());
+            }
+            self.log
+                .borrow_mut()
+                .proposed
+                .push((ResolveAction::Merge, vec![file.path.clone()]));
+            let input = ResolveInput {
+                path: file.path.clone(),
+                root: "config".into(),
+                rel: RelPath::new(file.path.trim_start_matches(".config/")).unwrap(),
+                volatile: false,
+                link: false,
+                unreadable: false,
+                base: None,
+                ours: file.before.clone(),
+                theirs: file.template.clone(),
+            };
+            let prepared = drift_core::prepare_result(
+                &input,
+                &file.result,
+                "txn-1",
+                "2026-06-01T00:00:00Z",
+                "4.5.0-3",
+                &[],
+            )
+            .unwrap();
+            let view =
+                PlanView::build(prepared.plan.as_ref().unwrap(), "STATE", &prepared.contents);
+            Ok(Proposal {
+                prepared,
+                view,
+                skipped: vec![],
+            })
+        }
+
         fn apply(&mut self, proposal: &Proposal) -> Result<String, String> {
             let id = proposal.view.id.clone();
             self.log.borrow_mut().applied.push(id.clone());
@@ -1864,7 +1922,13 @@ mod tests {
     fn watched(context: Context) -> (Screen, Rc<RefCell<HistoryLog>>) {
         let (screen, _) = differing(false, false);
         let (fake, log) = historian(false, false, false, false);
-        let mut screen = screen.with_historian(Box::new(fake));
+        let mut screen = screen
+            .with_historian(Box::new(fake))
+            .with_resolver(Box::new(Fake {
+                log: Rc::new(RefCell::new(Log::default())),
+                fail_propose: false,
+                fail_apply: false,
+            }));
         let _ = shown(&mut screen);
         match context {
             Context::Tree => {}
@@ -1909,7 +1973,7 @@ mod tests {
         assert!(screen.diff().is_some());
         press(&mut screen, "o");
         press(&mut screen, "w");
-        assert!(screen.diff().is_some_and(|diff| diff.plan_open()));
+        assert!(screen.modal.is_some());
         let before = log.borrow().proposed.len();
         press(&mut screen, "u");
         assert_eq!(log.borrow().proposed.len(), before);
