@@ -677,7 +677,7 @@ mod tests {
                 .history()
                 .and_then(|history| history.notice())
                 .is_some_and(|notice| notice
-                    .starts_with("Undid resolve-1800000000123 as undo-1800000100456")),
+                    .starts_with("UNDONE: Undid resolve-1800000000123 as undo-1800000100456")),
             "{:?}",
             screen.history().and_then(|history| history.notice())
         );
