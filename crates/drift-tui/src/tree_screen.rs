@@ -904,7 +904,7 @@ pub fn row_hit(row: &TreeRow, column: u16) -> Hit {
     let base = 2 + row.depth * 2;
     let (caret_at, check_at) = match row.kind {
         RowKind::Dir { .. } => (Some(base), base + 2),
-        RowKind::File => (None, base + 4),
+        RowKind::File => (None, base + 2),
     };
     if caret_at == Some(column) {
         Hit::Caret
@@ -1815,11 +1815,10 @@ mod tests {
         assert_eq!(row_hit(&dir(0), 7), Hit::Body);
         assert_eq!(row_hit(&dir(2), 6), Hit::Caret);
         assert_eq!(row_hit(&dir(2), 3), Hit::Body);
-        assert_eq!(row_hit(&file(1), 7), Hit::Body);
+        assert_eq!(row_hit(&file(1), 5), Hit::Body);
+        assert_eq!(row_hit(&file(1), 6), Hit::Checkbox);
         assert_eq!(row_hit(&file(1), 8), Hit::Checkbox);
-        assert_eq!(row_hit(&file(1), 10), Hit::Checkbox);
-        assert_eq!(row_hit(&file(1), 6), Hit::Body);
-        assert_eq!(row_hit(&file(1), 11), Hit::Body);
+        assert_eq!(row_hit(&file(1), 9), Hit::Body);
     }
 
     #[test]

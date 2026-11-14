@@ -24,7 +24,12 @@ serde_json = "1"
 lunatui.workspace = true
 lunatui-term.workspace = true
 libc.workspace = true
+vt100 = "0.16"
 
 [[bin]]
 name = "drift"
 path = "src/main.rs"
+
+[[test]]
+name = "e2e"
+path = "tests/e2e/main.rs"

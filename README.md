@@ -12,6 +12,7 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 - [Command reference](docs/cli.md): every command, flag and exit code.
 - [Bar widget](docs/widget.md).
 - [Keys and mouse targets](docs/input-map.md).
+- [Feature map and interaction tests](docs/feature-map.md): every interaction and the test that drives it; [how the tests work](docs/testing.md).
 
 The commands in these pages are run by a test against a fixture system.
 
