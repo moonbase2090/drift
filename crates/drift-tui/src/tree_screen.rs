@@ -742,12 +742,12 @@ impl TreeScreen {
             );
         }
 
-        let info_style = if self.error.is_some() && !self.view.entries().is_empty() {
+        let info_style = if let Some(outcome) = &self.outcome {
+            outcome.style(&cx, base)
+        } else if self.error.is_some() && !self.view.entries().is_empty() {
             base.fg(cx.token(Token::Fail))
         } else {
-            self.outcome
-                .as_ref()
-                .map_or(dim, |outcome| outcome.style(&cx, base))
+            dim
         };
         put(&mut cx, found.info, &self.info_text(), info_style);
         self.settle_scroll(usize::from(found.tree.height));

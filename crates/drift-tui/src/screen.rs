@@ -2320,6 +2320,22 @@ mod tests {
     }
 
     #[test]
+    fn scan_errors_keep_the_persistent_outcome_color() {
+        for (tone, token) in [
+            (Tone::Applied, Token::Ok),
+            (Tone::Error, Token::Fail),
+            (Tone::Cancelled, Token::Warn),
+        ] {
+            let (mut screen, _) = actionable(false, false);
+            let _ = shown(&mut screen);
+            screen.show_outcome("OUTCOME: retained".into(), tone);
+            screen.apply_note(Note::Failed("scan failed".into()));
+            assert!(shown(&mut screen).contains("scan failed"));
+            assert_outcome_color(&mut screen, "OUTCOME:", token);
+        }
+    }
+
+    #[test]
     fn every_global_key_acts_on_every_screen() {
         for context in [Context::Tree, Context::History, Context::Diff] {
             for command in crate::commands::GLOBAL_COMMANDS {
