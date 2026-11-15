@@ -642,6 +642,7 @@ impl Screen {
         };
         match historian.propose(target, force) {
             Ok(proposal) if !proposal.view.files.is_empty() => {
+                self.clear_outcome();
                 let diverged = proposal.preview.diverged().len();
                 if diverged > 0 && !force {
                     self.show(&format!(
@@ -2561,7 +2562,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_errors_keep_the_persistent_outcome_color() {
+    fn scan_errors_keep_their_failure_color_beside_each_outcome() {
         for (tone, token) in [
             (Tone::Applied, Token::Ok),
             (Tone::Error, Token::Fail),
@@ -2573,6 +2574,9 @@ mod tests {
             screen.apply_note(Note::Failed("scan failed".into()));
             assert!(shown(&mut screen).contains("scan failed"));
             assert_outcome_color(&mut screen, "OUTCOME:", token);
+            assert_outcome_color(&mut screen, "Scan failed:", Token::Fail);
+            let (grid, clusters) = render_once(&mut screen, 120, 36);
+            crate::proof::capture(&format!("mixed-status-{tone:?}"), &grid, &clusters);
         }
     }
 
@@ -2628,6 +2632,33 @@ mod tests {
         press(&mut screen, "u");
         assert_eq!(notice(&screen), "the state directory is unreadable");
         assert!(!shown(&mut screen).contains("Apply plan"));
+    }
+
+    #[test]
+    fn a_rescan_cancelled_tree_undo_replaces_the_previous_outcome() {
+        let (fake, log) = historian(false, false, false, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        screen.show_outcome("APPLIED: previous write".into(), Tone::Applied);
+        press(&mut screen, "u");
+        assert!(screen.modal.is_some());
+        let cleared_for_dialog = screen.outcome.is_none();
+        screen.apply_note(Note::Scanning);
+        assert!(screen.modal.is_none());
+        screen.apply_note(Note::Ready(ScanReport {
+            entries: vec![entry(".config/a.conf", Status::Conflict)],
+            ..empty_report()
+        }));
+        let text = shown(&mut screen);
+        assert!(
+            text.contains("the plan was cancelled. Nothing was written."),
+            "{text}"
+        );
+        assert!(!text.contains("APPLIED: previous write"));
+        assert!(cleared_for_dialog);
+        assert!(log.borrow().applied.is_empty());
+        let (grid, clusters) = render_once(&mut screen, 120, 36);
+        crate::proof::capture("tree-undo-cancelled-by-rescan", &grid, &clusters);
     }
 
     #[test]
