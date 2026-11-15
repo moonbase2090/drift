@@ -235,3 +235,7 @@ All borders and rules use Lunatui line sets. Apply and undo plans use its native
 Drift uses Lunatui v0.1.32. The existing rendering snapshots match the new release without changes. These frames come from the real wide diff rendering test.
 
 ![Wide diff rendered with Lunatui v0.1.32](docs/media/lunatui-0.1.32.gif)
+
+After a refresh clears tree selection, Down selects the first visible row and Up selects the last. An action outcome keeps its color while a simultaneous `Scan failed` clause stays red. When both sides make the same JSON string edit with different escape spelling, the upstream pane shows the upstream bytes that Take theirs will use. Opening an undo plan clears the previous outcome, so a rescan cancellation stays visible after the report refreshes. The capture shows both status colors, the JSON edit in two and four panes, and the cancelled undo.
+
+![Mixed status colors, original upstream JSON text and undo cancelled by a rescan](docs/media/review-followups.gif)
