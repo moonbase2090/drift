@@ -39,7 +39,7 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `tree.keep` | `o` opens the keep-mine plan for the marked files or the selected one | `plan::o_keeps_mine_writes_nothing_and_records_the_template_as_reviewed` |
 | `tree.take` | `t` opens the take-upstream plan | `plan::y_confirms_and_writes_the_file_a_backup_and_one_transaction`, `plan::a_plan_for_everything_writes_every_listed_file_and_creates_the_missing_one` |
 | `tree.merge` | `m` opens the merge plan for a file that merges cleanly | `plan::m_merges_a_clean_merge_and_writes_the_combined_text_with_a_backup` |
-| `tree.ignore` | `i` ignores the selected file | `ignore::i_ignores_the_selected_file_and_records_it_in_the_state_folder`, `ignore::i_ignores_every_marked_file_and_not_the_selected_one`, `ignore::an_ignored_file_stays_out_of_the_list_in_the_next_session`, `ignore::the_palette_ignore_command_ignores_the_selected_file` |
+| `tree.ignore` | `i` ignores the selected file or the marked files | `ignore::i_ignores_the_selected_file_and_records_it_in_the_state_folder`, `ignore::i_ignores_every_marked_file_and_not_the_selected_one`, `ignore::an_ignored_file_stays_out_of_the_list_in_the_next_session`, `ignore::the_palette_ignore_command_ignores_the_selected_file` |
 | `tree.history` | `H` opens the history | `history::h_opens_the_history_listing_every_transaction_newest_first` |
 
 ## File states

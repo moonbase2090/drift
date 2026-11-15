@@ -750,7 +750,16 @@ impl TreeScreen {
         } else {
             dim
         };
-        put(&mut cx, found.info, &self.info_text(), info_style);
+        let mut remaining = found.info;
+        for (index, (text, token)) in self.info_parts().into_iter().enumerate() {
+            let prefix = if index == 0 { " " } else { "  |  " };
+            let text = format!("{prefix}{text}");
+            let style = token.map_or(info_style, |token| base.fg(cx.token(token)));
+            put(&mut cx, remaining, &text, style);
+            let used = width(&text).min(usize::from(remaining.width)) as u16;
+            remaining.x += used;
+            remaining.width -= used;
+        }
         self.settle_scroll(usize::from(found.tree.height));
         self.draw_rows(&mut cx, &found, base, dim, selected_style);
         if let Some(rect) = found.divider.filter(|_| self.panel().is_none()) {
@@ -772,42 +781,57 @@ impl TreeScreen {
     }
 
     fn info_text(&self) -> String {
+        let parts: Vec<_> = self
+            .info_parts()
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        format!(" {}", parts.join("  |  "))
+    }
+
+    fn info_parts(&self) -> Vec<(String, Option<Token>)> {
         let mut parts = Vec::new();
         if let Some(outcome) = &self.outcome {
-            parts.push(outcome.text.clone());
+            parts.push((outcome.text.clone(), None));
         }
         if let Some(error) = self
             .error
             .as_ref()
             .filter(|_| !self.view.entries().is_empty())
         {
-            parts.push(format!(
-                "Scan failed: {error}. Showing the previous report; rescan before writing."
+            parts.push((
+                format!(
+                    "Scan failed: {error}. Showing the previous report; rescan before writing."
+                ),
+                Some(Token::Fail),
             ));
         }
         if self.scanning {
-            parts.push("scanning…".to_string());
+            parts.push(("scanning…".to_string(), None));
         }
         if let Some(status) = self.hover {
-            parts.push(format!("{}: {}", status.label(), status.explain()));
+            parts.push((format!("{}: {}", status.label(), status.explain()), None));
         }
         if let Some(notice) = &self.notice {
-            parts.push(notice.clone());
+            parts.push((notice.clone(), None));
         }
         if self.mode == Mode::Search {
-            parts.push(format!("search: {}_", self.view.query()));
+            parts.push((format!("search: {}_", self.view.query()), None));
         } else if !self.view.query().is_empty() {
-            parts.push(format!("search: {}", self.view.query()));
+            parts.push((format!("search: {}", self.view.query()), None));
         }
         if let Some(status) = self.view.status_filter() {
-            parts.push(format!("filter: {}", status.label()));
+            parts.push((format!("filter: {}", status.label()), None));
         }
         if self.view.marked_count() > 0 {
-            parts.push(format!("{} marked", self.view.marked_count()));
+            parts.push((format!("{} marked", self.view.marked_count()), None));
         }
         let total = self.view.entries().len();
-        parts.push(format!("{} of {} files", self.view.visible_files(), total));
-        format!(" {}", parts.join("  |  "))
+        parts.push((
+            format!("{} of {} files", self.view.visible_files(), total),
+            None,
+        ));
+        parts
     }
 
     fn draw_rows(
