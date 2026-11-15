@@ -66,6 +66,13 @@ pub const NO_BASE: Template = Template {
     base: None,
 };
 
+pub const TWO_CONFLICTS: Template = Template {
+    rel: "hypr/rules.lua",
+    theirs: "rule = a-theirs\nrule = b\nrule = c\nrule = d\nrule = e\nrule = f\nrule = g\nrule = h\nrule = i\nrule = j\nrule = k\nrule = l\nrule = m\nrule = n\nrule = o\nrule = p\nrule = q\nrule = r\nrule = s\nrule = t\nrule = u\nrule = v\nrule = w\nrule = x\nrule = y\nrule = z-theirs\n",
+    ours: Some("rule = a-ours\nrule = b\nrule = c\nrule = d\nrule = e\nrule = f\nrule = g\nrule = h\nrule = i\nrule = j\nrule = k\nrule = l\nrule = m\nrule = n\nrule = o\nrule = p\nrule = q\nrule = r\nrule = s\nrule = t\nrule = u\nrule = v\nrule = w\nrule = x\nrule = y\nrule = z-ours\n"),
+    base: Some("rule = a\nrule = b\nrule = c\nrule = d\nrule = e\nrule = f\nrule = g\nrule = h\nrule = i\nrule = j\nrule = k\nrule = l\nrule = m\nrule = n\nrule = o\nrule = p\nrule = q\nrule = r\nrule = s\nrule = t\nrule = u\nrule = v\nrule = w\nrule = x\nrule = y\nrule = z\n"),
+};
+
 pub const USER_ONLY: (&str, &str) = ("hypr/mine.lua", "-- only mine\n");
 
 pub const WORLD: [&Template; 7] = [
@@ -117,6 +124,13 @@ impl SystemBuilder {
             .file_with_mode(
                 "bin/omarchy-notification-send",
                 "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DRIFT_ROOT/notifications.log\"\n",
+                0o755,
+            )
+            .unwrap();
+        builder
+            .file_with_mode(
+                "bin/editor",
+                "#!/bin/sh\nprintf 'bind = SUPER, A, edited\\n' > \"$1\"\n",
                 0o755,
             )
             .unwrap();
@@ -186,6 +200,10 @@ impl System {
             builder = builder.template(template);
         }
         builder.user_only(USER_ONLY.0, USER_ONLY.1).build()
+    }
+
+    pub fn read_live(&self, rel: &str) -> Option<String> {
+        std::fs::read_to_string(self.home().join(".config").join(rel)).ok()
     }
 
     pub fn write(&self, rel: &str, bytes: impl AsRef<[u8]>) {

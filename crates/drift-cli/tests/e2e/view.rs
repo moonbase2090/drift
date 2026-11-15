@@ -44,3 +44,17 @@ pub fn has_row(screen: &Screen, needle: &str) -> bool {
 pub fn selected_is(screen: &Screen, needle: &str) -> bool {
     selected(screen).contains(needle)
 }
+
+pub fn current_hunk(screen: &Screen) -> Option<usize> {
+    screen.rows().iter().find_map(|row| {
+        let rest = row.strip_prefix("> ")?;
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    })
+}
+
+pub fn column_of(screen: &Screen, row_needle: &str, needle: &str) -> Option<u16> {
+    let row = screen.rows().iter().find(|row| row.contains(row_needle))?;
+    let byte = row.find(needle)?;
+    Some(row[..byte].chars().count() as u16)
+}
