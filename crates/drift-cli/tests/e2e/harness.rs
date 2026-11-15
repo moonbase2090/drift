@@ -352,7 +352,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        unsafe { libc::kill(self.child.id() as i32, libc::SIGKILL) };
+        let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }

@@ -39,7 +39,7 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `tree.keep` | `o` opens the keep-mine plan for the marked files or the selected one | planned |
 | `tree.take` | `t` opens the take-upstream plan | planned |
 | `tree.merge` | `m` opens the merge plan for a file that merges cleanly | planned |
-| `tree.ignore` | `i` ignores the selected file | planned |
+| `tree.ignore` | `i` ignores the selected file or the marked files | planned |
 | `tree.history` | `H` opens the history | planned |
 
 ## File states
