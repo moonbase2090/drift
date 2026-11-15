@@ -2,7 +2,8 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use drift_core::{
-    merge3, Choice, DiffContent, DiffRows, FileDiff, Hunk, HunkKind, Mark, Merge, Row, Span,
+    merge3, merge_file, Choice, DiffContent, DiffRows, FileDiff, Hunk, HunkKind, Mark, Merge, Row,
+    Span,
 };
 use lunatui::{App, ControlFlow};
 use lunatui_core::symbols::line;
@@ -245,8 +246,14 @@ impl DiffScreen {
         let ours = text(&diff.ours, "live")?.unwrap_or_default();
         let theirs = text(&diff.theirs, "template")?.unwrap_or_default();
         let screen = match &diff.base {
-            DiffContent::Text { text, .. } => Self::new(text, &ours, &theirs),
-            DiffContent::Absent => Self::without_base(&ours, &theirs),
+            DiffContent::Text { text, .. } => {
+                Self::from_merge(&merge_file(&diff.path, text, &ours, &theirs))
+            }
+            DiffContent::Absent => {
+                let mut screen = Self::from_merge(&merge_file(&diff.path, &ours, &ours, &theirs));
+                screen.two_way = true;
+                screen
+            }
             DiffContent::Unreadable | DiffContent::HashOnly { .. } => {
                 text(&diff.base, "base")?;
                 Self::without_base(&ours, &theirs)
@@ -809,6 +816,27 @@ fn align(merge: &Merge, choices: &[Option<Choice>]) -> Aligned {
                     aligned.result.push(plain);
                 }
             }
+            drift_core::Segment::Equivalent { base, ours, theirs } => {
+                for ((base, ours), theirs) in split_lines(base)
+                    .into_iter()
+                    .zip(split_lines(ours))
+                    .zip(split_lines(theirs))
+                {
+                    aligned
+                        .stacked
+                        .push(owned_line(format!("  {ours}"), Vec::new(), None));
+                    let base = owned_line(base, Vec::new(), None);
+                    let ours = owned_line(ours, Vec::new(), None);
+                    let theirs = owned_line(theirs, Vec::new(), None);
+                    aligned.base.push(base);
+                    aligned.ours.push(ours.clone());
+                    aligned.theirs.push(theirs.clone());
+                    aligned.duo_ours.push(ours.clone());
+                    aligned.duo_theirs.push(theirs);
+                    aligned.result.push(ours);
+                    at += 1;
+                }
+            }
             drift_core::Segment::Hunk(hunk) => {
                 let choice = choices.get(hunk_index).and_then(Option::as_ref);
                 let start = at;
@@ -935,7 +963,19 @@ fn push_hunk(
         .push(format!("{} {}", index + 1, hunk_name(hunk.kind)));
     let lines = hunk_lines(hunk, rows);
     aligned.stacked_hunk_rows.push(aligned.stacked.len());
-    let chosen = choice.and_then(|_| merge.hunk_text(index, choice));
+    let automatic = merge.hunk_text(index, None);
+    let original = match hunk.kind {
+        HunkKind::TheirsOnly => Some(hunk.theirs.as_str()),
+        HunkKind::OursOnly | HunkKind::BothSame => Some(hunk.ours.as_str()),
+        HunkKind::Conflict => None,
+    };
+    let chosen = if choice.is_some() {
+        merge.hunk_text(index, choice)
+    } else if automatic.as_deref() != original {
+        automatic
+    } else {
+        None
+    };
     if let Some(text) = chosen.as_deref() {
         for line in kinded(raw_lines(text), RowKind::Added) {
             aligned.stacked.push(prefixed("= ", line));
@@ -946,11 +986,8 @@ fn push_hunk(
             aligned.stacked.push(prefixed(prefix, line));
         }
     }
-    let result = if choice.is_some() {
-        kinded(
-            raw_lines(merge.hunk_text(index, choice).as_deref().unwrap_or("")),
-            RowKind::Added,
-        )
+    let result = if let Some(text) = chosen.as_deref() {
+        kinded(raw_lines(text), RowKind::Added)
     } else {
         lines.result
     };
@@ -2312,6 +2349,79 @@ mod tests {
             "alpha\nhello WORLD\nomega\n",
             "alpha\nhello world\nomega\n",
         )
+    }
+
+    #[test]
+    fn one_line_json_auto_result_retains_local_escapes_and_theirs_stays_raw() {
+        let base = r#"{"a":"—","n":1}"#;
+        let ours = r#"{"a":"\u2014","n":1}"#;
+        let theirs = r#"{"a":"—","n":2}"#;
+        let expected = r#"{"a":"\u2014","n":2}"#;
+        let content = |text: &str| DiffContent::Text {
+            sha256: "test".into(),
+            text: text.into(),
+        };
+        let diff = FileDiff {
+            path: ".config/waybar/config.jsonc".into(),
+            status: drift_core::Status::UpstreamChanged,
+            badge: None,
+            provenance: drift_core::BaseProvenance::Reviewed,
+            note: String::new(),
+            base: content(base),
+            ours: content(ours),
+            theirs: content(theirs),
+        };
+        let mut screen = DiffScreen::from_file_diff(&diff).unwrap();
+        assert_eq!(screen.result_text().unwrap(), expected);
+        assert_eq!(screen.aligned.theirs[0].text, theirs);
+        assert_eq!(screen.aligned.result[0].text, expected);
+        let (grid, clusters) = render_once(&mut screen, 200, 40);
+        crate::proof::capture("one-line-json-auto-result", &grid, &clusters);
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('t'))));
+        assert_eq!(screen.result_text().unwrap(), theirs);
+    }
+
+    #[test]
+    fn equivalent_json_escapes_do_not_make_a_changed_hunk_in_the_real_diff() {
+        let original = "{\n  \"text\": \"—\",\n  \"n\": 1\n}\n";
+        let escaped = "{\n  \"text\": \"\\u2014\",\n  \"n\": 1\n}\n";
+        let content = |text: &str| DiffContent::Text {
+            sha256: "test".into(),
+            text: text.into(),
+        };
+        let mut diff = FileDiff {
+            path: ".config/waybar/config.jsonc".into(),
+            status: drift_core::Status::Unchanged,
+            badge: None,
+            provenance: drift_core::BaseProvenance::Reviewed,
+            note: String::new(),
+            base: content(original),
+            ours: content(escaped),
+            theirs: content(original),
+        };
+        let mut screen = DiffScreen::from_file_diff(&diff).unwrap();
+        assert_eq!(screen.merge.hunk_count(), 0);
+        assert_eq!(screen.result_text().unwrap(), escaped);
+        assert_eq!(screen.aligned.base[1].text, "  \"text\": \"—\",");
+        assert_eq!(screen.aligned.ours[1].text, "  \"text\": \"\\u2014\",");
+        assert_eq!(screen.aligned.theirs[1].text, "  \"text\": \"—\",");
+        let (grid, clusters) = render_once(&mut screen, 200, 40);
+        crate::proof::capture("equivalent-json", &grid, &clusters);
+        diff.theirs = content(&original.replace(": 1", ": 2"));
+        let mut screen = DiffScreen::from_file_diff(&diff).unwrap();
+        assert_eq!(screen.merge.hunk_count(), 1);
+        assert_eq!(
+            screen.merge.hunks().next().unwrap().kind,
+            HunkKind::TheirsOnly
+        );
+        assert_eq!(screen.result_text().unwrap(), escaped.replace(": 1", ": 2"));
+        let (grid, clusters) = render_once(&mut screen, 200, 40);
+        crate::proof::capture("real-json-change", &grid, &clusters);
+        diff.base = DiffContent::Absent;
+        diff.theirs = content(original);
+        let screen = DiffScreen::from_file_diff(&diff).unwrap();
+        assert_eq!(screen.merge.hunk_count(), 0);
+        assert_eq!(screen.result_text().unwrap(), escaped);
     }
 
     #[test]

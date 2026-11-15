@@ -3,9 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use drift_core::{
-    classify, content_treatment, merge3, BackupSummary, Base, Classification, DiffContent,
-    FileDiff, MergeOutcome, Registry, RelPath, ScanEntry, ScanReport, Template, Treatment,
-    Versions, MAX_DIFF_BYTES,
+    classify, comparison_text, content_treatment, merge_file, BackupSummary, Base, Classification,
+    DiffContent, FileDiff, MergeOutcome, Registry, RelPath, ScanEntry, ScanReport, Template,
+    Treatment, Versions, MAX_DIFF_BYTES,
 };
 
 use crate::bases::read_reviewed_version;
@@ -112,14 +112,27 @@ fn build_reports(
     let mut entries = Vec::new();
     let mut file_diff = None;
     for (item, base) in items.drain(..).zip(bases) {
+        let path = tracked_path(&item.tracked).map_or("", RelPath::as_str);
         let versions = Versions {
-            base: base.as_ref().map(|(base, _)| base.clone()),
-            ours: item.ours.as_ref().map(|side| side.hash.clone()),
-            theirs: item.theirs.as_ref().map(|side| side.hash.clone()),
+            base: base.as_ref().and_then(|(base, bytes)| {
+                Base::new(
+                    comparison_hash(path, &base.hash, Some(bytes)),
+                    base.provenance,
+                )
+            }),
+            ours: item
+                .ours
+                .as_ref()
+                .map(|side| comparison_hash(path, &side.hash, side.bytes.as_deref())),
+            theirs: item
+                .theirs
+                .as_ref()
+                .map(|side| comparison_hash(path, &side.hash, side.bytes.as_deref())),
         };
         let base_bytes = base.as_ref().map(|(_, bytes)| bytes.as_slice());
         let Some(result) = classify(&versions, || {
             merge_outcome(
+                path,
                 base_bytes,
                 item.ours.as_ref().and_then(|side| side.bytes.as_deref()),
                 item.theirs.as_ref().and_then(|side| side.bytes.as_deref()),
@@ -251,7 +264,25 @@ fn entry(tracked: &Tracked, result: Classification) -> ScanEntry {
     }
 }
 
-fn merge_outcome(base: Option<&[u8]>, ours: Option<&[u8]>, theirs: Option<&[u8]>) -> MergeOutcome {
+fn comparison_hash(path: &str, hash: &str, bytes: Option<&[u8]>) -> String {
+    let Some(text) = bytes
+        .filter(|b| b.len() as u64 <= MAX_DIFF_BYTES)
+        .and_then(|b| std::str::from_utf8(b).ok())
+    else {
+        return hash.to_string();
+    };
+    match comparison_text(path, text) {
+        std::borrow::Cow::Borrowed(_) => hash.to_string(),
+        std::borrow::Cow::Owned(text) => sha256_hex(text.as_bytes()),
+    }
+}
+
+fn merge_outcome(
+    path: &str,
+    base: Option<&[u8]>,
+    ours: Option<&[u8]>,
+    theirs: Option<&[u8]>,
+) -> MergeOutcome {
     let (Some(base), Some(ours), Some(theirs)) = (base, ours, theirs) else {
         return MergeOutcome::Unavailable;
     };
@@ -268,7 +299,7 @@ fn merge_outcome(base: Option<&[u8]>, ours: Option<&[u8]>, theirs: Option<&[u8]>
     ) else {
         return MergeOutcome::Unavailable;
     };
-    if merge3(base, ours, theirs).is_clean() {
+    if merge_file(path, base, ours, theirs).is_clean() {
         MergeOutcome::Clean
     } else {
         MergeOutcome::Overlap

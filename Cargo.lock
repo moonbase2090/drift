@@ -239,6 +239,7 @@ dependencies = [
  "drift-core",
  "drift-fixtures",
  "flate2",
+ "serde_json",
  "sha2",
  "tar",
  "zstd",
