@@ -360,6 +360,7 @@ mod tests {
         let fd = hook.as_raw_fd();
         assert_eq!(unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) }, 0);
         assert!(!update_running_from(&omarchy, &absent, Some(fd)));
+        assert_eq!(unsafe { libc::flock(fd, libc::LOCK_UN) }, 0);
         drop(hook);
         let other = OpenOptions::new()
             .read(true)
@@ -380,6 +381,10 @@ mod tests {
             &absent,
             Some(inherited.as_raw_fd())
         ));
+        assert_eq!(
+            unsafe { libc::flock(inherited.as_raw_fd(), libc::LOCK_UN) },
+            0
+        );
         drop(inherited);
         assert!(!update_running_from(&omarchy, &absent, None));
     }
