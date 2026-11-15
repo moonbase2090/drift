@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -5,6 +6,7 @@ use drift_core::RelPath;
 
 pub const BASES: &str = "bases";
 pub const REVIEWED_VERSION: &str = "reviewed-version";
+pub const IGNORED: &str = "ignored";
 
 pub fn drift_share(data_home: &Path) -> PathBuf {
     data_home.join("drift")
@@ -59,4 +61,21 @@ fn is_regular_file(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .ok()
         .is_some_and(|meta| meta.is_file())
+}
+
+pub fn ignored_path(state: &Path) -> PathBuf {
+    state.join(IGNORED)
+}
+
+pub fn read_ignored(state: &Path) -> BTreeSet<RelPath> {
+    let path = ignored_path(state);
+    if !is_regular_file(&path) {
+        return BTreeSet::new();
+    }
+    let Ok(text) = fs::read_to_string(path) else {
+        return BTreeSet::new();
+    };
+    text.lines()
+        .filter_map(|line| RelPath::new(line).ok())
+        .collect()
 }

@@ -89,6 +89,10 @@ impl Resolver for Demo {
         Err("Writing is unavailable in this example.".to_string())
     }
 
+    fn ignore(&mut self, paths: &[String]) -> Result<String, String> {
+        Ok(format!("Demo: would ignore {} file(s).", paths.len()))
+    }
+
     fn apply(&mut self, proposal: &Proposal) -> Result<String, String> {
         Ok(format!(
             "Demo: would apply {} file(s) as transaction {}; nothing was written.",

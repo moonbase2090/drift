@@ -8,8 +8,8 @@ mod report;
 mod resolve;
 
 pub use bases::{
-    base_path, drift_share, drift_state, read_base, read_reviewed_version, reviewed_version_path,
-    BASES, REVIEWED_VERSION,
+    base_path, drift_share, drift_state, ignored_path, read_base, read_ignored,
+    read_reviewed_version, reviewed_version_path, BASES, IGNORED, REVIEWED_VERSION,
 };
 pub use catalog::{
     enumerate, is_backup_name, scan, BackupGroup, DirReader, Listing, SourcePaths, StdDirReader,

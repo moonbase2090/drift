@@ -30,13 +30,13 @@ impl std::fmt::Display for NotifyError {
 impl std::error::Error for NotifyError {}
 
 impl NotifyError {
-    fn message(text: impl Into<String>) -> Self {
+    pub(crate) fn message(text: impl Into<String>) -> Self {
         Self {
             message: text.into(),
         }
     }
 
-    fn io(path: &Path, source: std::io::Error) -> Self {
+    pub(crate) fn io(path: &Path, source: std::io::Error) -> Self {
         Self::message(format!("{}: {source}", path.display()))
     }
 }
@@ -183,7 +183,7 @@ pub fn send(program: &Path, notice: &Notice) -> Result<(), NotifyError> {
     }
 }
 
-fn ensure_state_dir(state: &Path) -> Result<(), NotifyError> {
+pub(crate) fn ensure_state_dir(state: &Path) -> Result<(), NotifyError> {
     let mut cursor = state.to_path_buf();
     let mut missing = Vec::new();
     loop {
@@ -212,7 +212,7 @@ fn ensure_state_dir(state: &Path) -> Result<(), NotifyError> {
     Ok(())
 }
 
-fn symlink_at(path: &Path) -> Result<bool, NotifyError> {
+pub(crate) fn symlink_at(path: &Path) -> Result<bool, NotifyError> {
     match fs::symlink_metadata(path) {
         Ok(meta) => Ok(meta.file_type().is_symlink()),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
