@@ -47,7 +47,7 @@ Without a base, Drift compares your file with the template in two panes and cann
 | `1`–`6`, `0` | filter by status, clear the filter |
 | `Space`, `a` | mark a file, mark everything in view |
 | `o` `t` `m` | keep mine, take upstream, merge (act on the marked files or the selection) |
-| `i` | not wired up yet: the key does nothing today |
+| `i` | ignore marked files or the selection |
 | Esc | clear the search, then the filter, then the marks |
 | `H` | history |
 | `u` | undo the newest transaction |
@@ -55,6 +55,8 @@ Without a base, Drift compares your file with the template in two panes and cann
 | `?` | help for the current screen |
 | `:` | command palette: every action by name |
 | `q` | quit |
+
+`i` acts on marked files, or the selection when nothing is marked. On a directory, it ignores descendants that match the current search and status filter. Drift saves the paths in `ignored` under its state directory and rescans, so those files disappear from the tree. Their configuration files stay unchanged. To show a file again, remove its path from that list and press `r`. The list is at `~/.local/state/drift/ignored` by default.
 
 Everything on the screen can be done with the mouse as well: click a row, double-click to open, click a status count to filter, click the hint bar at the bottom. [input-map.md](input-map.md) lists every action with its keys and its mouse target. The screen follows the terminal when you resize it.
 
@@ -94,6 +96,7 @@ A file with no conflicts can skip the hunks: from the tree press `m` and read th
 - Before a file is changed its original is copied into the backup store (`~/.local/state/drift/backups/<transaction>/`). A transaction records every file it touched with the hashes before and after, in `manifest.json`.
 - Files are replaced atomically. Symlinks, files an app rewrites on its own, files without a template and files already equal to upstream are skipped with a reason.
 - Every configuration transaction can be undone with `drift undo`, and an undo is a transaction that can be undone in turn. A file that changed after the transaction is left alone unless you name it with `--force`.
+- `i` writes the ignored-path list immediately, without a plan. This state change is outside `drift undo`. To show an ignored file again, remove its path from the list and rescan as described under [the review screen](#the-review-screen).
 - Some writes are outside the plan and outside `drift undo`: `drift snapshot --pre` copies the template roots into `/var/lib/drift/snapshots/` (pacman runs it before an upgrade, and nothing else is touched), `drift notify on` and `drift notify off` save the notice setting in Drift's state directory, the upgrade stamp the post-transaction hook leaves in `/var/lib/drift` (delete `/var/lib/drift/updated` to remove it), and `drift widget install`, `sync` and `remove`, which keep their own record, and make a backup directory `~/.config/omarchy/plugins/.drift.status.bak.<time>/` when they replace an edited copy, and when `remove` deletes a copy that differs from what Drift installed, even with `--yes` (see the [bar widget](widget.md) page). Undo them by deleting the snapshot, running `notify` on or off again, or `widget remove`.
 - Nothing is sent over the network. The only things Drift runs besides itself are `hyprctl configerrors` after a Hyprland write, `omarchy-notification-send` for the upgrade notice, `$EDITOR` when you ask to edit a hunk, and, for the widget commands, `omarchy-shell` to rescan plugins (all three), `omarchy plugin enable` and `omarchy bar put` (install only) and `omarchy plugin disable` (remove only).
 
