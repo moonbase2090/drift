@@ -162,6 +162,7 @@ pub fn run(
 ) -> Result<u8, String> {
     let (prepared, id) = prepare_for(env, args, elapsed, err)?;
     let Some(plan) = prepared.plan.as_ref() else {
+        crate::environment::report_update_lock(env.roots, err)?;
         return Err("nothing to do".to_string());
     };
     let view = PlanView::build(plan, env.state_display, &prepared.contents);
@@ -475,6 +476,7 @@ pub(crate) mod tests {
     pub(crate) fn scan_paths(root: &MaterializedRoot) -> ScanPaths {
         let base = root.path().to_path_buf();
         ScanPaths {
+            user_config: base.join("home/.config/drift/config.toml"),
             source: SourcePaths::new(
                 ReadPaths::new(&base, base.join("usr/share/omarchy")),
                 base.join("home"),

@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-use drift_core::{registry_from_user_config, Registry, ScanReport, USER_CONFIG_PATH};
+use drift_core::{registry_from_user_config, Registry, ScanReport};
 use drift_source::{
     build_report, drift_share, drift_state, read_ignored, ResolvePaths, ScanPaths, SourcePaths,
 };
@@ -46,7 +46,11 @@ pub fn paths_from(source: SourcePaths, lookup: &dyn Fn(&str) -> Option<OsString>
     let state_home = var("XDG_STATE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| source.home.join(".local/state"));
+    let config_home = var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| source.home.join(".config"));
     ScanPaths {
+        user_config: config_home.join("drift/config.toml"),
         resolve: ResolvePaths {
             share: drift_share(&data_home),
             state: drift_state(&state_home),
@@ -68,8 +72,8 @@ pub(crate) fn scan_report(paths: &ScanPaths, registry: &Registry) -> Result<Scan
 }
 
 pub(crate) fn registry(paths: &ScanPaths) -> Result<Registry, String> {
-    let path = paths.source.home.join(USER_CONFIG_PATH);
-    match fs::read_to_string(&path) {
+    let path = &paths.user_config;
+    match fs::read_to_string(path) {
         Ok(text) => {
             registry_from_user_config(&text).map_err(|error| format!("{}: {error}", path.display()))
         }
