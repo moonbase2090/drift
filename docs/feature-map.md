@@ -8,7 +8,7 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 |---|---|---|
 | `global.help` | `?` opens the help for the current screen; `?`, `q` or Esc closes it | planned |
 | `global.palette` | `:` opens the command palette; typing narrows it, Enter runs the choice, Esc closes it, and a click on `[:] Palette` opens it | planned |
-| `global.undo-last` | `u` opens the undo plan for the newest transaction from the tree and the diff, and for the selected transaction from the history | planned |
+| `global.undo-last` | `u` in the tree opens the undo plan for the newest transaction (covered from the tree only) | `plan::u_in_the_tree_opens_the_undo_plan_for_the_newest_transaction` |
 
 ## Tree
 
@@ -36,9 +36,9 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `tree.mark` | Space marks or unmarks the row (a folder marks everything under it, shown as `[-]` when partly marked); a click on the checkbox marks that file | `filter::space_marks_the_selected_folder_and_everything_under_it`, `filter::clicking_a_checkbox_marks_that_row` |
 | `tree.mark-all` | `a` marks every file in view, which a filter narrows | `filter::a_marks_everything_in_view_and_escape_clears_the_marks`, `filter::a_marks_only_what_the_filter_shows` |
 | `tree.back` | Esc clears the search, then the filter, then the marks, one per press | `filter::escape_clears_the_search_then_the_filter_then_the_marks`, `filter::a_marks_everything_in_view_and_escape_clears_the_marks` |
-| `tree.keep` | `o` opens the keep-mine plan for the marked files or the selected one | planned |
-| `tree.take` | `t` opens the take-upstream plan | planned |
-| `tree.merge` | `m` opens the merge plan for a file that merges cleanly | planned |
+| `tree.keep` | `o` opens the keep-mine plan for the marked files or the selected one | `plan::o_keeps_mine_writes_nothing_and_records_the_template_as_reviewed` |
+| `tree.take` | `t` opens the take-upstream plan | `plan::y_confirms_and_writes_the_file_a_backup_and_one_transaction`, `plan::a_plan_for_everything_writes_every_listed_file_and_creates_the_missing_one` |
+| `tree.merge` | `m` opens the merge plan for a file that merges cleanly | `plan::m_merges_a_clean_merge_and_writes_the_combined_text_with_a_backup` |
 | `tree.ignore` | `i` ignores the selected file or the marked files | planned |
 | `tree.history` | `H` opens the history | planned |
 
@@ -60,22 +60,22 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 
 | Id | Interaction | Tests |
 |---|---|---|
-| `flow.take` | take upstream from the tree: the plan lists the file, confirm writes it, the screen says what was done, the list refreshes, and the file on disk equals the template | planned |
-| `flow.keep` | keep mine from the tree: nothing is written to the file, the base is recorded as reviewed, and the row reads as an override | planned |
-| `flow.merge` | merge from the tree writes the merged text and a backup of the original | planned |
+| `flow.take` | take upstream from the tree: the plan lists the file, confirm writes it, the screen says what was done, the list refreshes, and the file on disk equals the template | `plan::y_confirms_and_writes_the_file_a_backup_and_one_transaction`, `plan::a_plan_for_everything_writes_every_listed_file_and_creates_the_missing_one`, `plan::after_a_confirmed_write_the_list_refreshes_in_place_and_keeps_the_selection` |
+| `flow.keep` | keep mine from the tree: nothing is written to the file, the base is recorded as reviewed, and the row reads as an override | `plan::o_keeps_mine_writes_nothing_and_records_the_template_as_reviewed` |
+| `flow.merge` | merge from the tree writes the merged text and a backup of the original | `plan::m_merges_a_clean_merge_and_writes_the_combined_text_with_a_backup` |
 | `flow.both` | `b` in the diff keeps both sides of a hunk and the written file has both | `diff::b_keeps_both_sides_in_the_result_and_write_puts_both_on_disk` |
 | `flow.edit` | `e` hands a hunk to `$EDITOR`, and what the editor saves becomes the result | `diff::e_hands_the_hunk_to_the_editor_and_write_puts_what_it_saved_on_disk` |
-| `flow.write` | `w` in the diff opens the plan for the result and confirm writes it | planned |
-| `flow.confirm` | Confirm writes exactly the files listed, creates a transaction with backups and leaves the live files as planned | planned |
-| `flow.cancel` | Cancel, `n`, `q` and Esc close the plan and nothing on disk changes | planned |
-| `flow.plan-preview` | the plan for an existing file names its action and backup path, and a new file reads `new file` | planned |
-| `flow.plan-keys` | Tab, arrows and `h`/`l` move between the buttons, `j`/`k` select a file, `d` expands its diff, and a click presses a button | planned |
-| `refusal.update-lock` | a held Omarchy update lock refuses the write with a message, and nothing changes | planned |
-| `refusal.stale-lock` | a lock file that exists but is not held does not refuse a write | planned |
-| `refusal.pacman-lock` | pacman's database lock refuses the write | planned |
-| `refusal.changed-since-plan` | a file changed after the plan was made is refused with a stale-hash message | planned |
+| `flow.write` | `w` in the diff opens the plan for the result and confirm writes it | `diff::t_takes_theirs_for_the_hunk_and_write_puts_it_on_disk_with_a_backup_of_the_original`, `diff::the_write_hint_opens_the_plan_for_the_result` |
+| `flow.confirm` | Confirm writes exactly the files listed, creates a transaction with backups and leaves the live files as planned | `plan::y_confirms_and_writes_the_file_a_backup_and_one_transaction`, `plan::enter_on_the_confirm_button_writes_after_tab_moves_the_focus_to_it`, `plan::clicking_the_confirm_button_writes`, `plan::a_plan_for_everything_writes_every_listed_file_and_creates_the_missing_one` |
+| `flow.cancel` | Cancel, `n`, `q` and Esc close the plan and nothing on disk changes | `plan::n_cancels_and_changes_nothing`, `plan::q_cancels_the_plan_instead_of_quitting_and_changes_nothing`, `plan::escape_cancels_and_changes_nothing`, `plan::enter_on_the_default_cancel_button_changes_nothing`, `plan::clicking_the_cancel_button_changes_nothing` |
+| `flow.plan-preview` | the plan for an existing file names its action and backup path, and a new file reads `new file` | `plan::the_plan_for_an_existing_file_names_the_action_the_real_path_and_the_backup`, `plan::the_plan_for_a_missing_file_reads_new_file_and_has_no_backup` |
+| `flow.plan-keys` | Tab, arrows and `h`/`l` move between the buttons, `j`/`k` select a file, `d` expands its diff, and a click presses a button | `plan::tab_arrows_h_and_l_move_between_the_buttons`, `plan::j_k_arrows_home_and_end_select_a_file_in_the_plan`, `plan::clicking_a_file_in_the_plan_selects_it`, `plan::d_expands_the_selected_files_diff_and_a_second_d_collapses_it`, `plan::clicking_the_confirm_button_writes`, `plan::clicking_the_cancel_button_changes_nothing` |
+| `refusal.update-lock` | a held Omarchy update lock refuses the write with a message, and nothing changes | `plan::a_held_update_lock_refuses_the_write_and_changes_nothing` |
+| `refusal.stale-lock` | a lock file that exists but is not held does not refuse a write | `plan::a_stale_update_lock_file_that_nobody_holds_does_not_refuse_the_write` |
+| `refusal.pacman-lock` | pacman's database lock refuses the write | `plan::pacmans_database_lock_refuses_the_write_and_changes_nothing` |
+| `refusal.changed-since-plan` | a file changed after the plan was made is refused with a stale-hash message | `plan::a_file_changed_after_the_plan_was_made_is_refused_and_left_as_it_is` |
 | `reload.keeps-list` | a rescan never empties or flashes the list | `tree::r_rescans_and_keeps_the_list_the_selection_and_the_marks` |
-| `reload.after-write` | the list after a confirmed write refreshes in place, keeps the selection and shows the written file as unchanged | planned |
+| `reload.after-write` | the list after a confirmed write refreshes in place, keeps the selection and shows the written file as unchanged | `plan::after_a_confirmed_write_the_list_refreshes_in_place_and_keeps_the_selection` |
 | `modal.borders` | a dialog is drawn with solid borders | planned |
 
 ## History
@@ -84,8 +84,8 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 |---|---|---|
 | `history.back` | `q` or Esc returns to the tree | planned |
 | `history.refresh` | `r` reloads the list | planned |
-| `history.undo` | Enter opens the undo plan for the selected transaction and confirm restores the files | planned |
-| `history.undo-force` | `U` undoes and also restores files changed since | planned |
+| `history.undo` | Enter opens the undo plan for the selected transaction and confirm restores the files | `plan::enter_in_the_history_undoes_a_transaction_and_restores_the_saved_bytes` |
+| `history.undo-force` | `U` undoes and also restores files changed since | `plan::undo_refuses_a_file_changed_since_and_capital_u_restores_it_anyway` |
 | `history.down` | `j` and Down move down | planned |
 | `history.up` | `k` and Up move up | planned |
 | `history.top` | `g` and Home select the newest | planned |
@@ -119,11 +119,11 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 
 | Id | Interaction | Tests |
 |---|---|---|
-| `plan.confirm` | `y` or Enter on Confirm writes | planned |
-| `plan.cancel` | `n`, `q`, Esc or Enter on Cancel writes nothing | planned |
-| `plan.focus` | Tab, Left, Right, `h` and `l` move between the buttons | planned |
-| `plan.select` | `j`, `k`, arrows, Home and End select a file | planned |
-| `plan.expand` | `d` expands or collapses the selected file's diff | planned |
+| `plan.confirm` | `y` or Enter on Confirm writes | `plan::y_confirms_and_writes_the_file_a_backup_and_one_transaction`, `plan::enter_on_the_confirm_button_writes_after_tab_moves_the_focus_to_it`, `plan::clicking_the_confirm_button_writes` |
+| `plan.cancel` | `n`, `q`, Esc or Enter on Cancel writes nothing | `plan::n_cancels_and_changes_nothing`, `plan::q_cancels_the_plan_instead_of_quitting_and_changes_nothing`, `plan::escape_cancels_and_changes_nothing`, `plan::enter_on_the_default_cancel_button_changes_nothing`, `plan::clicking_the_cancel_button_changes_nothing` |
+| `plan.focus` | Tab, Left, Right, `h` and `l` move between the buttons | `plan::tab_arrows_h_and_l_move_between_the_buttons` |
+| `plan.select` | `j`, `k`, arrows, Home and End select a file | `plan::j_k_arrows_home_and_end_select_a_file_in_the_plan`, `plan::clicking_a_file_in_the_plan_selects_it` |
+| `plan.expand` | `d` expands or collapses the selected file's diff | `plan::d_expands_the_selected_files_diff_and_a_second_d_collapses_it` |
 
 ## Window and theme
 
