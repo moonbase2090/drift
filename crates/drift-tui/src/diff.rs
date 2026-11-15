@@ -17,6 +17,8 @@ use lunatui_widgets::{
 };
 use unicode_width::UnicodeWidthChar;
 
+use crate::outcome::Outcome;
+
 use crate::diff_palette::{DiffPalette, RowKind, Tints};
 
 const MIN_TEXT_PANE: u16 = 40;
@@ -80,8 +82,9 @@ pub struct DiffScreen {
     choices: Vec<Option<Choice>>,
     editor: Box<dyn FnMut(String) -> Result<String, String>>,
     notice: Option<String>,
+    outcome: Option<Outcome>,
     source: Option<FileDiff>,
-    write: Option<crate::EditedFile>,
+    write: Option<Result<crate::EditedFile, String>>,
     chips: Vec<Chip>,
     aligned: Aligned,
     scroll: CodeViewState,
@@ -295,6 +298,7 @@ impl DiffScreen {
             choices,
             editor,
             notice: None,
+            outcome: None,
             source: None,
             write: None,
             chips: Vec::new(),
@@ -324,8 +328,17 @@ impl DiffScreen {
         self.merge.render(&self.choices)
     }
 
-    pub(crate) fn take_write(&mut self) -> Option<crate::EditedFile> {
+    pub(crate) fn take_write(&mut self) -> Option<Result<crate::EditedFile, String>> {
         self.write.take()
+    }
+
+    pub(crate) fn set_outcome(&mut self, outcome: Option<Outcome>) {
+        if outcome.is_some() {
+            self.notice = None;
+        }
+        self.outcome = outcome;
+        self.painted = None;
+        self.revise();
     }
 
     pub(crate) fn set_notice(&mut self, text: &str) {
@@ -334,7 +347,10 @@ impl DiffScreen {
     }
 
     pub fn notice(&self) -> Option<&str> {
-        self.notice.as_deref()
+        self.outcome
+            .as_ref()
+            .map(|outcome| outcome.text.as_str())
+            .or(self.notice.as_deref())
     }
 
     pub fn scroll_top(&self) -> usize {
@@ -367,7 +383,27 @@ impl DiffScreen {
     }
 
     fn body(&self) -> Rect {
-        regions(Rect::new(0, 0, self.columns, self.rows)).1
+        self.content_body(regions(Rect::new(0, 0, self.columns, self.rows)).1)
+    }
+
+    fn content_body(&self, mut body: Rect) -> Rect {
+        let rows = self.outcome.as_ref().map_or(0, |outcome| {
+            crate::tree_screen::wrap(&outcome.text, usize::from(body.width))
+                .len()
+                .min(4)
+        }) as u16;
+        let rows = rows.min(body.height);
+        body.y += rows;
+        body.height -= rows;
+        body
+    }
+
+    fn result_label(&self) -> &'static str {
+        if self.source.is_some() {
+            "result (preview)"
+        } else {
+            "result"
+        }
     }
 
     fn wide(&self) -> bool {
@@ -400,6 +436,11 @@ impl DiffScreen {
         let name = match &self.title {
             Some(title) => format!("Diff  {title}"),
             None => "Diff".to_string(),
+        };
+        let name = if self.source.is_some() {
+            format!("{name}  [preview]")
+        } else {
+            name
         };
         if self.two_way {
             return match self.aligned.hunk_labels.get(self.hunk) {
@@ -551,29 +592,38 @@ impl DiffScreen {
     }
 
     fn request_write(&mut self) {
+        self.notice = None;
+        self.write = None;
         self.revise();
         let result = match self.result_text() {
             Ok(text) => text.into_bytes(),
             Err(_) => {
                 self.notice = Some("unresolved conflict blocks write".to_string());
+                self.write = Some(Err(
+                    "Unresolved conflicts block writing. Choose a result for every conflict first."
+                        .to_string(),
+                ));
                 return;
             }
         };
         let Some(source) = self.source.as_ref() else {
             self.notice =
                 Some("Open a tracked file from the review screen before writing.".to_string());
+            self.write = Some(Err(
+                "Open a tracked file from the review screen before writing.".to_string(),
+            ));
             return;
         };
         let bytes = |content: &DiffContent| match content {
             DiffContent::Text { text, .. } => Some(text.as_bytes().to_vec()),
             _ => None,
         };
-        self.write = Some(crate::EditedFile {
+        self.write = Some(Ok(crate::EditedFile {
             path: source.path.clone(),
             before: bytes(&source.ours),
             template: bytes(&source.theirs),
             result,
-        });
+        }));
     }
 
     fn header_line(&mut self, area: Rect) -> String {
@@ -1233,6 +1283,18 @@ impl App for DiffScreen {
             .bg(cx.token(Token::Surface0));
         cx.fill(area, text, ' ');
         let (header, body, hint) = regions(area);
+        let content = self.content_body(body);
+        if let Some(outcome) = &self.outcome {
+            let style = outcome.style(&cx, text);
+            for (row, line) in crate::tree_screen::wrap(&outcome.text, usize::from(body.width))
+                .iter()
+                .take(usize::from(content.y - body.y))
+                .enumerate()
+            {
+                cx.put_str(body.x, body.y + row as u16, line, style);
+            }
+        }
+        let body = content;
         if header.width > 0 && header.height > 0 {
             let title = self.header_line(header);
             cx.put_str(
@@ -1417,7 +1479,12 @@ impl DiffScreen {
             }
             let lines = panes[index - 1];
             let style = if self.focus == index { accent } else { text };
-            self.render_code(area.rect, (PANES[index], style), lines, scroll, &tints, cx);
+            let label = if index == 4 {
+                self.result_label()
+            } else {
+                PANES[index]
+            };
+            self.render_code(area.rect, (label, style), lines, scroll, &tints, cx);
         }
         let active = self.drag.active().or_else(|| self.focused_divider());
         paint_dividers(&layout, text, accent, active, cx);
@@ -1485,7 +1552,7 @@ impl DiffScreen {
         };
         self.render_code(
             strip,
-            ("result", result),
+            (self.result_label(), result),
             &self.aligned.result,
             result_scroll,
             &tints,
@@ -3334,12 +3401,12 @@ mod tests {
         let (base, ours, theirs) = conflict_files();
         let mut screen = DiffScreen::new(base, ours, theirs);
         press(&mut screen, 'w');
-        assert!(screen.write.is_none());
+        assert!(screen.write.as_ref().is_some_and(Result::is_err));
         assert_eq!(screen.notice(), Some("unresolved conflict blocks write"));
         let (grid, clusters) = render_once(&mut screen, 200, 40);
         let text = grid.display_text(&clusters);
         assert!(text.contains("unresolved conflict blocks write"), "{text}");
-        assert!(screen.write.is_none());
+        assert!(screen.write.as_ref().is_some_and(Result::is_err));
     }
 
     #[test]
@@ -3352,7 +3419,7 @@ mod tests {
         .unwrap();
         press(&mut screen, 't');
         press(&mut screen, 'w');
-        let request = screen.take_write().unwrap();
+        let request = screen.take_write().unwrap().unwrap();
         assert_eq!(request.path, ".config/hypr/a.lua");
         assert_eq!(request.before, Some(b"alpha\nmine\n".to_vec()));
         assert_eq!(request.template, Some(b"alpha\nnew\n".to_vec()));

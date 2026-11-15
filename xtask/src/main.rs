@@ -31,6 +31,14 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+fn real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_dir())
+}
+
+fn real_file(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file())
+}
+
 fn relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
@@ -48,7 +56,7 @@ fn write_check(root: &Path) -> usize {
     let mut checked = 0;
     let mut dirs: Vec<_> = entries.flatten().map(|e| e.path()).collect();
     dirs.sort();
-    for dir in dirs.iter().filter(|d| d.is_dir()) {
+    for dir in dirs.iter().filter(|d| real_dir(d)) {
         let name = dir.file_name().map(|n| n.to_string_lossy().to_string());
         if name
             .as_deref()
@@ -86,9 +94,13 @@ fn manifests(root: &Path) -> Vec<PathBuf> {
     if let Ok(entries) = fs::read_dir(root.join("crates")) {
         let mut dirs: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         dirs.sort();
-        manifests.extend(dirs.into_iter().map(|d| d.join("Cargo.toml")));
+        manifests.extend(
+            dirs.into_iter()
+                .filter(|d| real_dir(d))
+                .map(|d| d.join("Cargo.toml")),
+        );
     }
-    manifests.into_iter().filter(|m| m.is_file()).collect()
+    manifests.into_iter().filter(|m| real_file(m)).collect()
 }
 
 fn manifest_check(root: &Path, name: &str, inspect: impl Fn(&str) -> Vec<String>) -> usize {
@@ -288,6 +300,15 @@ mod tests {
         let names: Vec<String> = sources.iter().map(|file| relative(&root, file)).collect();
         assert_eq!(names, ["crates/own.rs"]);
         assert_eq!(identifiers(&root), 0);
+        fs::write(root.join("crates/own.toml"), "").unwrap();
+        fs::create_dir_all(root.join("crates/real")).unwrap();
+        fs::write(root.join("crates/real/Cargo.toml"), "").unwrap();
+        fs::write(outside.join("Cargo.toml"), "").unwrap();
+        let found: Vec<String> = manifests(&root)
+            .iter()
+            .map(|path| relative(&root, path))
+            .collect();
+        assert_eq!(found, ["crates/real/Cargo.toml"]);
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&outside);
     }

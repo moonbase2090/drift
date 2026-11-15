@@ -10,6 +10,7 @@ use drift_core::HistoryView;
 use crate::commands::{
     chords_text, global_keymap, history_keymap, press, GlobalCommand, HistoryCommand,
 };
+use crate::outcome::Outcome;
 use crate::tree_screen::wrap;
 
 const WHEEL_STEP: usize = 3;
@@ -56,6 +57,7 @@ pub struct HistoryScreen {
     keymap: Keymap,
     globals: Keymap,
     notice: Option<String>,
+    outcome: Option<Outcome>,
     error: Option<String>,
     area: Option<Rect>,
 }
@@ -72,6 +74,7 @@ impl HistoryScreen {
             keymap: history_keymap(),
             globals: global_keymap(),
             notice: None,
+            outcome: None,
             error: None,
             area: None,
         }
@@ -88,22 +91,35 @@ impl HistoryScreen {
 
     pub fn replace(&mut self, view: HistoryView) {
         let notice = self.notice.take();
+        let outcome = self.outcome.take();
         let kept = self.selected_id().map(str::to_string);
         let selected = self.selected;
         *self = Self::new(view);
         self.notice = notice;
+        self.outcome = outcome;
         let last = self.view.rows.len().saturating_sub(1);
         self.selected = kept
             .and_then(|id| self.view.rows.iter().position(|row| row.id == id))
             .unwrap_or_else(|| selected.min(last));
     }
 
+    pub(crate) fn set_outcome(&mut self, outcome: Option<Outcome>) {
+        if outcome.is_some() {
+            self.notice = None;
+        }
+        self.outcome = outcome;
+    }
+
     pub fn set_notice(&mut self, text: &str) {
+        self.outcome = None;
         self.notice = Some(text.to_string());
     }
 
     pub fn notice(&self) -> Option<&str> {
-        self.notice.as_deref()
+        self.outcome
+            .as_ref()
+            .map(|outcome| outcome.text.as_str())
+            .or(self.notice.as_deref())
     }
 
     pub fn selected_id(&self) -> Option<&str> {
@@ -255,11 +271,15 @@ impl HistoryScreen {
             ),
         };
         put(&mut cx, found.title, &title, accent);
-        let info = match &self.notice {
+        let info = match self.notice() {
             Some(notice) => format!(" {notice}"),
             None => " Newest first. Undo restores files and reviewed bases.".to_string(),
         };
-        put(&mut cx, found.info, &info, dim);
+        let style = self
+            .outcome
+            .as_ref()
+            .map_or(dim, |outcome| outcome.style(&cx, base));
+        put(&mut cx, found.info, &info, style);
 
         if self.view.is_empty() {
             let mut lines: Vec<(String, Style)> = Vec::new();

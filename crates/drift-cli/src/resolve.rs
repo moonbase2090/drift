@@ -325,7 +325,23 @@ impl drift_tui::Resolver for LiveResolver {
             &proposal.prepared,
             self.checker.as_ref(),
         )
-        .map_err(|error| error.describe())?;
+        .map_err(|error| {
+            let label = if error.applied.is_empty() {
+                "NOT APPLIED"
+            } else {
+                "PARTLY APPLIED"
+            };
+            let mut message = format!("{label}: {}", error.describe());
+            if !error.applied.is_empty() {
+                message.push_str(&format!(" Changed files: {}.", error.applied.join(", ")));
+            }
+            if let Some(diagnostic) = drift_apply::update_lock_diagnostic(&self.roots.omarchy_lock)
+            {
+                message.push(' ');
+                message.push_str(&diagnostic);
+            }
+            message
+        })?;
         let mut message = format!(
             "Applied {} file(s) as transaction {}; {} reviewed base(s) recorded.",
             done.checked.report.applied.len(),
@@ -341,6 +357,10 @@ impl drift_tui::Resolver for LiveResolver {
         if let Some(alert) = done.checked.followup.alert() {
             message.push(' ');
             message.push_str(&alert.replace('\n', " "));
+        }
+        if let Some(diagnostic) = drift_apply::update_lock_diagnostic(&self.roots.omarchy_lock) {
+            message.push(' ');
+            message.push_str(&diagnostic);
         }
         Ok(message)
     }
@@ -873,6 +893,229 @@ pub(crate) mod tests {
             );
         }
         text
+    }
+
+    #[test]
+    fn real_apply_and_undo_outcomes_survive_the_worker_rescan_and_update_the_row() {
+        use lunatui::App;
+        use lunatui_term::{Event, KeyCode, KeyEvent};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            mpsc, Arc,
+        };
+        let root = world(&[
+            (
+                "hypr/a.lua",
+                "upstream\n",
+                Some("mine\n"),
+                Some("upstream\n"),
+            ),
+            ("hypr/z.lua", "new\n", Some("old\n"), Some("old\n")),
+        ]);
+        let paths = scan_paths(&root);
+        let (permit, gate) = mpsc::channel();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let scans = Arc::clone(&runs);
+        let worker = drift_tui::spawn_scan(move || {
+            if scans.fetch_add(1, Ordering::SeqCst) > 0 {
+                let _ = gate.recv();
+            }
+            drift_source::build_report(&drift_core::Registry::v1(), &paths, &BTreeSet::new())
+                .map_err(|e| e.to_string())
+        });
+        let history_paths = scan_paths(&root);
+        let history_roots = roots_for(&history_paths, root.path().join("runtime"));
+        let mut screen = drift_tui::Screen::with_worker(worker)
+            .with_resolver(Box::new(live(&root, HyprlandStatus::Clean)))
+            .with_historian(Box::new(crate::history::LiveHistorian::new(
+                history_paths,
+                history_roots,
+                crate::history::system_clock,
+            )));
+        let gate_permit = permit;
+        let wait = |screen: &mut drift_tui::Screen, ready: &dyn Fn(&drift_tui::Screen) -> bool| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let _ = lunatui::render_once(screen, 120, 36);
+                if ready(screen) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "worker did not produce the expected report"
+                );
+                std::thread::yield_now();
+            }
+        };
+        let press = |screen: &mut drift_tui::Screen, code| {
+            screen.update(&Event::Key(KeyEvent::press(code)));
+        };
+        wait(&mut screen, &|s| {
+            s.review().is_some() && !s.needs_animation_frames()
+        });
+        for _ in 0..8 {
+            if screen
+                .review()
+                .unwrap()
+                .view()
+                .selected_entry()
+                .is_some_and(|e| e.path == ".config/hypr/a.lua")
+            {
+                break;
+            }
+            press(&mut screen, KeyCode::Down);
+        }
+        press(&mut screen, KeyCode::Char(' '));
+        press(&mut screen, KeyCode::Char('t'));
+        press(&mut screen, KeyCode::Char('y'));
+        assert!(screen.needs_animation_frames());
+        let during = capture_screen(&mut screen, "04-applied-during-scan");
+        assert!(
+            during.contains("APPLIED: take upstream") && during.contains("a.lua"),
+            "{during}"
+        );
+        assert_eq!(screen.review().unwrap().view().marked_count(), 1);
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "upstream\n");
+        gate_permit.send(()).unwrap();
+        wait(&mut screen, &|s| !s.needs_animation_frames());
+        assert_eq!(
+            screen
+                .review()
+                .unwrap()
+                .view()
+                .selected_entry()
+                .unwrap()
+                .path,
+            ".config/hypr/a.lua"
+        );
+        assert_eq!(
+            screen
+                .review()
+                .unwrap()
+                .view()
+                .selected_entry()
+                .unwrap()
+                .status,
+            drift_core::Status::Unchanged
+        );
+        assert_eq!(screen.review().unwrap().view().marked_count(), 1);
+        let after = capture_screen(&mut screen, "05-real-refreshed-row");
+        assert!(after.contains("APPLIED: take upstream"));
+        press(&mut screen, KeyCode::Char('H'));
+        press(&mut screen, KeyCode::Enter);
+        press(&mut screen, KeyCode::Esc);
+        assert!(screen
+            .history()
+            .unwrap()
+            .notice()
+            .unwrap()
+            .contains("NOT APPLIED: Cancelled"));
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "upstream\n");
+        capture_screen(&mut screen, "06-history-cancelled");
+        press(&mut screen, KeyCode::Enter);
+        press(&mut screen, KeyCode::Char('y'));
+        assert!(screen.needs_animation_frames());
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "mine\n");
+        let undoing = capture_screen(&mut screen, "07-undo-during-scan");
+        assert!(undoing.contains("UNDONE:"), "{undoing}");
+        gate_permit.send(()).unwrap();
+        wait(&mut screen, &|s| !s.needs_animation_frames());
+        press(&mut screen, KeyCode::Esc);
+        assert_eq!(
+            screen
+                .review()
+                .unwrap()
+                .view()
+                .selected_entry()
+                .unwrap()
+                .status,
+            drift_core::Status::LocalOverride
+        );
+        let restored = capture_screen(&mut screen, "08-real-undo-row");
+        assert!(restored.contains("UNDONE:"), "{restored}");
+        assert!(runs.load(Ordering::SeqCst) >= 3);
+    }
+
+    #[test]
+    fn refused_take_is_visible_in_the_tree_and_diff_then_unlock_allows_apply() {
+        use lunatui::App;
+        use lunatui_term::{Event, KeyCode, KeyEvent};
+        use std::os::fd::AsRawFd;
+        let root = world(&[
+            (
+                "hypr/a.lua",
+                "upstream\n",
+                Some("mine\n"),
+                Some("upstream\n"),
+            ),
+            ("hypr/z.lua", "new\n", Some("old\n"), Some("old\n")),
+        ]);
+        let paths = scan_paths(&root);
+        let report =
+            drift_source::build_report(&drift_core::Registry::v1(), &paths, &BTreeSet::new())
+                .unwrap();
+        let mut resolver = live(&root, HyprlandStatus::Clean);
+        resolver.roots.omarchy_lock = root.path().join("home/.config/hypr/a.lua");
+        let held = std::fs::File::open(&resolver.roots.omarchy_lock).unwrap();
+        assert_eq!(
+            unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let mut screen = drift_tui::Screen::with_report(&report)
+            .with_resolver(Box::new(resolver))
+            .with_differ(Box::new(crate::diff::LiveDiffer::new(
+                scan_paths(&root),
+                drift_core::Registry::v1(),
+            )));
+        let press = |screen: &mut drift_tui::Screen, code| {
+            screen.update(&Event::Key(KeyEvent::press(code)));
+        };
+        for _ in 0..8 {
+            if screen.review().unwrap().view().selected_entry().is_some() {
+                break;
+            }
+            press(&mut screen, KeyCode::Down);
+        }
+        press(&mut screen, KeyCode::Char('t'));
+        press(&mut screen, KeyCode::Char('y'));
+        let refused = capture_screen(&mut screen, "01-refused-tree");
+        assert!(refused.contains("NOT APPLIED:"), "{refused}");
+        let notice = screen.review().unwrap().notice().unwrap();
+        assert!(notice.contains("actually held"), "{notice}");
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "mine\n");
+        assert!(!root.path().join("state/backups").exists());
+        press(&mut screen, KeyCode::Enter);
+        let diff = capture_screen(&mut screen, "02-refused-diff");
+        assert!(
+            diff.contains("NOT APPLIED:") && diff.contains("[preview]"),
+            "{diff}"
+        );
+        assert!(screen
+            .diff()
+            .unwrap()
+            .notice()
+            .unwrap()
+            .contains("actually held"));
+        press(&mut screen, KeyCode::Esc);
+        drop(held);
+        press(&mut screen, KeyCode::Char('t'));
+        press(&mut screen, KeyCode::Char('y'));
+        let applied = capture_screen(&mut screen, "03-applied");
+        assert!(applied.contains("APPLIED: take upstream"), "{applied}");
+        assert!(screen
+            .review()
+            .unwrap()
+            .notice()
+            .unwrap()
+            .contains("unlocked"));
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "upstream\n");
+        assert_eq!(
+            drift_apply::history(&root.path().join("state"))
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
     }
 
     #[test]

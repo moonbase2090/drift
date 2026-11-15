@@ -224,6 +224,10 @@ For `.json` and `.jsonc` files, comparison decodes equivalent JSON string escape
 
 ![Equivalent JSON escapes produce no hunk; a real value change still appears](docs/media/json-escapes.gif)
 
+A refused write shows a persistent red `NOT APPLIED` message with the reason. Opening the diff keeps that message visible and labels its result as a preview. A successful action names the changed paths in green while the retained tree stays visible during the next scan. The scanner then updates row states without resetting selection, expansion or marks. Undo and cancellation use persistent colored outcomes in History, and a failed or partial write triggers a rescan. Update-lock diagnostics distinguish an unlocked leftover file from a lock that is actually held.
+
+![A refused take remains visible in the tree and diff, then succeeds after unlocking](docs/media/action-feedback.gif)
+
 All borders and rules use Lunatui line sets. Apply and undo plans use its native Block; tree separators, diff dividers, active drag lines and scrollbar tracks use its line symbols. The command palette keeps its native rounded frame, and Help fills the screen.
 
 ![Real tree, diff layouts, apply and undo, History, Help and command palette](docs/media/solid-modal-borders.gif)
