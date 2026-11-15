@@ -1187,7 +1187,7 @@ pub(crate) mod tests {
         let report = drift_source::build_report(
             &drift_core::Registry::v1(),
             &scan_paths(&root),
-            &BTreeSet::new(),
+            &std::collections::BTreeSet::new(),
         )
         .unwrap();
         assert_eq!(report.entries[0].status, drift_core::Status::Unchanged);
