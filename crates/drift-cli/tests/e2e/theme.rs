@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::harness::{Launch, Session, ENTER, ESC};
 use crate::system::{System, UPSTREAM};
-use crate::view::selected_is;
+use crate::view::{mark_of, selected_is};
 
 fn colors(system: &System, mode: &str, green: &str) {
     system.put(
@@ -95,27 +95,38 @@ fn dark_and_light_theme_switches_repaint_legible_statuses_without_resetting_sele
     colors(&system, "dark", "#00ff00");
     let mut session = open(&system);
     session.wait_for_text("looknfeel.lua");
+    session.press("jjj");
+    session.wait_for("bindings selected before changing theme", |screen| {
+        selected_is(screen, "bindings.lua")
+    });
+    session.press(" ");
+    session.wait_for("bindings marked before changing theme", |screen| {
+        mark_of(screen, "bindings.lua") == Some('x')
+    });
     legible_statuses(
         &session.wait_for_colors("dark status colours", |screen| mode_is(screen, false)),
     );
-    colors(&system, "light", "#00ff00");
-    session.press("j");
-    session.wait_for("hypr selected after switching light", |screen| {
-        selected_is(screen, "hypr/")
-    });
-    legible_statuses(
-        &session.wait_for_colors("light status colours", |screen| mode_is(screen, true)),
-    );
-    colors(&system, "dark", "#00ff00");
-    session.press("k");
-    session.wait_for("root selected after switching dark", |screen| {
-        selected_is(screen, ".config/")
-    });
-    legible_statuses(
-        &session.wait_for_colors("dark status colours restored", |screen| {
-            mode_is(screen, false)
-        }),
-    );
+    for (mode, light) in [("light", true), ("dark", false)] {
+        colors(&system, mode, "#00ff00");
+        session.press("x");
+        legible_statuses(
+            &session.wait_for_colors(&format!("{mode} status colours"), |screen| {
+                mode_is(screen, light)
+            }),
+        );
+        let visible = session.screen();
+        assert!(
+            selected_is(&visible, "bindings.lua"),
+            "{mode}: {}",
+            visible.text()
+        );
+        assert_eq!(
+            mark_of(&visible, "bindings.lua"),
+            Some('x'),
+            "{mode}: {}",
+            visible.text()
+        );
+    }
     session.press("q");
     assert_eq!(session.wait_exit(), 0);
 }
