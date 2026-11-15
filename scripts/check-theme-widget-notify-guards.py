@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import json
+import re
 from pathlib import Path
 import subprocess
 
@@ -54,6 +55,11 @@ def run(output, name, args):
     return result
 
 
+def passed(result):
+    match = re.search(r"test result: ok\. (\d+) passed; 0 failed", result.stdout)
+    return int(match[1]) if result.returncode == 0 and match else 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repeat", type=int, default=3)
@@ -70,20 +76,23 @@ def main():
         fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
         output = ROOT / "target/e2e-guard-proof"
         output.mkdir(parents=True, exist_ok=True)
-        summary = {"head": git("rev-parse", "HEAD"), "baseline": False, "stress_runs": 0, "mutants": []}
+        summary = {"head": git("rev-parse", "HEAD"), "baseline": False, "stress_runs": 0, "stress_cases": 0, "mutants": []}
         (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         baseline = run(output, "baseline", ["--", "--test-threads=8"])
-        if baseline.returncode:
+        if not passed(baseline):
             raise SystemExit(f"baseline failed: {output / 'baseline.log'}")
         summary["baseline"] = True
+        summary["baseline_cases"] = passed(baseline)
+        expected_cases = sum((ROOT / f"crates/drift-cli/tests/e2e/{module}.rs").read_text().count("#[test]")
+                             for module in ["theme", "widget", "notify"])
         for iteration in range(args.repeat):
             result = run(output, f"stress-{iteration + 1}", [
-                "--", "--test-threads=8", "--skip", "tree::", "--skip", "filter::",
-                "--skip", "diff::", "--skip", "map::",
+                "--", "theme::", "widget::", "notify::", "--test-threads=8",
             ])
-            if result.returncode:
+            if passed(result) != expected_cases or not expected_cases:
                 raise SystemExit(f"stress run failed: {output / f'stress-{iteration + 1}.log'}")
             summary["stress_runs"] += 1
+            summary["stress_cases"] += passed(result)
         for name, relative, old, new, test in RECIPES:
             if args.mutant and name not in args.mutant:
                 continue
@@ -105,7 +114,7 @@ def main():
             finally:
                 path.write_bytes(original)
         restored = run(output, "restored", ["--", "--test-threads=8"])
-        summary["restored"] = restored.returncode == 0 and not git("status", "--porcelain")
+        summary["restored"] = passed(restored) == summary["baseline_cases"] and not git("status", "--porcelain")
         (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if not summary["restored"]:
             raise SystemExit(f"restored source validation failed: {output / 'restored.log'}")
