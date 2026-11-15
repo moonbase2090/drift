@@ -1869,7 +1869,7 @@ mod tests {
     }
 
     #[test]
-    fn i_ignores_the_selection_or_the_marks_and_reports_it_without_a_plan() {
+    fn i_ignores_the_selected_file_and_reports_it_without_a_plan() {
         let (mut screen, log) = actionable(false, false);
         let _ = shown(&mut screen);
         press(&mut screen, "jji");
@@ -1878,6 +1878,18 @@ mod tests {
         assert!(log.borrow().proposed.is_empty());
         assert_eq!(notice(&screen), "Ignored 1 file(s).");
         assert!(!shown(&mut screen).contains("Apply plan"));
+    }
+
+    #[test]
+    fn i_ignores_every_marked_file_in_one_call() {
+        let (mut screen, log) = actionable(false, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jj ");
+        press(&mut screen, "j ");
+        press(&mut screen, "i");
+        assert_eq!(log.borrow().ignored.len(), 1);
+        assert_eq!(log.borrow().ignored[0].len(), 2);
+        assert_eq!(notice(&screen), "Ignored 2 file(s).");
     }
 
     #[test]

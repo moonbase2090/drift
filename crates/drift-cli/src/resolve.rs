@@ -347,10 +347,10 @@ impl drift_tui::Resolver for LiveResolver {
         if let Some(path) = loaded.unknown.first() {
             return Err(format!("unknown tracked path '{path}'"));
         }
-        add_ignored(&self.paths.resolve.state, &targets).map_err(|error| error.to_string())?;
+        let added =
+            add_ignored(&self.paths.resolve.state, &targets).map_err(|error| error.to_string())?;
         Ok(format!(
-            "Ignored {} file(s). They are left out of the list; remove the line from the ignored file in Drift's state folder to bring one back.",
-            targets.len()
+            "Ignored {added} file(s). They are left out of the list; remove the line from the ignored file in Drift's state folder to bring one back."
         ))
     }
 
@@ -1132,6 +1132,10 @@ pub(crate) mod tests {
         assert_eq!(read(&root, "state/ignored"), ".config/hypr/a.lua\n");
         assert_eq!(read(&root, "home/.config/hypr/a.lua"), "mine\n");
         assert_eq!(transactions(&root), 0);
+        let again = resolver
+            .ignore(&[".config/hypr/a.lua".to_string()])
+            .unwrap_err();
+        assert!(again.contains("unknown tracked path"), "{again}");
         let error = resolver
             .ignore(&[".config/hypr/nope.lua".to_string()])
             .unwrap_err();
