@@ -1,7 +1,7 @@
 use crate::harness::Screen;
 
 pub fn left(row: &str) -> &str {
-    match row.find(" | ") {
+    match row.find(" │ ").or_else(|| row.find(" | ")) {
         Some(at) => &row[..at],
         None => row,
     }
