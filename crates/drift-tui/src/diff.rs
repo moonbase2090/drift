@@ -933,13 +933,18 @@ fn hunk_lines(hunk: &Hunk, rows: &[Row]) -> HunkLines {
         }
         HunkKind::BothSame => {
             let added = or_raw(from_mark(rows, Mark::Added), &hunk.ours);
+            let theirs = if hunk.ours == hunk.theirs {
+                added.clone()
+            } else {
+                raw_lines(&hunk.theirs)
+            };
             HunkLines {
                 base: kinded(removed.clone(), RowKind::Removed),
                 ours: kinded(added.clone(), RowKind::Added),
-                theirs: kinded(added.clone(), RowKind::Added),
+                theirs: kinded(theirs.clone(), RowKind::Added),
                 result: kinded(added.clone(), RowKind::Added),
                 duo_ours: plain(&added),
-                duo_theirs: plain(&added),
+                duo_theirs: plain(&theirs),
                 stacked: vec![
                     ("- ", kinded(removed.clone(), RowKind::Removed)),
                     ("+ ", kinded(added, RowKind::Added)),
@@ -2349,6 +2354,43 @@ mod tests {
             "alpha\nhello WORLD\nomega\n",
             "alpha\nhello world\nomega\n",
         )
+    }
+
+    #[test]
+    fn equivalent_both_sides_keep_raw_upstream_text_in_each_layout() {
+        let base = r#"{"text":"old"}"#;
+        let ours = r#"{"text":"\u2014"}"#;
+        let theirs = r#"{"text":"—"}"#;
+        let content = |text: &str| DiffContent::Text {
+            sha256: "test".into(),
+            text: text.into(),
+        };
+        let file = FileDiff {
+            path: "config.json".into(),
+            status: drift_core::Status::LocalOverride,
+            badge: None,
+            provenance: drift_core::BaseProvenance::Reviewed,
+            note: String::new(),
+            base: content(base),
+            ours: content(ours),
+            theirs: content(theirs),
+        };
+        let mut screen = DiffScreen::from_file_diff(&file).unwrap();
+        assert_eq!(
+            screen.merge.hunks().next().unwrap().kind,
+            HunkKind::BothSame
+        );
+        assert_eq!(screen.result_text().unwrap(), ours);
+        for (columns, rows) in [(200, 40), (120, 36)] {
+            let (grid, clusters) = render_once(&mut screen, columns, rows);
+            assert_eq!(screen.aligned.ours[0].text, ours);
+            assert_eq!(screen.aligned.theirs[0].text, theirs);
+            assert_eq!(screen.aligned.duo_theirs[0].text, theirs);
+            assert!(grid.display_text(&clusters).contains(theirs));
+            crate::proof::capture(&format!("equivalent-sides-{columns}"), &grid, &clusters);
+        }
+        screen.update(&Event::Key(KeyEvent::press(KeyCode::Char('t'))));
+        assert_eq!(screen.result_text().unwrap(), theirs);
     }
 
     #[test]
