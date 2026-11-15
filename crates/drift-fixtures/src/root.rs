@@ -115,6 +115,36 @@ impl MaterializedRoot {
         self.dir.path()
     }
 
+    pub fn put(&self, rel: &str, bytes: impl AsRef<[u8]>) -> Result<(), Error> {
+        let rel = Path::new(rel);
+        check_rel(rel)?;
+        let dest = self.dir.path().join(rel);
+        let parent = dest
+            .parent()
+            .ok_or_else(|| Error::message(&dest, "path is outside the tree"))?;
+        crate::tree::ensure_real_dir(self.dir.path(), parent)?;
+        if crate::tree::is_symlink(&dest)? {
+            return Err(Error::message(&dest, "refusing to follow a symlink"));
+        }
+        fs::write(&dest, bytes).map_err(|source| Error::io(&dest, source))
+    }
+
+    pub fn discard_file(&self, rel: &str) -> Result<(), Error> {
+        let rel = Path::new(rel);
+        check_rel(rel)?;
+        let mut parent = self.dir.path().to_path_buf();
+        for component in rel.parent().unwrap_or_else(|| Path::new("")).components() {
+            parent.push(component);
+            let metadata =
+                fs::symlink_metadata(&parent).map_err(|source| Error::io(&parent, source))?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(Error::message(&parent, "parent is not a real directory"));
+            }
+        }
+        let dest = self.dir.path().join(rel);
+        fs::remove_file(&dest).map_err(|source| Error::io(&dest, source))
+    }
+
     pub fn overwrite(&self, rel: &str, bytes: impl AsRef<[u8]>) -> Result<(), Error> {
         check_rel(Path::new(rel))?;
         let dest = self.dir.path().join(rel);
@@ -133,6 +163,37 @@ impl std::fmt::Debug for MaterializedRoot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dynamic_files_create_parents_and_cannot_write_or_remove_through_links() {
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim");
+        fs::write(&victim, b"outside").unwrap();
+        let root = RootBuilder::new()
+            .link("link", outside.path().to_str().unwrap())
+            .unwrap()
+            .link("file-link", victim.to_str().unwrap())
+            .unwrap()
+            .materialize()
+            .unwrap();
+        root.put("nested/deeper/file", b"first").unwrap();
+        root.put("nested/deeper/file", b"second").unwrap();
+        assert_eq!(
+            fs::read(root.path().join("nested/deeper/file")).unwrap(),
+            b"second"
+        );
+        root.discard_file("nested/deeper/file").unwrap();
+        assert!(!root.path().join("nested/deeper/file").exists());
+        for path in ["../escape", "/absolute", "link/victim"] {
+            assert!(root.put(path, b"bad").is_err(), "{path}");
+            assert!(root.discard_file(path).is_err(), "{path}");
+        }
+        assert!(root.put("link", b"bad").is_err());
+        assert!(root.put("file-link", b"bad").is_err());
+        root.discard_file("link").unwrap();
+        root.discard_file("file-link").unwrap();
+        assert_eq!(fs::read(victim).unwrap(), b"outside");
+    }
 
     #[test]
     fn overwrite_replaces_an_existing_file_and_rejects_escape() {
