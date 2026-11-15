@@ -1,7 +1,7 @@
 use drift_core::RelPath;
-use drift_source::build_file_diff;
 use drift_source::ScanPaths;
-use std::{collections::BTreeSet, io::Write, path::Path};
+use drift_source::{build_file_diff, read_ignored};
+use std::{io::Write, path::Path};
 
 pub struct DiffArgs {
     pub path: String,
@@ -43,7 +43,7 @@ pub(crate) fn live_path(paths: &ScanPaths, given: &str) -> Result<RelPath, Strin
 pub fn run(paths: &ScanPaths, args: &DiffArgs, out: &mut dyn Write) -> Result<u8, String> {
     let path = live_path(paths, &args.path)?;
     let registry = crate::scan::registry(paths)?;
-    let diff = build_file_diff(&registry, paths, &BTreeSet::new(), &path)
+    let diff = build_file_diff(&registry, paths, &read_ignored(&paths.resolve.state), &path)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("unknown tracked path '{}'", args.path))?;
     let text = if args.json {
@@ -71,9 +71,14 @@ impl LiveDiffer {
 impl drift_tui::Differ for LiveDiffer {
     fn diff(&mut self, given: &str) -> Result<drift_core::FileDiff, String> {
         let path = live_path(&self.paths, given)?;
-        build_file_diff(&self.registry, &self.paths, &BTreeSet::new(), &path)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("unknown tracked path '{given}'"))
+        build_file_diff(
+            &self.registry,
+            &self.paths,
+            &read_ignored(&self.paths.resolve.state),
+            &path,
+        )
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("unknown tracked path '{given}'"))
     }
 }
 

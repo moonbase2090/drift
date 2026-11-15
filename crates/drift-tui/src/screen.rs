@@ -325,6 +325,10 @@ impl Screen {
             Action::Keep(paths) => (ResolveAction::KeepMine, paths),
             Action::Take(paths) => (ResolveAction::TakeUpstream, paths),
             Action::Merge(paths) => (ResolveAction::Merge, paths),
+            Action::Ignore(paths) => {
+                self.ignore(&paths);
+                return;
+            }
             Action::History => {
                 self.open_history();
                 return;
@@ -374,6 +378,20 @@ impl Screen {
                 Tone::Cancelled,
             ),
             Err(message) => self.show_outcome(format!("NOT APPLIED: {message}"), Tone::Error),
+        }
+    }
+
+    fn ignore(&mut self, paths: &[String]) {
+        let Some(resolver) = self.resolver.as_mut() else {
+            self.action = Some(Action::Ignore(paths.to_vec()));
+            return;
+        };
+        match resolver.ignore(paths) {
+            Ok(message) => {
+                self.show(&message);
+                self.request_rescan();
+            }
+            Err(message) => self.show(&format!("Not ignored: {message}")),
         }
     }
 
@@ -1670,6 +1688,7 @@ mod tests {
     struct Log {
         proposed: Vec<(ResolveAction, Vec<String>)>,
         applied: Vec<String>,
+        ignored: Vec<Vec<String>>,
     }
 
     struct Fake {
@@ -1775,6 +1794,14 @@ mod tests {
                 view,
                 skipped: vec![],
             })
+        }
+
+        fn ignore(&mut self, paths: &[String]) -> Result<String, String> {
+            self.log.borrow_mut().ignored.push(paths.to_vec());
+            if self.fail_propose {
+                return Err("cannot load the files".to_string());
+            }
+            Ok(format!("Ignored {} file(s).", paths.len()))
         }
 
         fn apply(&mut self, proposal: &Proposal) -> Result<String, String> {
@@ -1937,6 +1964,39 @@ mod tests {
             );
             assert!(!shown(&mut screen).contains("Apply plan"), "{method}");
         }
+    }
+
+    #[test]
+    fn i_ignores_the_selected_file_and_reports_it_without_a_plan() {
+        let (mut screen, log) = actionable(false, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jji");
+        assert_eq!(log.borrow().ignored.len(), 1);
+        assert_eq!(log.borrow().ignored[0].len(), 1);
+        assert!(log.borrow().proposed.is_empty());
+        assert_eq!(notice(&screen), "Ignored 1 file(s).");
+        assert!(!shown(&mut screen).contains("Apply plan"));
+    }
+
+    #[test]
+    fn i_ignores_every_marked_file_in_one_call() {
+        let (mut screen, log) = actionable(false, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jj ");
+        press(&mut screen, "j ");
+        press(&mut screen, "i");
+        assert_eq!(log.borrow().ignored.len(), 1);
+        assert_eq!(log.borrow().ignored[0].len(), 2);
+        assert_eq!(notice(&screen), "Ignored 2 file(s).");
+    }
+
+    #[test]
+    fn a_failed_ignore_is_reported_as_not_ignored() {
+        let (mut screen, log) = actionable(true, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jji");
+        assert_eq!(log.borrow().ignored.len(), 1);
+        assert_eq!(notice(&screen), "Not ignored: cannot load the files");
     }
 
     #[test]
@@ -2445,6 +2505,9 @@ mod tests {
             }
             fn propose_result(&mut self, file: &crate::EditedFile) -> Result<Proposal, String> {
                 self.0.propose_result(file)
+            }
+            fn ignore(&mut self, paths: &[String]) -> Result<String, String> {
+                self.0.ignore(paths)
             }
             fn apply(&mut self, _: &Proposal) -> Result<String, String> {
                 Err("PARTLY APPLIED: one file changed before the second write failed".into())

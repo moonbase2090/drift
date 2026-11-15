@@ -13,6 +13,7 @@ After an Omarchy update, or any time, it reports which files under `~/.config/hy
 - [Bar widget](docs/widget.md).
 - [The first-update scenario](docs/first-update.md): a scripted walk through the first upgrade on a fresh install.
 - [Keys and mouse targets](docs/input-map.md).
+- [Feature map and interaction tests](docs/feature-map.md): every interaction and the test that drives it; [how the tests work](docs/testing.md).
 
 The commands in these pages are run by a test against a fixture system.
 

@@ -47,7 +47,7 @@ Without a base, Drift compares your file with the template in two panes and cann
 | `1`–`6`, `0` | filter by status, clear the filter |
 | `Space`, `a` | mark a file, mark everything in view |
 | `o` `t` `m` | keep mine, take upstream, merge (act on the marked files or the selection) |
-| `i` | not wired up yet: the key does nothing today |
+| `i` | ignore the selected file, or the marked files (Drift stops listing them) |
 | Esc | clear the search, then the filter, then the marks |
 | `H` | history |
 | `u` | undo the newest transaction |

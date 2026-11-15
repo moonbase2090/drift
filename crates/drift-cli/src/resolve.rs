@@ -1,11 +1,10 @@
-use std::collections::BTreeSet;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use drift_apply::{execute, pending_prune, HyprlandCheck, Roots};
+use drift_apply::{add_ignored, execute, pending_prune, HyprlandCheck, Roots};
 use drift_core::{prepare, Action, PlanView, Prepared, RelPath};
-use drift_source::{load_resolve_inputs, ScanPaths};
+use drift_source::{load_resolve_inputs, read_ignored, ScanPaths};
 
 use crate::diff::live_path;
 use crate::environment::utc_timestamp;
@@ -118,8 +117,13 @@ fn prepare_for(
         targets.push(live_path(env.paths, given)?);
     }
     let registry = crate::scan::registry(env.paths)?;
-    let loaded = load_resolve_inputs(&registry, env.paths, &BTreeSet::new(), &targets)
-        .map_err(|error| error.to_string())?;
+    let loaded = load_resolve_inputs(
+        &registry,
+        env.paths,
+        &read_ignored(&env.paths.resolve.state),
+        &targets,
+    )
+    .map_err(|error| error.to_string())?;
     if !loaded.unknown.is_empty() {
         for path in &loaded.unknown {
             say(err, &format!("drift: unknown tracked path '{path}'\n"))?;
@@ -267,8 +271,13 @@ impl drift_tui::Resolver for LiveResolver {
         for given in paths {
             targets.push(live_path(&self.paths, given)?);
         }
-        let loaded = load_resolve_inputs(&self.registry, &self.paths, &BTreeSet::new(), &targets)
-            .map_err(|error| error.to_string())?;
+        let loaded = load_resolve_inputs(
+            &self.registry,
+            &self.paths,
+            &read_ignored(&self.paths.resolve.state),
+            &targets,
+        )
+        .map_err(|error| error.to_string())?;
         if let Some(path) = loaded.unknown.first() {
             return Err(format!("unknown tracked path '{path}'"));
         }
@@ -293,8 +302,13 @@ impl drift_tui::Resolver for LiveResolver {
         file: &drift_tui::EditedFile,
     ) -> Result<drift_tui::Proposal, String> {
         let target = live_path(&self.paths, &file.path)?;
-        let loaded = load_resolve_inputs(&self.registry, &self.paths, &BTreeSet::new(), &[target])
-            .map_err(|error| error.to_string())?;
+        let loaded = load_resolve_inputs(
+            &self.registry,
+            &self.paths,
+            &read_ignored(&self.paths.resolve.state),
+            &[target],
+        )
+        .map_err(|error| error.to_string())?;
         let input = loaded
             .inputs
             .first()
@@ -316,6 +330,28 @@ impl drift_tui::Resolver for LiveResolver {
         )
         .map_err(|error| error.to_string())?;
         Ok(self.proposal(prepared, id, loaded.package_version))
+    }
+
+    fn ignore(&mut self, paths: &[String]) -> Result<String, String> {
+        let mut targets: Vec<RelPath> = Vec::new();
+        for given in paths {
+            targets.push(live_path(&self.paths, given)?);
+        }
+        let loaded = load_resolve_inputs(
+            &self.registry,
+            &self.paths,
+            &read_ignored(&self.paths.resolve.state),
+            &targets,
+        )
+        .map_err(|error| error.to_string())?;
+        if let Some(path) = loaded.unknown.first() {
+            return Err(format!("unknown tracked path '{path}'"));
+        }
+        let added =
+            add_ignored(&self.paths.resolve.state, &targets).map_err(|error| error.to_string())?;
+        Ok(format!(
+            "Ignored {added} file(s). They are left out of the list; remove the line from the ignored file in Drift's state folder to bring one back."
+        ))
     }
 
     fn apply(&mut self, proposal: &drift_tui::Proposal) -> Result<String, String> {
@@ -920,8 +956,12 @@ pub(crate) mod tests {
             if scans.fetch_add(1, Ordering::SeqCst) > 0 {
                 let _ = gate.recv();
             }
-            drift_source::build_report(&drift_core::Registry::v1(), &paths, &BTreeSet::new())
-                .map_err(|e| e.to_string())
+            drift_source::build_report(
+                &drift_core::Registry::v1(),
+                &paths,
+                &std::collections::BTreeSet::new(),
+            )
+            .map_err(|e| e.to_string())
         });
         let history_paths = scan_paths(&root);
         let history_roots = roots_for(&history_paths, root.path().join("runtime"));
@@ -1051,9 +1091,12 @@ pub(crate) mod tests {
             ("hypr/z.lua", "new\n", Some("old\n"), Some("old\n")),
         ]);
         let paths = scan_paths(&root);
-        let report =
-            drift_source::build_report(&drift_core::Registry::v1(), &paths, &BTreeSet::new())
-                .unwrap();
+        let report = drift_source::build_report(
+            &drift_core::Registry::v1(),
+            &paths,
+            &std::collections::BTreeSet::new(),
+        )
+        .unwrap();
         let mut resolver = live(&root, HyprlandStatus::Clean);
         resolver.roots.omarchy_lock = root.path().join("home/.config/hypr/a.lua");
         let held = std::fs::File::open(&resolver.roots.omarchy_lock).unwrap();
@@ -1144,7 +1187,7 @@ pub(crate) mod tests {
         let report = drift_source::build_report(
             &drift_core::Registry::v1(),
             &scan_paths(&root),
-            &BTreeSet::new(),
+            &std::collections::BTreeSet::new(),
         )
         .unwrap();
         assert_eq!(report.entries[0].status, drift_core::Status::Unchanged);
@@ -1161,9 +1204,12 @@ pub(crate) mod tests {
             ("hypr/other.lua", "upstream\n", Some("old\n"), Some("old\n")),
         ]);
         let paths = scan_paths(&root);
-        let report =
-            drift_source::build_report(&drift_core::Registry::v1(), &paths, &BTreeSet::new())
-                .unwrap();
+        let report = drift_source::build_report(
+            &drift_core::Registry::v1(),
+            &paths,
+            &std::collections::BTreeSet::new(),
+        )
+        .unwrap();
         let mut screen = drift_tui::Screen::with_report(&report)
             .with_resolver(Box::new(live(&root, HyprlandStatus::Clean)))
             .with_differ(Box::new(crate::diff::LiveDiffer::new(
@@ -1326,6 +1372,57 @@ pub(crate) mod tests {
         assert_eq!(read(&root, "home/.config/hypr/a.lua"), "new\n");
         assert_eq!(read(&root, "home/.config/hypr/b.lua"), "new b\n");
         assert_eq!(transactions(&root), 1);
+    }
+
+    #[test]
+    fn ignoring_a_file_removes_it_from_the_scan_and_persists_in_the_state_folder() {
+        use drift_tui::Resolver as _;
+        let root = world(&[
+            ("hypr/a.lua", "new\n", Some("mine\n"), Some("old\n")),
+            ("hypr/b.lua", "new b\n", Some("mine b\n"), Some("old b\n")),
+        ]);
+        let mut resolver = live(&root, HyprlandStatus::Clean);
+        let listed = |root: &MaterializedRoot| {
+            let report = crate::scan::build(&scan_paths(root)).unwrap();
+            let names: Vec<String> = report
+                .entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect();
+            (names, report.ignored)
+        };
+        let (before, none) = listed(&root);
+        assert!(
+            before.contains(&".config/hypr/a.lua".to_string()),
+            "{before:?}"
+        );
+        assert_eq!(none, 0);
+        let message = resolver
+            .ignore(&[".config/hypr/a.lua".to_string()])
+            .unwrap();
+        assert!(message.starts_with("Ignored 1 file(s)."), "{message}");
+        let (after, ignored) = listed(&root);
+        assert!(
+            !after.contains(&".config/hypr/a.lua".to_string()),
+            "{after:?}"
+        );
+        assert!(
+            after.contains(&".config/hypr/b.lua".to_string()),
+            "{after:?}"
+        );
+        assert_eq!(ignored, 1);
+        assert_eq!(read(&root, "state/ignored"), ".config/hypr/a.lua\n");
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "mine\n");
+        assert_eq!(transactions(&root), 0);
+        let again = resolver
+            .ignore(&[".config/hypr/a.lua".to_string()])
+            .unwrap_err();
+        assert!(again.contains("unknown tracked path"), "{again}");
+        let error = resolver
+            .ignore(&[".config/hypr/nope.lua".to_string()])
+            .unwrap_err();
+        assert!(error.contains("unknown tracked path"), "{error}");
+        assert_eq!(read(&root, "state/ignored"), ".config/hypr/a.lua\n");
     }
 
     #[test]
