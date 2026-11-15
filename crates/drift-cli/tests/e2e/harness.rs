@@ -9,6 +9,8 @@ use std::time::Duration;
 const PATIENCE: Duration = Duration::from_secs(30);
 
 pub const ENTER: &str = "\r";
+pub const TAB: &str = "\t";
+pub const SHIFT_TAB: &str = "\x1b[Z";
 pub const ESC: &str = "\x1b";
 pub const SPACE: &str = " ";
 pub const UP: &str = "\x1b[A";
@@ -331,6 +333,35 @@ impl Session {
             .position(needle)
             .unwrap_or_else(|| panic!("{needle:?} is not on the screen:\n{}", screen.text()));
         self.click(column + 1, row);
+    }
+
+    pub fn resize(&mut self, columns: u16, rows: u16) {
+        set_size(self.master.as_raw_fd(), (columns, rows));
+        self.shared
+            .lock()
+            .parser
+            .screen_mut()
+            .set_size(rows, columns);
+    }
+
+    pub fn drag(&mut self, from: (u16, u16), to: (u16, u16)) {
+        self.send(&format!(
+            "\x1b[<0;{};{}M\x1b[<32;{};{}M\x1b[<0;{};{}m",
+            from.0 + 1,
+            from.1 + 1,
+            to.0 + 1,
+            to.1 + 1,
+            to.0 + 1,
+            to.1 + 1
+        ));
+    }
+
+    pub fn wheel_down(&mut self, column: u16, row: u16) {
+        self.send(&format!("\x1b[<65;{};{}M", column + 1, row + 1));
+    }
+
+    pub fn wheel_up(&mut self, column: u16, row: u16) {
+        self.send(&format!("\x1b[<64;{};{}M", column + 1, row + 1));
     }
 
     pub fn wait_exit(&mut self) -> i32 {

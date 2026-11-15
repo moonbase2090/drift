@@ -1,3 +1,4 @@
+mod diff;
 mod filter;
 mod harness;
 mod map;
