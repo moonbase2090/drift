@@ -3,7 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::{symlink, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -215,7 +215,19 @@ fn finish(
 }
 
 fn open_update_lock(path: &Path) -> std::io::Result<Option<File>> {
-    let file = match File::open(path) {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(source),
+    };
+    if !metadata.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+    {
         Ok(file) => file,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(source) => return Err(source),
@@ -1049,6 +1061,13 @@ mod update_diagnostics_tests {
             .unwrap();
         let path = root.path().join("update.lock");
         assert!(update_lock_diagnostic(&path).unwrap().contains("unlocked"));
+        {
+            let file = open_update_lock(&path).unwrap().unwrap();
+            let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+            assert!(flags >= 0);
+            assert_ne!(flags & libc::O_NONBLOCK, 0);
+            assert_eq!(flags & libc::O_ACCMODE, libc::O_RDONLY);
+        }
         let holder = File::open(&path).unwrap();
         assert_eq!(
             unsafe { libc::flock(holder.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
@@ -1060,6 +1079,26 @@ mod update_diagnostics_tests {
         drop(holder);
         assert!(update_lock_diagnostic(&path).unwrap().contains("unlocked"));
         assert_eq!(fs::read(&path).unwrap(), b"persistent");
+    }
+
+    #[test]
+    fn a_fifo_update_lock_is_refused_without_waiting_for_a_writer() {
+        let root = RootBuilder::new()
+            .file("keep", b"")
+            .unwrap()
+            .materialize()
+            .unwrap();
+        let path = root.path().join("update.lock");
+        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            send.send(update_lock_diagnostic(&path)).unwrap();
+        });
+        let result = receive
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("opening a FIFO lock must not block waiting for a writer");
+        assert!(result.unwrap().contains("not a regular file"));
     }
 
     #[test]
