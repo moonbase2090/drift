@@ -644,6 +644,8 @@ fn preflight(roots: &Roots, request: &Request<'_>) -> Result<(), ApplyError> {
         if is_symlink(&dest)? && !payload.allow_symlink {
             return Err(refused(request.plan, "refusing to follow a symlink"));
         }
+        confirm_hash(&dest, planned, payload.allow_symlink)
+            .map_err(|message| refused(request.plan, message))?;
         if planned.action() != Action::KeepMine
             && collides_with_metadata(
                 request.plan.id(),

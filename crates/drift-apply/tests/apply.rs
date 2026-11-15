@@ -146,7 +146,7 @@ fn a_file_is_backed_up_and_replaced_without_following_links() {
 }
 
 #[test]
-fn a_later_failure_restores_files_already_replaced() {
+fn a_stale_file_refuses_the_whole_plan_before_anything_is_written() {
     let fix = Fixture::new();
     let first = "config/hypr/monitors.lua";
     let second = "config/hypr/looknfeel.lua";
@@ -176,10 +176,53 @@ fn a_later_failure_restores_files_already_replaced() {
     assert!(error.message.contains("stale hash"), "{}", error.message);
     assert!(error.applied.is_empty(), "{:?}", error.applied);
     assert_eq!(error.unapplied.len(), 2);
+    assert!(error
+        .unapplied
+        .iter()
+        .all(|file| file.reason.contains("stale hash")));
+    assert_eq!(fs::read(fix.live(first)).unwrap(), b"x\n");
+    assert_eq!(fs::read(fix.live(second)).unwrap(), b"x\n");
+    assert!(!fix.root.join("state/backups/txn-7").exists());
+}
+
+#[test]
+fn a_later_failure_restores_files_already_replaced() {
+    let fix = Fixture::new();
+    let first = "config/hypr/monitors.lua";
+    let second = "config/hypr/looknfeel.lua";
+    write_live(&fix.live(first), b"x\n", 0o640);
+    write_live(&fix.live(second), b"x\n", 0o644);
+    let plan = Plan::new(
+        "txn-7",
+        "2026-04-02T00:00:00Z",
+        "4.5.0-3",
+        vec![
+            planned(first, Some(BEFORE), Some(AFTER), Some(0o600), None),
+            planned(second, Some(BEFORE), Some(BEFORE), Some(0o644), None),
+        ],
+        &[],
+    )
+    .unwrap();
+    let files = [payload(first, b"hi\n"), payload(second, b"x\n")];
+    let error = apply(
+        &fix.roots(),
+        &Request {
+            plan: &plan,
+            files: &files,
+            fail_at: Some(FailAt::File {
+                index: 1,
+                step: FileStep::Temp,
+            }),
+        },
+    )
+    .unwrap_err();
+    assert!(error.message.contains("temp"), "{}", error.message);
+    assert!(error.applied.is_empty(), "{:?}", error.applied);
+    assert_eq!(error.unapplied.len(), 2);
     assert_eq!(error.unapplied[0].path, first);
     assert_eq!(error.unapplied[0].reason, "rolled back");
     assert_eq!(error.unapplied[1].path, second);
-    assert!(error.unapplied[1].reason.contains("stale hash"));
+    assert!(error.unapplied[1].reason.contains("temp"));
     assert_eq!(fs::read(fix.live(first)).unwrap(), b"x\n");
     assert_eq!(mode_of(&fix.live(first)), 0o640);
     assert_eq!(fs::read(fix.live(second)).unwrap(), b"x\n");
