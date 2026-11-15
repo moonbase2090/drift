@@ -5,6 +5,14 @@ use crate::system::{System, MISSING, UNCHANGED, UPSTREAM};
 
 const RECORD: &str = "#!/bin/sh\n{ printf 'BEGIN\\n'; printf '%s\\n' \"$@\"; printf 'END\\n'; } >> \"$DRIFT_ROOT/notices.log\"\n";
 
+struct HeldLock(File);
+
+impl Drop for HeldLock {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 fn logs(system: &System) -> String {
     fs::read_to_string(system.root().join("notices.log")).unwrap_or_default()
 }
@@ -74,9 +82,9 @@ fn notify_skips_zero_drift_and_real_update_locks_but_allows_unlocked_leftovers()
     system.discard_file("var/lib/pacman/db.lck");
     let path = system.root().join("runtime/omarchy-update.lock");
     system.put("runtime/omarchy-update.lock", b"persistent bytes");
-    let holder = File::open(&path).unwrap();
+    let holder = HeldLock(File::open(&path).unwrap());
     assert_eq!(
-        unsafe { libc::flock(holder.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        unsafe { libc::flock(holder.0.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
         0
     );
     assert_eq!(run(&system, &["notify"]).0, 0);
