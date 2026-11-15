@@ -3,6 +3,7 @@ mod filter;
 mod harness;
 mod map;
 mod notify;
+mod plan;
 mod system;
 mod theme;
 mod tree;

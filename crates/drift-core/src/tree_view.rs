@@ -212,8 +212,17 @@ impl TreeView {
     }
 
     pub fn move_by(&mut self, delta: isize) {
-        let target = self.selected as isize + delta;
-        self.select(target.max(0) as usize);
+        if delta == 0 {
+            return;
+        }
+        let target = if self.selected < self.rows.len() {
+            self.selected.saturating_add_signed(delta)
+        } else if delta > 0 {
+            0
+        } else {
+            self.rows.len().saturating_sub(1)
+        };
+        self.select(target);
     }
 
     pub fn top(&mut self) {
@@ -793,6 +802,28 @@ mod tests {
             ]);
             assert_eq!(view.selected_row().unwrap().name, ".config");
             assert!(view.selected_entry().is_none());
+        }
+    }
+
+    #[test]
+    fn cleared_selection_moves_to_the_requested_edge() {
+        let mut view = sample();
+        expand_all(&mut view);
+        assert!(view.rows().len() > 2);
+        for (delta, expected) in [(1, 0), (-1, view.rows().len() - 1)] {
+            view.selected = view.rows().len();
+            assert!(view.selected_row().is_none());
+            view.move_by(delta);
+            assert_eq!(view.selected(), expected);
+            assert!(view.selected_row().is_some());
+        }
+        view.selected = view.rows().len();
+        view.move_by(0);
+        assert!(view.selected_row().is_none());
+        let mut empty = TreeView::new(vec![]);
+        for delta in [-1, 1] {
+            empty.move_by(delta);
+            assert!(empty.selected_row().is_none());
         }
     }
 
