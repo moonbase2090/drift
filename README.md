@@ -221,6 +221,18 @@ cargo deny check
 
 See the [review policy](REVIEW_POLICY.md) for PR classification, proof, and merge requirements. Pull requests that add or change a visible widget or TUI view must include a README GIF or WebP captured from real program output.
 
+For `.json` and `.jsonc` files, comparison decodes equivalent JSON string escapes such as `\u2014` and a literal `—`. Escape spelling alone creates no changed hunk or drift status. Whitespace, comments, numbers and actual string edits still compare as written. Automatic merging keeps equivalent local string spelling even when upstream edits another value on the same line, and backup/preflight hashes always cover the original bytes.
+
+![Equivalent JSON escapes produce no hunk; a real value change still appears](docs/media/json-escapes.gif)
+
+A refused write shows a persistent red `NOT APPLIED` message with the reason. Opening the diff keeps that message visible and labels its result as a preview. A successful action names the changed paths in green while the retained tree stays visible during the next scan. The scanner then updates row states without resetting selection, expansion or marks. Undo and cancellation use persistent colored outcomes in History, and a failed or partial write triggers a rescan. Update-lock diagnostics distinguish an unlocked leftover file from a lock that is actually held.
+
+![A refused take remains visible in the tree and diff, then succeeds after unlocking](docs/media/action-feedback.gif)
+
+All borders and rules use Lunatui line sets. Apply and undo plans use its native Block; tree separators, diff dividers, active drag lines and scrollbar tracks use its line symbols. The command palette keeps its native rounded frame, and Help fills the screen.
+
+![Real tree, diff layouts, apply and undo, History, Help and command palette](docs/media/solid-modal-borders.gif)
+
 Drift uses Lunatui v0.1.32. The existing rendering snapshots match the new release without changes. These frames come from the real wide diff rendering test.
 
 ![Wide diff rendered with Lunatui v0.1.32](docs/media/lunatui-0.1.32.gif)

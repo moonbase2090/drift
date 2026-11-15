@@ -1,11 +1,12 @@
-use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
 use drift_core::{registry_from_user_config, Registry, ScanReport, USER_CONFIG_PATH};
-use drift_source::{build_report, drift_share, drift_state, ResolvePaths, ScanPaths, SourcePaths};
+use drift_source::{
+    build_report, drift_share, drift_state, read_ignored, ResolvePaths, ScanPaths, SourcePaths,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -62,7 +63,8 @@ pub(crate) fn load_registry(paths: &ScanPaths) -> Result<Registry, String> {
 }
 
 pub(crate) fn scan_report(paths: &ScanPaths, registry: &Registry) -> Result<ScanReport, String> {
-    build_report(registry, paths, &BTreeSet::new()).map_err(|error| error.to_string())
+    build_report(registry, paths, &read_ignored(&paths.resolve.state))
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) fn registry(paths: &ScanPaths) -> Result<Registry, String> {
@@ -78,7 +80,8 @@ pub(crate) fn registry(paths: &ScanPaths) -> Result<Registry, String> {
 
 pub fn build(paths: &ScanPaths) -> Result<drift_core::ScanReport, String> {
     let registry = registry(paths)?;
-    build_report(&registry, paths, &BTreeSet::new()).map_err(|error| error.to_string())
+    build_report(&registry, paths, &read_ignored(&paths.resolve.state))
+        .map_err(|error| error.to_string())
 }
 
 pub fn run(paths: &ScanPaths, view: View, out: &mut dyn Write) -> Result<u8, String> {

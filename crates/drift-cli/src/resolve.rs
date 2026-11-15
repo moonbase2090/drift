@@ -1,11 +1,10 @@
-use std::collections::BTreeSet;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use drift_apply::{execute, pending_prune, HyprlandCheck, Roots};
+use drift_apply::{add_ignored, execute, pending_prune, HyprlandCheck, Roots};
 use drift_core::{prepare, Action, PlanView, Prepared, RelPath};
-use drift_source::{load_resolve_inputs, ScanPaths};
+use drift_source::{load_resolve_inputs, read_ignored, ScanPaths};
 
 use crate::diff::live_path;
 use crate::environment::utc_timestamp;
@@ -118,8 +117,13 @@ fn prepare_for(
         targets.push(live_path(env.paths, given)?);
     }
     let registry = crate::scan::registry(env.paths)?;
-    let loaded = load_resolve_inputs(&registry, env.paths, &BTreeSet::new(), &targets)
-        .map_err(|error| error.to_string())?;
+    let loaded = load_resolve_inputs(
+        &registry,
+        env.paths,
+        &read_ignored(&env.paths.resolve.state),
+        &targets,
+    )
+    .map_err(|error| error.to_string())?;
     if !loaded.unknown.is_empty() {
         for path in &loaded.unknown {
             say(err, &format!("drift: unknown tracked path '{path}'\n"))?;
@@ -267,8 +271,13 @@ impl drift_tui::Resolver for LiveResolver {
         for given in paths {
             targets.push(live_path(&self.paths, given)?);
         }
-        let loaded = load_resolve_inputs(&self.registry, &self.paths, &BTreeSet::new(), &targets)
-            .map_err(|error| error.to_string())?;
+        let loaded = load_resolve_inputs(
+            &self.registry,
+            &self.paths,
+            &read_ignored(&self.paths.resolve.state),
+            &targets,
+        )
+        .map_err(|error| error.to_string())?;
         if let Some(path) = loaded.unknown.first() {
             return Err(format!("unknown tracked path '{path}'"));
         }
@@ -293,8 +302,13 @@ impl drift_tui::Resolver for LiveResolver {
         file: &drift_tui::EditedFile,
     ) -> Result<drift_tui::Proposal, String> {
         let target = live_path(&self.paths, &file.path)?;
-        let loaded = load_resolve_inputs(&self.registry, &self.paths, &BTreeSet::new(), &[target])
-            .map_err(|error| error.to_string())?;
+        let loaded = load_resolve_inputs(
+            &self.registry,
+            &self.paths,
+            &read_ignored(&self.paths.resolve.state),
+            &[target],
+        )
+        .map_err(|error| error.to_string())?;
         let input = loaded
             .inputs
             .first()
@@ -318,6 +332,28 @@ impl drift_tui::Resolver for LiveResolver {
         Ok(self.proposal(prepared, id, loaded.package_version))
     }
 
+    fn ignore(&mut self, paths: &[String]) -> Result<String, String> {
+        let mut targets: Vec<RelPath> = Vec::new();
+        for given in paths {
+            targets.push(live_path(&self.paths, given)?);
+        }
+        let loaded = load_resolve_inputs(
+            &self.registry,
+            &self.paths,
+            &read_ignored(&self.paths.resolve.state),
+            &targets,
+        )
+        .map_err(|error| error.to_string())?;
+        if let Some(path) = loaded.unknown.first() {
+            return Err(format!("unknown tracked path '{path}'"));
+        }
+        let added =
+            add_ignored(&self.paths.resolve.state, &targets).map_err(|error| error.to_string())?;
+        Ok(format!(
+            "Ignored {added} file(s). They are left out of the list; remove the line from the ignored file in Drift's state folder to bring one back."
+        ))
+    }
+
     fn apply(&mut self, proposal: &drift_tui::Proposal) -> Result<String, String> {
         let done = execute(
             &self.roots,
@@ -325,7 +361,23 @@ impl drift_tui::Resolver for LiveResolver {
             &proposal.prepared,
             self.checker.as_ref(),
         )
-        .map_err(|error| error.describe())?;
+        .map_err(|error| {
+            let label = if error.applied.is_empty() {
+                "NOT APPLIED"
+            } else {
+                "PARTLY APPLIED"
+            };
+            let mut message = format!("{label}: {}", error.describe());
+            if !error.applied.is_empty() {
+                message.push_str(&format!(" Changed files: {}.", error.applied.join(", ")));
+            }
+            if let Some(diagnostic) = drift_apply::update_lock_diagnostic(&self.roots.omarchy_lock)
+            {
+                message.push(' ');
+                message.push_str(&diagnostic);
+            }
+            message
+        })?;
         let mut message = format!(
             "Applied {} file(s) as transaction {}; {} reviewed base(s) recorded.",
             done.checked.report.applied.len(),
@@ -341,6 +393,10 @@ impl drift_tui::Resolver for LiveResolver {
         if let Some(alert) = done.checked.followup.alert() {
             message.push(' ');
             message.push_str(&alert.replace('\n', " "));
+        }
+        if let Some(diagnostic) = drift_apply::update_lock_diagnostic(&self.roots.omarchy_lock) {
+            message.push(' ');
+            message.push_str(&diagnostic);
         }
         Ok(message)
     }
@@ -876,6 +932,268 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn real_apply_and_undo_outcomes_survive_the_worker_rescan_and_update_the_row() {
+        use lunatui::App;
+        use lunatui_term::{Event, KeyCode, KeyEvent};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            mpsc, Arc,
+        };
+        let root = world(&[
+            (
+                "hypr/a.lua",
+                "upstream\n",
+                Some("mine\n"),
+                Some("upstream\n"),
+            ),
+            ("hypr/z.lua", "new\n", Some("old\n"), Some("old\n")),
+        ]);
+        let paths = scan_paths(&root);
+        let (permit, gate) = mpsc::channel();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let scans = Arc::clone(&runs);
+        let worker = drift_tui::spawn_scan(move || {
+            if scans.fetch_add(1, Ordering::SeqCst) > 0 {
+                let _ = gate.recv();
+            }
+            drift_source::build_report(
+                &drift_core::Registry::v1(),
+                &paths,
+                &std::collections::BTreeSet::new(),
+            )
+            .map_err(|e| e.to_string())
+        });
+        let history_paths = scan_paths(&root);
+        let history_roots = roots_for(&history_paths, root.path().join("runtime"));
+        let mut screen = drift_tui::Screen::with_worker(worker)
+            .with_resolver(Box::new(live(&root, HyprlandStatus::Clean)))
+            .with_historian(Box::new(crate::history::LiveHistorian::new(
+                history_paths,
+                history_roots,
+                crate::history::system_clock,
+            )));
+        let gate_permit = permit;
+        let wait = |screen: &mut drift_tui::Screen, ready: &dyn Fn(&drift_tui::Screen) -> bool| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                let _ = lunatui::render_once(screen, 120, 36);
+                if ready(screen) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "worker did not produce the expected report"
+                );
+                std::thread::yield_now();
+            }
+        };
+        let press = |screen: &mut drift_tui::Screen, code| {
+            screen.update(&Event::Key(KeyEvent::press(code)));
+        };
+        wait(&mut screen, &|s| {
+            s.review().is_some() && !s.needs_animation_frames()
+        });
+        for _ in 0..8 {
+            if screen
+                .review()
+                .unwrap()
+                .view()
+                .selected_entry()
+                .is_some_and(|e| e.path == ".config/hypr/a.lua")
+            {
+                break;
+            }
+            press(&mut screen, KeyCode::Down);
+        }
+        press(&mut screen, KeyCode::Char(' '));
+        press(&mut screen, KeyCode::Char('t'));
+        press(&mut screen, KeyCode::Char('y'));
+        assert!(screen.needs_animation_frames());
+        let during = capture_screen(&mut screen, "04-applied-during-scan");
+        assert!(
+            during.contains("APPLIED: take upstream") && during.contains("a.lua"),
+            "{during}"
+        );
+        assert_eq!(screen.review().unwrap().view().marked_count(), 1);
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "upstream\n");
+        gate_permit.send(()).unwrap();
+        wait(&mut screen, &|s| !s.needs_animation_frames());
+        assert_eq!(
+            screen
+                .review()
+                .unwrap()
+                .view()
+                .selected_entry()
+                .unwrap()
+                .path,
+            ".config/hypr/a.lua"
+        );
+        assert_eq!(
+            screen
+                .review()
+                .unwrap()
+                .view()
+                .selected_entry()
+                .unwrap()
+                .status,
+            drift_core::Status::Unchanged
+        );
+        assert_eq!(screen.review().unwrap().view().marked_count(), 1);
+        let after = capture_screen(&mut screen, "05-real-refreshed-row");
+        assert!(after.contains("APPLIED: take upstream"));
+        press(&mut screen, KeyCode::Char('H'));
+        press(&mut screen, KeyCode::Enter);
+        press(&mut screen, KeyCode::Esc);
+        assert!(screen
+            .history()
+            .unwrap()
+            .notice()
+            .unwrap()
+            .contains("NOT APPLIED: Cancelled"));
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "upstream\n");
+        capture_screen(&mut screen, "06-history-cancelled");
+        press(&mut screen, KeyCode::Enter);
+        press(&mut screen, KeyCode::Char('y'));
+        assert!(screen.needs_animation_frames());
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "mine\n");
+        let undoing = capture_screen(&mut screen, "07-undo-during-scan");
+        assert!(undoing.contains("UNDONE:"), "{undoing}");
+        gate_permit.send(()).unwrap();
+        wait(&mut screen, &|s| !s.needs_animation_frames());
+        press(&mut screen, KeyCode::Esc);
+        assert_eq!(
+            screen
+                .review()
+                .unwrap()
+                .view()
+                .selected_entry()
+                .unwrap()
+                .status,
+            drift_core::Status::LocalOverride
+        );
+        let restored = capture_screen(&mut screen, "08-real-undo-row");
+        assert!(restored.contains("UNDONE:"), "{restored}");
+        assert!(runs.load(Ordering::SeqCst) >= 3);
+    }
+
+    #[test]
+    fn refused_take_is_visible_in_the_tree_and_diff_then_unlock_allows_apply() {
+        use lunatui::App;
+        use lunatui_term::{Event, KeyCode, KeyEvent};
+        use std::os::fd::AsRawFd;
+        let root = world(&[
+            (
+                "hypr/a.lua",
+                "upstream\n",
+                Some("mine\n"),
+                Some("upstream\n"),
+            ),
+            ("hypr/z.lua", "new\n", Some("old\n"), Some("old\n")),
+        ]);
+        let paths = scan_paths(&root);
+        let report = drift_source::build_report(
+            &drift_core::Registry::v1(),
+            &paths,
+            &std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+        let mut resolver = live(&root, HyprlandStatus::Clean);
+        resolver.roots.omarchy_lock = root.path().join("home/.config/hypr/a.lua");
+        let held = std::fs::File::open(&resolver.roots.omarchy_lock).unwrap();
+        assert_eq!(
+            unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let mut screen = drift_tui::Screen::with_report(&report)
+            .with_resolver(Box::new(resolver))
+            .with_differ(Box::new(crate::diff::LiveDiffer::new(
+                scan_paths(&root),
+                drift_core::Registry::v1(),
+            )));
+        let press = |screen: &mut drift_tui::Screen, code| {
+            screen.update(&Event::Key(KeyEvent::press(code)));
+        };
+        for _ in 0..8 {
+            if screen.review().unwrap().view().selected_entry().is_some() {
+                break;
+            }
+            press(&mut screen, KeyCode::Down);
+        }
+        press(&mut screen, KeyCode::Char('t'));
+        press(&mut screen, KeyCode::Char('y'));
+        let refused = capture_screen(&mut screen, "01-refused-tree");
+        assert!(refused.contains("NOT APPLIED:"), "{refused}");
+        let notice = screen.review().unwrap().notice().unwrap();
+        assert!(notice.contains("actually held"), "{notice}");
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "mine\n");
+        assert!(!root.path().join("state/backups").exists());
+        press(&mut screen, KeyCode::Enter);
+        let diff = capture_screen(&mut screen, "02-refused-diff");
+        assert!(
+            diff.contains("NOT APPLIED:") && diff.contains("[preview]"),
+            "{diff}"
+        );
+        assert!(screen
+            .diff()
+            .unwrap()
+            .notice()
+            .unwrap()
+            .contains("actually held"));
+        press(&mut screen, KeyCode::Esc);
+        drop(held);
+        press(&mut screen, KeyCode::Char('t'));
+        press(&mut screen, KeyCode::Char('y'));
+        let applied = capture_screen(&mut screen, "03-applied");
+        assert!(applied.contains("APPLIED: take upstream"), "{applied}");
+        assert!(screen
+            .review()
+            .unwrap()
+            .notice()
+            .unwrap()
+            .contains("unlocked"));
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "upstream\n");
+        assert_eq!(
+            drift_apply::history(&root.path().join("state"))
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn merging_one_line_json_preserves_local_escapes_and_backs_up_the_exact_original() {
+        let base = r#"{"a":"—","n":1}"#;
+        let ours = r#"{"a":"\u2014","n":1}"#;
+        let theirs = r#"{"a":"—","n":2}"#;
+        let expected = r#"{"a":"\u2014","n":2}"#;
+        let root = world(&[("waybar/config.jsonc", theirs, Some(ours), Some(base))]);
+        let ran = go(
+            &root,
+            &[".config/waybar/config.jsonc", "--merge", "--yes"],
+            false,
+            "",
+            &clean(),
+        );
+        assert_eq!(ran.result, Ok(0), "{}", ran.err);
+        assert_eq!(read(&root, "home/.config/waybar/config.jsonc"), expected);
+        assert_eq!(
+            read(
+                &root,
+                "state/backups/resolve-1800000000123/.config/waybar/config.jsonc"
+            ),
+            ours
+        );
+        let report = drift_source::build_report(
+            &drift_core::Registry::v1(),
+            &scan_paths(&root),
+            &std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+        assert_eq!(report.entries[0].status, drift_core::Status::Unchanged);
+    }
+
+    #[test]
     fn diff_write_uses_the_real_plan_and_backs_up_the_existing_file_before_apply() {
         use lunatui::App;
         use lunatui_term::{Event, KeyCode, KeyEvent};
@@ -886,9 +1204,12 @@ pub(crate) mod tests {
             ("hypr/other.lua", "upstream\n", Some("old\n"), Some("old\n")),
         ]);
         let paths = scan_paths(&root);
-        let report =
-            drift_source::build_report(&drift_core::Registry::v1(), &paths, &BTreeSet::new())
-                .unwrap();
+        let report = drift_source::build_report(
+            &drift_core::Registry::v1(),
+            &paths,
+            &std::collections::BTreeSet::new(),
+        )
+        .unwrap();
         let mut screen = drift_tui::Screen::with_report(&report)
             .with_resolver(Box::new(live(&root, HyprlandStatus::Clean)))
             .with_differ(Box::new(crate::diff::LiveDiffer::new(
@@ -951,6 +1272,16 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(read(&root, "home/.config/alacritty/alacritty.toml"), mine);
+        press(&mut screen, KeyCode::Char('?'));
+        let help = capture_screen(&mut screen, "03-help");
+        assert!(help.contains("Drift  Help"), "{help}");
+        press(&mut screen, KeyCode::Esc);
+        press(&mut screen, KeyCode::Char(':'));
+        let palette = capture_screen(&mut screen, "04-palette");
+        assert!(palette.contains("Command palette"), "{palette}");
+        for glyph in ['╭', '╮', '╰', '╯', '─', '│'] {
+            assert!(palette.contains(glyph), "missing {glyph}: {palette}");
+        }
     }
 
     #[test]
@@ -1041,6 +1372,57 @@ pub(crate) mod tests {
         assert_eq!(read(&root, "home/.config/hypr/a.lua"), "new\n");
         assert_eq!(read(&root, "home/.config/hypr/b.lua"), "new b\n");
         assert_eq!(transactions(&root), 1);
+    }
+
+    #[test]
+    fn ignoring_a_file_removes_it_from_the_scan_and_persists_in_the_state_folder() {
+        use drift_tui::Resolver as _;
+        let root = world(&[
+            ("hypr/a.lua", "new\n", Some("mine\n"), Some("old\n")),
+            ("hypr/b.lua", "new b\n", Some("mine b\n"), Some("old b\n")),
+        ]);
+        let mut resolver = live(&root, HyprlandStatus::Clean);
+        let listed = |root: &MaterializedRoot| {
+            let report = crate::scan::build(&scan_paths(root)).unwrap();
+            let names: Vec<String> = report
+                .entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect();
+            (names, report.ignored)
+        };
+        let (before, none) = listed(&root);
+        assert!(
+            before.contains(&".config/hypr/a.lua".to_string()),
+            "{before:?}"
+        );
+        assert_eq!(none, 0);
+        let message = resolver
+            .ignore(&[".config/hypr/a.lua".to_string()])
+            .unwrap();
+        assert!(message.starts_with("Ignored 1 file(s)."), "{message}");
+        let (after, ignored) = listed(&root);
+        assert!(
+            !after.contains(&".config/hypr/a.lua".to_string()),
+            "{after:?}"
+        );
+        assert!(
+            after.contains(&".config/hypr/b.lua".to_string()),
+            "{after:?}"
+        );
+        assert_eq!(ignored, 1);
+        assert_eq!(read(&root, "state/ignored"), ".config/hypr/a.lua\n");
+        assert_eq!(read(&root, "home/.config/hypr/a.lua"), "mine\n");
+        assert_eq!(transactions(&root), 0);
+        let again = resolver
+            .ignore(&[".config/hypr/a.lua".to_string()])
+            .unwrap_err();
+        assert!(again.contains("unknown tracked path"), "{again}");
+        let error = resolver
+            .ignore(&[".config/hypr/nope.lua".to_string()])
+            .unwrap_err();
+        assert!(error.contains("unknown tracked path"), "{error}");
+        assert_eq!(read(&root, "state/ignored"), ".config/hypr/a.lua\n");
     }
 
     #[test]
