@@ -5,6 +5,7 @@ mod file;
 mod file_diff;
 mod history_view;
 mod integrate;
+mod json_strings;
 mod merge;
 mod path;
 mod plan;
@@ -25,7 +26,8 @@ pub use history_view::{HistoryRow, HistoryView, UndoKind, UndoLine, UndoPreview}
 pub use integrate::{
     add_menu_row, hook_content, unified_diff, HOOK_MODE, HOOK_PATH, MENU_ID, MENU_PATH,
 };
-pub use merge::{merge3, Choice, Hunk, HunkKind, Merge, Segment};
+pub use json_strings::comparison_text;
+pub use merge::{merge3, merge_file, Choice, Hunk, HunkKind, Merge, Segment};
 pub use path::RelPath;
 pub use plan::{Action, ObservedFile, Plan, PlannedFile};
 pub use plan_view::{DiffSummary, FileContents, FileView, HashOnly, PlanView, MAX_DIFF_LINES};

@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha256};
 
 use crate::error::Error;
-use crate::merge::merge3;
+use crate::merge::merge_file;
 use crate::path::RelPath;
 use crate::plan::{Action, Plan, PlannedFile};
 use crate::plan_view::FileContents;
@@ -157,7 +157,7 @@ fn merge(input: &ResolveInput, theirs: &[u8]) -> Outcome {
     ) else {
         return Outcome::Skip(SkipReason::NotText);
     };
-    let merged = merge3(base, ours_text, theirs_text);
+    let merged = merge_file(input.path.as_str(), base, ours_text, theirs_text);
     match merged.auto() {
         Ok(text) if text.as_bytes() == ours => Outcome::Skip(SkipReason::NothingToDo),
         Ok(text) => Outcome::Write(text.into_bytes()),
@@ -331,6 +331,28 @@ mod tests {
 
     fn sha(text: &str) -> String {
         digest(text.as_bytes())
+    }
+
+    #[test]
+    fn json_merges_keep_original_bytes_in_the_result_and_safety_hashes() {
+        let base = "{\n\"text\": \"—\",\n\"n\": 1\n}\n";
+        let ours = "{\n\"text\": \"\\u2014\",\n\"n\": 1\n}\n";
+        let theirs = base.replace(": 1", ": 2");
+        let prepared = run(
+            Action::Merge,
+            &[input("a.json", Some(base), Some(ours), Some(&theirs))],
+        );
+        let result = ours.replace(": 1", ": 2");
+        assert_eq!(prepared.writes[0].bytes, result.as_bytes());
+        let plan = prepared.plan.unwrap();
+        assert_eq!(plan.files()[0].sha256_before(), Some(sha(ours).as_str()));
+        assert_eq!(plan.files()[0].sha256_after(), Some(sha(&result).as_str()));
+        assert_eq!(prepared.bases[0].bytes, theirs.as_bytes());
+        let same = run(
+            Action::Merge,
+            &[input("a.json", Some(base), Some(ours), Some(base))],
+        );
+        assert!(same.plan.is_none());
     }
 
     #[test]

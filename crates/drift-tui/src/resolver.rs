@@ -18,5 +18,6 @@ pub struct EditedFile {
 pub trait Resolver {
     fn propose(&mut self, action: Action, paths: &[String]) -> Result<Proposal, String>;
     fn propose_result(&mut self, file: &EditedFile) -> Result<Proposal, String>;
+    fn ignore(&mut self, paths: &[String]) -> Result<String, String>;
     fn apply(&mut self, proposal: &Proposal) -> Result<String, String>;
 }

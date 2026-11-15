@@ -1,5 +1,6 @@
 mod apply;
 mod edit;
+mod ignore;
 mod notify;
 mod seed;
 mod snapshot;
@@ -8,12 +9,13 @@ mod widget;
 pub use apply::{
     apply, apply_checked, execute, history, inspect_undo, integrate, pending_prune, recorded_bases,
     restore_reviewed_bases, touches_hypr_config, undo, undo_with_bases, undo_with_bases_expecting,
-    undo_with_bases_probed, ApplyError, ApplyReport, CheckedApply, Divergence, Executed, FailAt,
-    FileStep, History, Hyprctl, HyprlandCheck, HyprlandStatus, IntegrateMode, IntegrateOutcome,
-    Payload, Request, Restored, Roots, Unapplied, UndoItem, UndoOutcome, UndoRequest, UndoStatus,
-    UndoneWithBases, WriteFollowup,
+    undo_with_bases_probed, update_lock_diagnostic, ApplyError, ApplyReport, CheckedApply,
+    Divergence, Executed, FailAt, FileStep, History, Hyprctl, HyprlandCheck, HyprlandStatus,
+    IntegrateMode, IntegrateOutcome, Payload, Request, Restored, Roots, Unapplied, UndoItem,
+    UndoOutcome, UndoRequest, UndoStatus, UndoneWithBases, WriteFollowup,
 };
 pub use edit::edit_text;
+pub use ignore::{add_ignored, remove_ignored};
 pub use notify::{
     notice_for, notifications_enabled, send, set_notifications, should_send, update_running,
     Notice, NotifyError, APP_NAME, CLICK, URGENCY,

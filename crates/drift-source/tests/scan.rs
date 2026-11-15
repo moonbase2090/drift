@@ -805,3 +805,53 @@ fn an_oversize_base_blocks_an_otherwise_clean_small_merge() {
         .to_json()
         .contains(&format!("\"bytes\": {}", base.len())));
 }
+
+#[test]
+fn json_escape_comparisons_agree_in_scan_diff_and_keep_original_hashes() {
+    use drift_core::{BaseProvenance, DiffContent, RelPath, Status};
+    let escaped = "{\"text\":\"\\u2014\"}\n";
+    let literal = "{\"text\":\"—\"}\n";
+    let old = "{\"text\":\"old\"}\n";
+    for (ours, theirs, base, expected) in [
+        (escaped, literal, Some(literal), Status::Unchanged),
+        (escaped, literal, None, Status::Unchanged),
+        (escaped, old, Some(literal), Status::UpstreamChanged),
+        (old, literal, Some(escaped), Status::LocalOverride),
+        (escaped, literal, Some(old), Status::Unchanged),
+    ] {
+        let mut builder = WorldBuilder::new();
+        builder
+            .template("waybar/config.jsonc", theirs.as_bytes())
+            .live("waybar/config.jsonc", ours.as_bytes());
+        if let Some(base) = base {
+            builder.base("waybar/config.jsonc", base.as_bytes());
+        }
+        let world = builder.build("2");
+        let paths = world.paths();
+        let before = fs::read(paths.source.home.join(".config/waybar/config.jsonc")).unwrap();
+        let report = build_report(&Registry::v1(), &paths, &BTreeSet::new()).unwrap();
+        assert_eq!(report.entries[0].status, expected);
+        let diff = drift_source::build_file_diff(
+            &Registry::v1(),
+            &paths,
+            &BTreeSet::new(),
+            &RelPath::new(".config/waybar/config.jsonc").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(diff.status, expected);
+        assert!(
+            matches!(&diff.ours, DiffContent::Text { sha256, text } if sha256 == &digest(ours.as_bytes()) && text == ours)
+        );
+        let json: serde_json::Value = serde_json::from_str(&diff.to_json()).unwrap();
+        if expected == Status::Unchanged && base == Some(literal) {
+            assert!(json["hunks"].as_array().unwrap().is_empty());
+            assert_eq!(json["result"], ours);
+            assert_eq!(diff.provenance, BaseProvenance::Reviewed);
+        }
+        assert_eq!(
+            fs::read(paths.source.home.join(".config/waybar/config.jsonc")).unwrap(),
+            before
+        );
+    }
+}
