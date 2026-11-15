@@ -7,6 +7,7 @@ mod diff_palette;
 mod differ;
 mod historian;
 mod history_screen;
+mod outcome;
 mod overlay;
 mod plan_dialog;
 mod resolver;

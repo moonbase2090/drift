@@ -12,6 +12,7 @@ use crate::diff::DiffScreen;
 use crate::differ::Differ;
 use crate::historian::{Historian, UndoProposal};
 use crate::history_screen::{HistoryAction, HistoryScreen};
+use crate::outcome::{Outcome as ActionOutcome, Tone};
 use crate::overlay::{Help, Outcome, Palette};
 use crate::plan_dialog::{Decision, PlanDialog};
 use crate::resolver::{Proposal, Resolver};
@@ -52,6 +53,7 @@ pub struct Screen {
     history: Option<HistoryScreen>,
     modal: Option<Modal>,
     notice: Option<String>,
+    outcome: Option<ActionOutcome>,
     review: Option<TreeScreen>,
     action: Option<Action>,
     keymap: Keymap,
@@ -76,6 +78,7 @@ impl Screen {
             history: None,
             modal: None,
             notice: None,
+            outcome: None,
             review: None,
             action: None,
             keymap: keymap(),
@@ -90,7 +93,7 @@ impl Screen {
         }
     }
 
-    pub(crate) fn attached(worker: WorkerHandle) -> Self {
+    pub fn with_worker(worker: WorkerHandle) -> Self {
         Self {
             kick: true,
             worker: Some(worker),
@@ -188,7 +191,7 @@ fn launch_screen(screen: Screen) -> std::io::Result<()> {
 }
 
 pub fn launch_worker(worker: WorkerHandle) -> std::io::Result<()> {
-    launch_attached(Screen::attached(worker))
+    launch_attached(Screen::with_worker(worker))
 }
 
 pub fn launch_worker_with(
@@ -198,7 +201,7 @@ pub fn launch_worker_with(
     differ: Box<dyn Differ>,
 ) -> std::io::Result<()> {
     launch_attached(
-        Screen::attached(worker)
+        Screen::with_worker(worker)
             .with_resolver(resolver)
             .with_historian(historian)
             .with_differ(differ),
@@ -287,6 +290,10 @@ impl Screen {
                 if let Some(notice) = self.notice.take() {
                     self.review.as_mut().unwrap().set_notice(&notice);
                 }
+                self.review
+                    .as_mut()
+                    .unwrap()
+                    .set_outcome(self.outcome.clone());
                 self.report = Some(report);
                 Phase::Idle
             }
@@ -295,6 +302,10 @@ impl Screen {
                     Some(review) => review.set_error(&message),
                     None => self.review = Some(TreeScreen::failed(&message)),
                 }
+                self.review
+                    .as_mut()
+                    .unwrap()
+                    .set_outcome(self.outcome.clone());
                 Phase::Failed
             }
         };
@@ -339,6 +350,7 @@ impl Screen {
                 return;
             }
         };
+        self.clear_outcome();
         let Some(resolver) = self.resolver.as_mut() else {
             self.action = Some(match resolve {
                 ResolveAction::KeepMine => Action::Keep(paths),
@@ -357,8 +369,11 @@ impl Screen {
                     pending: Pending::Resolve(proposal),
                 });
             }
-            Ok(proposal) => self.show(&format!("Nothing to do: {}", proposal.skipped.join("; "))),
-            Err(message) => self.show(&message),
+            Ok(proposal) => self.show_outcome(
+                format!("NO CHANGES: {}", proposal.skipped.join("; ")),
+                Tone::Cancelled,
+            ),
+            Err(message) => self.show_outcome(format!("NOT APPLIED: {message}"), Tone::Error),
         }
     }
 
@@ -372,7 +387,10 @@ impl Screen {
             .and_then(|found| DiffScreen::from_file_diff(&found))
             .map(|screen| screen.with_palette(crate::diff_palette::DiffPalette::active()))
         {
-            Ok(screen) => self.diff = Some(screen),
+            Ok(mut screen) => {
+                screen.set_outcome(self.outcome.clone());
+                self.diff = Some(screen);
+            }
             Err(message) => self.show(&message),
         }
     }
@@ -464,12 +482,16 @@ impl Screen {
             self.diff = None;
             return;
         }
-        if let Some(file) = self.diff.as_mut().and_then(DiffScreen::take_write) {
-            self.propose_result(file);
+        if let Some(result) = self.diff.as_mut().and_then(DiffScreen::take_write) {
+            match result {
+                Ok(file) => self.propose_result(file),
+                Err(message) => self.show_outcome(format!("NOT APPLIED: {message}"), Tone::Error),
+            }
         }
     }
 
     fn propose_result(&mut self, file: crate::EditedFile) {
+        self.clear_outcome();
         let outcome = self
             .resolver
             .as_mut()
@@ -481,15 +503,47 @@ impl Screen {
                     pending: Pending::Resolve(proposal),
                 });
             }
-            Some(Ok(proposal)) => {
-                self.show(&format!("Nothing to do: {}", proposal.skipped.join("; ")))
-            }
-            Some(Err(message)) => self.show(&format!("Write was NOT applied: {message}")),
-            None => self.show("Writing is unavailable in this view. Nothing was applied."),
+            Some(Ok(proposal)) => self.show_outcome(
+                format!("NO CHANGES: {}", proposal.skipped.join("; ")),
+                Tone::Cancelled,
+            ),
+            Some(Err(message)) => self.show_outcome(format!("NOT APPLIED: {message}"), Tone::Error),
+            None => self.show_outcome(
+                "NOT APPLIED: writing is unavailable in this view.".to_string(),
+                Tone::Error,
+            ),
         }
     }
 
+    fn clear_outcome(&mut self) {
+        self.outcome = None;
+        if let Some(review) = self.review.as_mut() {
+            review.set_outcome(None);
+        }
+        if let Some(diff) = self.diff.as_mut() {
+            diff.set_outcome(None);
+        }
+        if let Some(history) = self.history.as_mut() {
+            history.set_outcome(None);
+        }
+    }
+
+    fn show_outcome(&mut self, text: String, tone: Tone) {
+        let outcome = ActionOutcome { text, tone };
+        if let Some(review) = self.review.as_mut() {
+            review.set_outcome(Some(outcome.clone()));
+        }
+        if let Some(diff) = self.diff.as_mut() {
+            diff.set_outcome(Some(outcome.clone()));
+        }
+        if let Some(history) = self.history.as_mut() {
+            history.set_outcome(Some(outcome.clone()));
+        }
+        self.outcome = Some(outcome);
+    }
+
     fn show(&mut self, text: &str) {
+        self.clear_outcome();
         if let Some(diff) = self.diff.as_mut() {
             diff.set_notice(text);
             return;
@@ -510,7 +564,11 @@ impl Screen {
             return;
         };
         match historian.rows() {
-            Ok(view) => self.history = Some(HistoryScreen::new(view)),
+            Ok(view) => {
+                let mut history = HistoryScreen::new(view);
+                history.set_outcome(self.outcome.clone());
+                self.history = Some(history);
+            }
             Err(message) => self.show(&message),
         }
     }
@@ -603,7 +661,10 @@ impl Screen {
             return;
         };
         match decision {
-            Decision::Cancel => self.show("Cancelled. Nothing was written."),
+            Decision::Cancel => self.show_outcome(
+                "NOT APPLIED: Cancelled. Nothing was written.".to_string(),
+                Tone::Cancelled,
+            ),
             Decision::Confirm => self.confirm(modal.pending),
         }
     }
@@ -618,14 +679,40 @@ impl Screen {
                 match outcome {
                     Some(Ok(message)) => {
                         self.diff = None;
-                        if self.worker.is_some() {
-                            self.notice = Some(message.clone());
-                        }
-                        self.show(&message);
+                        let label = if proposal.prepared.action == ResolveAction::KeepMine {
+                            "RECORDED"
+                        } else {
+                            "APPLIED"
+                        };
+                        let files = proposal
+                            .prepared
+                            .plan
+                            .as_ref()
+                            .map(|plan| {
+                                plan.files()
+                                    .iter()
+                                    .map(|file| file.path().as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .unwrap_or_default();
+                        self.show_outcome(
+                            format!(
+                                "{label}: {} — {files}. {message}",
+                                proposal.prepared.action.label()
+                            ),
+                            Tone::Applied,
+                        );
                         self.request_rescan();
                     }
-                    Some(Err(message)) => self.show(&message),
-                    None => self.show("No resolver is attached."),
+                    Some(Err(message)) => {
+                        self.show_outcome(message, Tone::Error);
+                        self.request_rescan();
+                    }
+                    None => self.show_outcome(
+                        "NOT APPLIED: no file writer is available.".to_string(),
+                        Tone::Error,
+                    ),
                 }
             }
             Pending::Undo(proposal) => {
@@ -636,14 +723,16 @@ impl Screen {
                 match outcome {
                     Some(Ok(message)) => {
                         self.refresh_history();
-                        self.show(&message);
+                        self.show_outcome(format!("UNDONE: {message}"), Tone::Applied);
                         self.request_rescan();
                     }
                     Some(Err(message)) => {
                         self.refresh_history();
-                        self.show(&message);
+                        self.show_outcome(format!("UNDO FAILED: {message}"), Tone::Error);
+                        self.request_rescan();
                     }
-                    None => self.show("No history is attached."),
+                    None => self
+                        .show_outcome("UNDO FAILED: no history is attached.".into(), Tone::Error),
                 }
             }
         }
@@ -735,11 +824,15 @@ impl App for Screen {
                 Some(Action::Keep(_) | Action::Take(_) | Action::Merge(_) | Action::Ignore(_))
                     if matches!(self.phase, Phase::Scanning | Phase::Failed) =>
                 {
-                    self.show(if matches!(self.phase, Phase::Failed) {
-                        "Scan failed. The action was not applied; rescan successfully before writing."
-                    } else {
-                        "Scan in progress. The action was not applied; try again when it finishes."
-                    });
+                    self.show_outcome(
+                        if matches!(self.phase, Phase::Failed) {
+                            "NOT APPLIED: Scan failed; rescan successfully before writing."
+                        } else {
+                            "NOT APPLIED: Scan in progress; try again when it finishes."
+                        }
+                        .to_string(),
+                        Tone::Error,
+                    );
                     ControlFlow::Continue
                 }
                 Some(other) => {
@@ -1151,7 +1244,7 @@ mod tests {
             }),
             Duration::ZERO,
         );
-        let mut screen = Screen::attached(worker);
+        let mut screen = Screen::with_worker(worker);
         let started = Instant::now();
         let (grid, clusters) = render_once(&mut screen, 80, 24);
         let text = grid.display_text(&clusters);
@@ -1172,7 +1265,7 @@ mod tests {
     #[test]
     fn notes_clear_a_finished_scan_and_show_a_failure() {
         let worker = crate::worker::launch(Box::new(|| Ok(empty_report())), Duration::ZERO);
-        let mut screen = Screen::attached(worker);
+        let mut screen = Screen::with_worker(worker);
         screen.kick = false;
         screen.apply_note(Note::Ready(empty_report()));
         assert!(!screen.needs_animation_frames());
@@ -1197,7 +1290,7 @@ mod tests {
             }),
             Duration::from_millis(200),
         );
-        let mut screen = Screen::attached(worker);
+        let mut screen = Screen::with_worker(worker);
         screen.kick = false;
         screen.apply_note(Note::Ready(empty_report()));
         let started = Instant::now();
@@ -1224,7 +1317,7 @@ mod tests {
             }),
             Duration::ZERO,
         );
-        let mut screen = Screen::attached(worker);
+        let mut screen = Screen::with_worker(worker);
         let _ = render_once(&mut screen, 80, 24);
         entered_rx.recv().unwrap();
         let started = Instant::now();
@@ -1351,7 +1444,7 @@ mod tests {
             }),
             Duration::ZERO,
         );
-        let mut screen = Screen::attached(worker);
+        let mut screen = Screen::with_worker(worker);
         screen.kick = false;
         screen.request_rescan();
         wait_for_version(&mut screen, "one");
@@ -1687,7 +1780,7 @@ mod tests {
             let id = proposal.view.id.clone();
             self.log.borrow_mut().applied.push(id.clone());
             if self.fail_apply {
-                return Err("the files changed on disk".to_string());
+                return Err("NOT APPLIED: the files changed on disk".to_string());
             }
             Ok(format!(
                 "Applied {} file(s) as {id}.",
@@ -1836,7 +1929,11 @@ mod tests {
                 }
             }
             assert_eq!(log.borrow().applied, ["txn-1"], "{method}");
-            assert_eq!(notice(&screen), "Applied 1 file(s) as txn-1.", "{method}");
+            assert_eq!(
+                notice(&screen),
+                "APPLIED: take upstream — .config/b.conf. Applied 1 file(s) as txn-1.",
+                "{method}"
+            );
             assert!(!shown(&mut screen).contains("Apply plan"), "{method}");
         }
     }
@@ -1876,7 +1973,7 @@ mod tests {
         press(&mut screen, "jjjt");
         assert_eq!(log.borrow().proposed.len(), 1);
         assert!(
-            notice(&screen).starts_with("Nothing to do: .config/same.conf nothing to do"),
+            notice(&screen).starts_with("NO CHANGES: .config/same.conf nothing to do"),
             "{}",
             notice(&screen)
         );
@@ -1889,14 +1986,14 @@ mod tests {
         let (mut screen, log) = actionable(true, false);
         let _ = shown(&mut screen);
         press(&mut screen, "jjt");
-        assert_eq!(notice(&screen), "cannot load the files");
+        assert_eq!(notice(&screen), "NOT APPLIED: cannot load the files");
         assert!(log.borrow().applied.is_empty());
 
         let (mut screen, log) = actionable(false, true);
         let _ = shown(&mut screen);
         press(&mut screen, "jjty");
         assert_eq!(log.borrow().applied.len(), 1);
-        assert_eq!(notice(&screen), "the files changed on disk");
+        assert_eq!(notice(&screen), "NOT APPLIED: the files changed on disk");
     }
 
     #[test]
@@ -1937,7 +2034,7 @@ mod tests {
             ignored: 0,
         };
         let log = Rc::new(RefCell::new(Log::default()));
-        let mut screen = Screen::attached(worker).with_resolver(Box::new(Fake {
+        let mut screen = Screen::with_worker(worker).with_resolver(Box::new(Fake {
             log: Rc::clone(&log),
             fail_propose: false,
             fail_apply: false,
@@ -1950,7 +2047,10 @@ mod tests {
         assert!(screen.needs_animation_frames());
         screen.apply_note(Note::Ready(report));
         assert!(!screen.needs_animation_frames());
-        assert_eq!(notice(&screen), "Applied 1 file(s) as txn-1.");
+        assert_eq!(
+            notice(&screen),
+            "APPLIED: take upstream — .config/a.conf. Applied 1 file(s) as txn-1."
+        );
         drop(unlock);
         drop(screen);
     }
@@ -1975,7 +2075,7 @@ mod tests {
             ignored: 0,
         };
         let log = Rc::new(RefCell::new(Log::default()));
-        let mut screen = Screen::attached(worker).with_resolver(Box::new(Fake {
+        let mut screen = Screen::with_worker(worker).with_resolver(Box::new(Fake {
             log: Rc::clone(&log),
             fail_propose: false,
             fail_apply: false,
@@ -2247,6 +2347,172 @@ mod tests {
         (screen, log)
     }
 
+    fn assert_outcome_color(screen: &mut Screen, label: &str, token: Token) {
+        let (grid, clusters) = render_once(screen, 120, 36);
+        let text = grid.display_text(&clusters);
+        let (y, line) = text
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains(label))
+            .unwrap();
+        let at = line.find(label).unwrap();
+        let x = line[..at].chars().count();
+        assert_eq!(
+            grid.get(x as u16, y as u16).unwrap().style().fg,
+            crate::diff_palette::active_theme().resolve(token)
+        );
+    }
+
+    #[test]
+    fn a_refused_action_stays_error_colored_when_the_file_is_opened_in_the_diff() {
+        let (reader, _) = differing(false, false);
+        let mut screen = reader.with_resolver(Box::new(Fake {
+            log: Rc::new(RefCell::new(Log::default())),
+            fail_propose: false,
+            fail_apply: true,
+        }));
+        let _ = shown(&mut screen);
+        press(&mut screen, "jty");
+        assert!(notice(&screen).starts_with("NOT APPLIED:"));
+        assert_outcome_color(&mut screen, "NOT APPLIED:", Token::Fail);
+        enter(&mut screen);
+        assert!(screen.diff().is_some());
+        let text = shown(&mut screen);
+        assert!(
+            text.contains("NOT APPLIED:") && text.contains("[preview]"),
+            "{text}"
+        );
+        assert_outcome_color(&mut screen, "NOT APPLIED:", Token::Fail);
+        escape(&mut screen);
+        assert!(notice(&screen).starts_with("NOT APPLIED:"));
+    }
+
+    #[test]
+    fn a_new_error_remains_visible_after_a_persistent_action_outcome() {
+        let (reader, _) = differing(true, false);
+        let mut screen = reader.with_resolver(Box::new(Fake {
+            log: Rc::new(RefCell::new(Log::default())),
+            fail_propose: false,
+            fail_apply: true,
+        }));
+        let _ = shown(&mut screen);
+        press(&mut screen, "jty");
+        assert!(notice(&screen).starts_with("NOT APPLIED:"));
+        enter(&mut screen);
+        assert!(screen.diff().is_none());
+        assert_eq!(notice(&screen), "the package database is unreadable");
+        assert!(shown(&mut screen).contains("the package database is unreadable"));
+    }
+
+    #[test]
+    fn undo_success_failure_and_cancellation_stay_colored_in_history() {
+        for (fail, cancel, label, token) in [
+            (false, false, "UNDONE:", Token::Ok),
+            (true, false, "UNDO FAILED:", Token::Fail),
+            (false, true, "NOT APPLIED: Cancelled", Token::Warn),
+        ] {
+            let (fake, log) = historian(false, fail, false, false);
+            let mut screen = with_history(fake);
+            press(&mut screen, "H");
+            enter(&mut screen);
+            if cancel {
+                escape(&mut screen);
+            } else {
+                press(&mut screen, "y");
+            }
+            assert!(history_notice(&screen).contains(label));
+            assert_outcome_color(&mut screen, label, token);
+            press(&mut screen, "j");
+            assert!(history_notice(&screen).contains(label));
+            assert_outcome_color(&mut screen, label, token);
+            if cancel {
+                assert!(log.borrow().applied.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn a_partial_write_error_requests_a_fresh_scan_and_keeps_its_red_outcome() {
+        struct Partial(Fake);
+        impl Resolver for Partial {
+            fn propose(
+                &mut self,
+                action: ResolveAction,
+                paths: &[String],
+            ) -> Result<Proposal, String> {
+                self.0.propose(action, paths)
+            }
+            fn propose_result(&mut self, file: &crate::EditedFile) -> Result<Proposal, String> {
+                self.0.propose_result(file)
+            }
+            fn apply(&mut self, _: &Proposal) -> Result<String, String> {
+                Err("PARTLY APPLIED: one file changed before the second write failed".into())
+            }
+        }
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let scans = std::sync::Arc::clone(&count);
+        let worker = crate::spawn_scan(move || {
+            let n = scans.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(ScanReport {
+                package_version: n.to_string(),
+                entries: vec![entry(".config/a.conf", Status::Conflict)],
+                ..empty_report()
+            })
+        });
+        let mut screen = Screen::with_worker(worker).with_resolver(Box::new(Partial(Fake {
+            log: Rc::new(RefCell::new(Log::default())),
+            fail_propose: false,
+            fail_apply: false,
+        })));
+        let _ = shown(&mut screen);
+        wait_for_version(&mut screen, "0");
+        press(&mut screen, "jty");
+        assert!(matches!(screen.phase, Phase::Scanning));
+        assert!(notice(&screen).contains("PARTLY APPLIED:"));
+        wait_for_version(&mut screen, "1");
+        assert!(count.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+        assert!(notice(&screen).contains("PARTLY APPLIED:"));
+        assert_outcome_color(&mut screen, "PARTLY APPLIED:", Token::Fail);
+    }
+
+    #[test]
+    fn a_successful_action_survives_the_refreshed_row_and_uses_the_success_color() {
+        let (mut screen, _) = actionable(false, false);
+        let _ = shown(&mut screen);
+        press(&mut screen, "jty");
+        assert!(notice(&screen).starts_with("APPLIED:"));
+        let updated = ScanReport {
+            entries: vec![
+                entry(".config/a.conf", Status::Unchanged),
+                entry(".config/b.conf", Status::Conflict),
+            ],
+            ..empty_report()
+        };
+        screen.apply_note(Note::Ready(updated));
+        assert!(notice(&screen).contains("APPLIED: take upstream"));
+        assert_eq!(
+            screen.review().unwrap().view().entries()[0].status,
+            Status::Unchanged
+        );
+        assert_outcome_color(&mut screen, "APPLIED:", Token::Ok);
+    }
+
+    #[test]
+    fn scan_errors_keep_the_persistent_outcome_color() {
+        for (tone, token) in [
+            (Tone::Applied, Token::Ok),
+            (Tone::Error, Token::Fail),
+            (Tone::Cancelled, Token::Warn),
+        ] {
+            let (mut screen, _) = actionable(false, false);
+            let _ = shown(&mut screen);
+            screen.show_outcome("OUTCOME: retained".into(), tone);
+            screen.apply_note(Note::Failed("scan failed".into()));
+            assert!(shown(&mut screen).contains("scan failed"));
+            assert_outcome_color(&mut screen, "OUTCOME:", token);
+        }
+    }
+
     #[test]
     fn every_global_key_acts_on_every_screen() {
         for context in [Context::Tree, Context::History, Context::Diff] {
@@ -2312,7 +2578,10 @@ mod tests {
             press(&mut screen, keys);
             assert!(log.borrow().applied.is_empty(), "{keys}");
             assert!(screen.history().is_some(), "{keys}");
-            assert_eq!(history_notice(&screen), "Cancelled. Nothing was written.");
+            assert_eq!(
+                history_notice(&screen),
+                "NOT APPLIED: Cancelled. Nothing was written."
+            );
             assert!(!shown(&mut screen).contains("Apply plan"));
         }
     }
@@ -2336,7 +2605,7 @@ mod tests {
             backups: Vec::new(),
             ignored: 0,
         };
-        let mut screen = Screen::attached(worker).with_historian(Box::new(fake));
+        let mut screen = Screen::with_worker(worker).with_historian(Box::new(fake));
         screen.kick = false;
         screen.apply_note(Note::Ready(report));
         let _ = shown(&mut screen);
@@ -2348,7 +2617,7 @@ mod tests {
             [("resolve-2".to_string(), Vec::new())]
         );
         assert_eq!(log.borrow().listed, 2);
-        assert_eq!(history_notice(&screen), "Undid resolve-2.");
+        assert_eq!(history_notice(&screen), "UNDONE: Undid resolve-2.");
         assert!(screen.needs_animation_frames());
         assert!(screen.history().is_some());
         drop(unlock);
@@ -2367,7 +2636,7 @@ mod tests {
         assert_eq!(log.borrow().listed, 2);
         assert_eq!(
             history_notice(&screen),
-            "changed since; nothing was written"
+            "UNDO FAILED: changed since; nothing was written"
         );
         assert!(screen.history().is_some());
     }
@@ -2443,7 +2712,7 @@ mod tests {
             Duration::from_millis(200),
         );
         let (fake, log) = historian(false, false, false, false);
-        let mut screen = Screen::attached(worker).with_historian(Box::new(fake));
+        let mut screen = Screen::with_worker(worker).with_historian(Box::new(fake));
         screen.kick = false;
         screen.apply_note(Note::Ready(empty_report()));
         let _ = shown(&mut screen);
@@ -2921,7 +3190,7 @@ mod tests {
             }),
             Duration::from_millis(200),
         );
-        let mut screen = Screen::attached(worker);
+        let mut screen = Screen::with_worker(worker);
         let _ = shown(&mut screen);
         press(&mut screen, "?:");
         assert!(screen.help().is_none() && screen.palette().is_none());
