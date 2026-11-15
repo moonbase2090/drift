@@ -459,16 +459,12 @@ fn a_file_changed_after_the_plan_was_made_is_refused_and_left_as_it_is() {
         "{}",
         refused.text()
     );
-    for made in transactions(&system) {
-        assert_eq!(
-            backup_of(&system, &made, ".config/hypr/looknfeel.lua"),
-            None
-        );
-        assert!(!backups_dir(&system)
-            .join(&made)
-            .join("manifest.json")
-            .exists());
-    }
+    assert_eq!(transactions(&system), Vec::<String>::new());
+    session.press("H");
+    let history = session.wait_for("the empty history", |screen| {
+        screen.contains("No transactions yet.")
+    });
+    assert!(!history.contains("could not be read"), "{}", history.text());
 }
 
 fn base_of(system: &System, rel: &str) -> Option<String> {
