@@ -2505,6 +2505,9 @@ mod tests {
             fn propose_result(&mut self, file: &crate::EditedFile) -> Result<Proposal, String> {
                 self.0.propose_result(file)
             }
+            fn ignore(&mut self, paths: &[String]) -> Result<String, String> {
+                self.0.ignore(paths)
+            }
             fn apply(&mut self, _: &Proposal) -> Result<String, String> {
                 Err("PARTLY APPLIED: one file changed before the second write failed".into())
             }

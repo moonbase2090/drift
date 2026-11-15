@@ -956,8 +956,12 @@ pub(crate) mod tests {
             if scans.fetch_add(1, Ordering::SeqCst) > 0 {
                 let _ = gate.recv();
             }
-            drift_source::build_report(&drift_core::Registry::v1(), &paths, &BTreeSet::new())
-                .map_err(|e| e.to_string())
+            drift_source::build_report(
+                &drift_core::Registry::v1(),
+                &paths,
+                &std::collections::BTreeSet::new(),
+            )
+            .map_err(|e| e.to_string())
         });
         let history_paths = scan_paths(&root);
         let history_roots = roots_for(&history_paths, root.path().join("runtime"));
@@ -1087,9 +1091,12 @@ pub(crate) mod tests {
             ("hypr/z.lua", "new\n", Some("old\n"), Some("old\n")),
         ]);
         let paths = scan_paths(&root);
-        let report =
-            drift_source::build_report(&drift_core::Registry::v1(), &paths, &BTreeSet::new())
-                .unwrap();
+        let report = drift_source::build_report(
+            &drift_core::Registry::v1(),
+            &paths,
+            &std::collections::BTreeSet::new(),
+        )
+        .unwrap();
         let mut resolver = live(&root, HyprlandStatus::Clean);
         resolver.roots.omarchy_lock = root.path().join("home/.config/hypr/a.lua");
         let held = std::fs::File::open(&resolver.roots.omarchy_lock).unwrap();
