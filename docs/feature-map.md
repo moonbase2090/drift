@@ -8,7 +8,7 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 |---|---|---|
 | `global.help` | `?` opens the help for the current screen; `?`, `q` or Esc closes it | planned |
 | `global.palette` | `:` opens the command palette; typing narrows it, Enter runs the choice, Esc closes it, and a click on `[:] Palette` opens it | planned |
-| `global.undo-last` | `u` opens the undo plan for the newest transaction from the tree and the diff, and for the selected transaction from the history | `plan::u_in_the_tree_opens_the_undo_plan_for_the_newest_transaction` |
+| `global.undo-last` | `u` in the tree opens the undo plan for the newest transaction (from the diff and the history it is not yet tested) | `plan::u_in_the_tree_opens_the_undo_plan_for_the_newest_transaction` |
 
 ## Tree
 
