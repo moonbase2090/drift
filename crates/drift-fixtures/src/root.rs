@@ -115,7 +115,7 @@ impl MaterializedRoot {
         self.dir.path()
     }
 
-    pub fn put(&self, rel: &str, bytes: impl AsRef<[u8]>) -> Result<(), Error> {
+    pub fn put(&self, rel: &str, bytes: &[u8]) -> Result<(), Error> {
         let rel = Path::new(rel);
         check_rel(rel)?;
         let dest = self.dir.path().join(rel);

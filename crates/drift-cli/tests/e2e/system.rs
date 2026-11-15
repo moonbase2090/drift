@@ -211,7 +211,7 @@ impl System {
     }
 
     pub fn put(&self, rel: &str, bytes: impl AsRef<[u8]>) {
-        self.root.put(rel, bytes).unwrap();
+        self.root.put(rel, bytes.as_ref()).unwrap();
     }
 
     pub fn discard_file(&self, rel: &str) {
