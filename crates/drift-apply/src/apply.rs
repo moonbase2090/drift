@@ -1078,8 +1078,9 @@ mod update_diagnostics_tests {
         let diagnostic = update_lock_diagnostic(&path).unwrap();
         assert!(diagnostic.contains("actually held"));
         assert!(!diagnostic.contains("stale/unlocked"));
-        drop(holder);
+        assert_eq!(unsafe { libc::flock(holder.as_raw_fd(), libc::LOCK_UN) }, 0);
         assert!(update_lock_diagnostic(&path).unwrap().contains("unlocked"));
+        drop(holder);
         assert_eq!(fs::read(&path).unwrap(), b"persistent");
     }
 
