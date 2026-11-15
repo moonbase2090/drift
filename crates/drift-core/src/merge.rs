@@ -23,6 +23,11 @@ pub struct Hunk {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment {
     Stable(String),
+    Equivalent {
+        base: String,
+        ours: String,
+        theirs: String,
+    },
     Hunk(Hunk),
 }
 
@@ -38,6 +43,7 @@ pub enum Choice {
 pub struct Merge {
     segments: Vec<Segment>,
     terminator: &'static str,
+    auto_theirs: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -159,28 +165,73 @@ fn side_text(base: &[&str], side: &[&str], span: &Range<usize>, regions: &[Regio
 }
 
 pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
+    merge_file("", base, ours, theirs)
+}
+
+fn stable_side<'a>(base: &[&'a str], side: &[&'a str], regions: &[Region]) -> Vec<&'a str> {
+    let mut mapped = base.to_vec();
+    let (mut old, mut new) = (0, 0);
+    for region in regions {
+        mapped[old..region.base.start].copy_from_slice(&side[new..region.side.start]);
+        old = region.base.end;
+        new = region.side.end;
+    }
+    mapped[old..].copy_from_slice(&side[new..]);
+    mapped
+}
+
+pub fn merge_file(path: &str, base: &str, ours: &str, theirs: &str) -> Merge {
     let b = lines(base);
     let o = lines(ours);
     let t = lines(theirs);
-    let groups = group(regions(&b, &o), regions(&b, &t));
+    let bk = crate::comparison_text(path, base);
+    let ok = crate::comparison_text(path, ours);
+    let tk = crate::comparison_text(path, theirs);
+    let bk_lines = lines(&bk);
+    let ok_lines = lines(&ok);
+    let tk_lines = lines(&tk);
+    let ours_regions = regions(&bk_lines, &ok_lines);
+    let theirs_regions = regions(&bk_lines, &tk_lines);
+    let ours_keys = stable_side(&bk_lines, &ok_lines, &ours_regions);
+    let theirs_keys = stable_side(&bk_lines, &tk_lines, &theirs_regions);
+    let ours_base = stable_side(&b, &o, &ours_regions);
+    let theirs_base = stable_side(&b, &t, &theirs_regions);
+    let retained = crate::json_strings::preserve_local_strings(path, ours, theirs);
+    let retained_lines = lines(&retained);
+    let retained_base = stable_side(&b, &retained_lines, &theirs_regions);
+    let mut auto_theirs = Vec::new();
+    let groups = group(ours_regions, theirs_regions);
     let mut segments = Vec::new();
     let mut cursor = 0;
     for g in groups {
         if g.base.start > cursor {
-            segments.push(Segment::Stable(b[cursor..g.base.start].concat()));
+            segments.push(stable_segment(
+                &b[cursor..g.base.start],
+                &ours_base[cursor..g.base.start],
+                &theirs_base[cursor..g.base.start],
+            ));
         }
         let base_text = b[g.base.clone()].concat();
-        let ours_text = side_text(&b, &o, &g.base, &g.ours);
-        let theirs_text = side_text(&b, &t, &g.base, &g.theirs);
+        let ours_text = side_text(&ours_base, &o, &g.base, &g.ours);
+        let theirs_text = side_text(&theirs_base, &t, &g.base, &g.theirs);
         let kind = if g.theirs.is_empty() {
             HunkKind::OursOnly
         } else if g.ours.is_empty() {
             HunkKind::TheirsOnly
-        } else if ours_text == theirs_text {
+        } else if side_text(&ours_keys, &ok_lines, &g.base, &g.ours)
+            == side_text(&theirs_keys, &tk_lines, &g.base, &g.theirs)
+        {
             HunkKind::BothSame
         } else {
             HunkKind::Conflict
         };
+        let automatic = if kind == HunkKind::TheirsOnly {
+            let text = side_text(&retained_base, &retained_lines, &g.base, &g.theirs);
+            (text != theirs_text).then_some(text)
+        } else {
+            None
+        };
+        auto_theirs.push(automatic);
         segments.push(Segment::Hunk(Hunk {
             kind,
             base: base_text,
@@ -190,11 +241,27 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
         cursor = g.base.end;
     }
     if cursor < b.len() {
-        segments.push(Segment::Stable(b[cursor..].concat()));
+        segments.push(stable_segment(
+            &b[cursor..],
+            &ours_base[cursor..],
+            &theirs_base[cursor..],
+        ));
     }
     Merge {
         segments,
         terminator: terminator_for(ours),
+        auto_theirs,
+    }
+}
+
+fn stable_segment(base: &[&str], ours: &[&str], theirs: &[&str]) -> Segment {
+    let base = base.concat();
+    let ours = ours.concat();
+    let theirs = theirs.concat();
+    if base == ours && base == theirs {
+        Segment::Stable(base)
+    } else {
+        Segment::Equivalent { base, ours, theirs }
     }
 }
 
@@ -223,7 +290,7 @@ impl Merge {
     pub fn hunks(&self) -> impl Iterator<Item = &Hunk> {
         self.segments.iter().filter_map(|s| match s {
             Segment::Hunk(h) => Some(h),
-            Segment::Stable(_) => None,
+            Segment::Stable(_) | Segment::Equivalent { .. } => None,
         })
     }
 
@@ -253,14 +320,18 @@ impl Merge {
         let mut index = 0;
         for segment in &self.segments {
             match segment {
-                Segment::Stable(text) => out.push_str(text),
+                Segment::Stable(text) | Segment::Equivalent { ours: text, .. } => {
+                    out.push_str(text)
+                }
                 Segment::Hunk(hunk) => {
                     match (&choices[index], hunk.kind) {
                         (Some(Choice::Mine), _) => out.push_str(&hunk.ours),
                         (Some(Choice::Theirs), _) => out.push_str(&hunk.theirs),
                         (Some(Choice::Both), _) => out.push_str(&both(hunk, self.terminator)),
                         (Some(Choice::Custom(text)), _) => out.push_str(text),
-                        (None, HunkKind::TheirsOnly) => out.push_str(&hunk.theirs),
+                        (None, HunkKind::TheirsOnly) => {
+                            out.push_str(self.auto_theirs[index].as_deref().unwrap_or(&hunk.theirs))
+                        }
                         (None, HunkKind::OursOnly | HunkKind::BothSame) => out.push_str(&hunk.ours),
                         (None, HunkKind::Conflict) => return Err(Error::UnresolvedHunk(index)),
                     }
@@ -283,7 +354,10 @@ impl Merge {
             Some(Choice::Both) => both(hunk, self.terminator),
             Some(Choice::Custom(text)) => text.clone(),
             None => match hunk.kind {
-                HunkKind::TheirsOnly => hunk.theirs.clone(),
+                HunkKind::TheirsOnly => self.auto_theirs[index]
+                    .as_ref()
+                    .unwrap_or(&hunk.theirs)
+                    .clone(),
                 HunkKind::OursOnly | HunkKind::BothSame => hunk.ours.clone(),
                 HunkKind::Conflict => return None,
             },
@@ -301,6 +375,76 @@ mod tests {
 
     fn auto(base: &str, ours: &str, theirs: &str) -> String {
         merge3(base, ours, theirs).auto().unwrap()
+    }
+
+    #[test]
+    fn automatic_json_line_merge_retains_equal_local_lexemes() {
+        let base = r#"{"a":"—","n":1}"#;
+        let ours = r#"{"a":"\u2014","n":1}"#;
+        let theirs = r#"{"a":"—","n":2}"#;
+        let expected = r#"{"a":"\u2014","n":2}"#;
+        let merged = merge_file("a.json", base, ours, theirs);
+        assert_eq!(merged.auto().unwrap(), expected);
+        assert_eq!(merged.hunk_text(0, None).unwrap(), expected);
+        assert_eq!(merged.hunks().next().unwrap().theirs, theirs);
+        assert_eq!(merged.render(&[Some(Choice::Theirs)]).unwrap(), theirs);
+    }
+
+    #[test]
+    fn json_escape_only_changes_have_no_hunks_and_preserve_our_bytes() {
+        let base = "{\n  \"text\": \"—\",\n  \"n\": 1\n}\n";
+        let ours = "{\n  \"text\": \"\\u2014\",\n  \"n\": 1\n}\n";
+        let merged = merge_file("a.jsonc", base, ours, base);
+        assert_eq!(merged.hunk_count(), 0);
+        assert_eq!(merged.auto().unwrap(), ours);
+        let changed = base.replace(": 1", ": 2");
+        let merged = merge_file("a.jsonc", base, ours, &changed);
+        assert_eq!(merged.hunk_count(), 1);
+        assert_eq!(merged.hunks().next().unwrap().kind, HunkKind::TheirsOnly);
+        assert_eq!(merged.auto().unwrap(), ours.replace(": 1", ": 2"));
+        assert_eq!(merge_file("a.conf", base, ours, base).hunk_count(), 1);
+    }
+
+    #[test]
+    fn json_hunks_keep_the_whole_file_comment_and_invalid_escape_context() {
+        for (base, ours, theirs) in [
+            (
+                "/*\n\"old\"\n*/\n{}\n",
+                "/*\n\"\\u2014\"\n*/\n{}\n",
+                "/*\n\"—\"\n*/\n{}\n",
+            ),
+            (
+                "{\n\"x\":\"old\",\n\"bad\":\"\\q\"\n}\n",
+                "{\n\"x\":\"\\u2014\",\n\"bad\":\"\\q\"\n}\n",
+                "{\n\"x\":\"—\",\n\"bad\":\"\\q\"\n}\n",
+            ),
+        ] {
+            let merged = merge_file("a.jsonc", base, ours, theirs);
+            assert_eq!(merged.conflict_count(), 1);
+            assert_eq!(
+                merged.hunks().next().unwrap().ours,
+                ours.lines().nth(1).unwrap().to_string() + "\n"
+            );
+        }
+    }
+
+    #[test]
+    fn equivalent_json_changes_on_both_sides_are_not_a_conflict() {
+        let base = "{\n\"text\": \"old\"\n}\n";
+        let ours = "{\n\"text\": \"\\u2014\"\n}\n";
+        let theirs = "{\n\"text\": \"—\"\n}\n";
+        let merged = merge_file("a.json", base, ours, theirs);
+        assert_eq!(merged.hunks().next().unwrap().kind, HunkKind::BothSame);
+        assert_eq!(merged.auto().unwrap(), ours);
+        let distinct = theirs.replace('—', "different");
+        assert_eq!(
+            merge_file("a.json", base, ours, &distinct).conflict_count(),
+            1
+        );
+        let inserted = format!("\n{ours}");
+        let changed = base.replace("old", "new");
+        let merged = merge_file("a.json", base, &inserted, &changed);
+        assert_eq!(merged.conflict_count(), 1);
     }
 
     #[test]
@@ -502,6 +646,11 @@ mod tests {
                     o.push_str(text);
                     t.push_str(text);
                 }
+                Segment::Equivalent { base, ours, theirs } => {
+                    b.push_str(base);
+                    o.push_str(ours);
+                    t.push_str(theirs);
+                }
                 Segment::Hunk(h) => {
                     b.push_str(&h.base);
                     o.push_str(&h.ours);
@@ -643,6 +792,11 @@ mod tests {
                                 b.push_str(x);
                                 o.push_str(x);
                                 t.push_str(x);
+                            }
+                            Segment::Equivalent { base, ours, theirs } => {
+                                b.push_str(base);
+                                o.push_str(ours);
+                                t.push_str(theirs);
                             }
                             Segment::Hunk(h) => {
                                 b.push_str(&h.base);

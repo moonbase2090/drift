@@ -1,11 +1,14 @@
 use std::time::{Duration, Instant};
 
+use lunatui_core::symbols::line;
 use lunatui_core::{clip_display_prefix, width, Attrs, ClusterTable, Grid, Rect, Style};
 use lunatui_term::{Event, KeyCode, KeyKind, MouseButton, MouseKind, Scroll};
 use lunatui_theme::Token;
 use lunatui_widgets::RenderCx;
 
 use lunatui_runtime::keymap::Keymap;
+
+use crate::outcome::Outcome;
 
 use drift_core::{RowKind, ScanReport, Status, TreeRow, TreeView};
 
@@ -83,6 +86,7 @@ pub struct TreeScreen {
     scanning: bool,
     error: Option<String>,
     notice: Option<String>,
+    outcome: Option<Outcome>,
     mode: Mode,
     keymap: Keymap,
     globals: Keymap,
@@ -136,6 +140,7 @@ impl TreeScreen {
             scanning: false,
             error: None,
             notice: None,
+            outcome: None,
             mode: Mode::Normal,
             keymap: tree_keymap(),
             globals: global_keymap(),
@@ -186,8 +191,18 @@ impl TreeScreen {
         self.notice = Some(text.to_string());
     }
 
+    pub(crate) fn set_outcome(&mut self, outcome: Option<Outcome>) {
+        if outcome.is_some() {
+            self.notice = None;
+        }
+        self.outcome = outcome;
+    }
+
     pub fn notice(&self) -> Option<&str> {
-        self.notice.as_deref()
+        self.outcome
+            .as_ref()
+            .map(|outcome| outcome.text.as_str())
+            .or(self.notice.as_deref())
     }
 
     pub fn view(&self) -> &TreeView {
@@ -621,16 +636,21 @@ impl TreeScreen {
         };
         let mut lines = vec![(title, title_style)];
         let mut body = body;
-        if let Some(notice) = &self.notice {
+        if let Some(notice) = self.notice() {
             body.push(String::new());
-            body.push(notice.clone());
+            body.push(notice.to_string());
         }
         for text in body {
             if text.is_empty() {
                 lines.push((text, dim));
             } else {
+                let style = self
+                    .outcome
+                    .as_ref()
+                    .filter(|outcome| outcome.text == text)
+                    .map_or(base, |outcome| outcome.style(cx, base));
                 for part in wrap(&text, width) {
-                    lines.push((part, base));
+                    lines.push((part, style));
                 }
             }
         }
@@ -723,20 +743,22 @@ impl TreeScreen {
             );
         }
 
-        let info = if self.error.is_some() && !self.view.entries().is_empty() {
+        let info_style = if let Some(outcome) = &self.outcome {
+            outcome.style(&cx, base)
+        } else if self.error.is_some() && !self.view.entries().is_empty() {
             base.fg(cx.token(Token::Fail))
         } else {
             dim
         };
-        put(&mut cx, found.info, &self.info_text(), info);
+        put(&mut cx, found.info, &self.info_text(), info_style);
         self.settle_scroll(usize::from(found.tree.height));
         self.draw_rows(&mut cx, &found, base, dim, selected_style);
         if let Some(rect) = found.divider.filter(|_| self.panel().is_none()) {
             let style = dim;
             if rect.width == 1 {
-                cx.fill(rect, style, '|');
+                cx.fill(rect, style, line::NORMAL.vertical.chars().next().unwrap());
             } else {
-                cx.fill(rect, style, '-');
+                cx.fill(rect, style, line::NORMAL.horizontal.chars().next().unwrap());
             }
         }
         let overflow = width(&self.info_text()) > usize::from(found.info.width);
@@ -751,6 +773,9 @@ impl TreeScreen {
 
     fn info_text(&self) -> String {
         let mut parts = Vec::new();
+        if let Some(outcome) = &self.outcome {
+            parts.push(outcome.text.clone());
+        }
         if let Some(error) = self
             .error
             .as_ref()
@@ -879,9 +904,13 @@ impl TreeScreen {
     ) {
         let (base, dim, bold) = styles;
         let mut lines: Vec<(String, Style)> = Vec::new();
-        if let Some(notice) = self.notice.as_ref().filter(|_| overflow) {
+        if let Some(notice) = self.notice().filter(|_| overflow) {
+            let style = self
+                .outcome
+                .as_ref()
+                .map_or(bold, |outcome| outcome.style(cx, base));
             for part in wrap(notice, usize::from(rect.width)) {
-                lines.push((part, bold));
+                lines.push((part, style));
             }
             lines.push((String::new(), dim));
         }
@@ -2292,7 +2321,7 @@ mod tests {
             let shown = text(&mut screen, columns, rows);
             let rebuilt: String = shown
                 .lines()
-                .map(|line| line.rsplit('|').next().unwrap_or(line))
+                .map(|line| line.rsplit(line::NORMAL.vertical).next().unwrap_or(line))
                 .collect::<String>()
                 .split_whitespace()
                 .collect();

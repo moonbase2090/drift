@@ -1,4 +1,4 @@
-use crate::{merge3, Badge, BaseProvenance, HashOnlyReason, HunkKind, Merge, Status};
+use crate::{merge_file, Badge, BaseProvenance, HashOnlyReason, HunkKind, Merge, Status};
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,7 +92,8 @@ fn kind_label(kind: HunkKind) -> &'static str {
 
 impl FileDiff {
     fn merge(&self) -> Option<Merge> {
-        Some(merge3(
+        Some(merge_file(
+            &self.path,
             self.base.text()?,
             self.ours.text()?,
             self.theirs.text()?,

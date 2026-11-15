@@ -3,7 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::{symlink, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -214,34 +214,83 @@ fn finish(
     Ok(ApplyReport { applied, pruned })
 }
 
-fn update_lock(path: &Path) -> Result<Option<File>, ApplyError> {
-    let file = match File::open(path) {
+fn open_update_lock(path: &Path) -> std::io::Result<Option<File>> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(source),
+    };
+    if !metadata.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+    {
         Ok(file) => file,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => return Err(bare_io(path, source)),
+        Err(source) => return Err(source),
     };
-    if !file
-        .metadata()
-        .map_err(|source| bare_io(path, source))?
-        .is_file()
-    {
-        return Err(bare(format!(
-            "cannot check omarchy update lock ({}): not a regular file",
-            path.display()
-        )));
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
     }
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-        return Ok(Some(file));
-    }
-    let source = std::io::Error::last_os_error();
-    if source.kind() == std::io::ErrorKind::WouldBlock {
-        Err(bare(format!(
-            "omarchy update lock is held ({})",
-            path.display()
-        )))
+        Ok(Some(file))
     } else {
-        Err(bare_io(path, source))
+        Err(std::io::Error::last_os_error())
     }
+}
+
+fn update_lock(path: &Path) -> Result<Option<File>, ApplyError> {
+    open_update_lock(path).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::WouldBlock {
+            bare(format!("omarchy update lock is held ({})", path.display()))
+        } else {
+            bare_io(path, source)
+        }
+    })
+}
+
+pub fn update_lock_diagnostic(path: &Path) -> Option<String> {
+    let held = match open_update_lock(path) {
+        Ok(None) => return None,
+        Ok(Some(_)) => false,
+        Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => true,
+        Err(source) => return Some(format!("Cannot inspect the update lock: {source}.")),
+    };
+    let updater = updater_visible(Path::new("/proc"));
+    Some(match (held, updater) {
+        (false, Some(false)) => "The update-lock file is stale/unlocked; no updater process was detected. It does not block writes.",
+        (false, _) => "The update-lock file exists but is unlocked. It does not block writes.",
+        (true, Some(false)) => "No updater process was detected, but the lock is actually held. It was not bypassed.",
+        (true, _) => "The update lock is actually held. Wait for its holder to finish.",
+    }.to_string())
+}
+
+fn updater_visible(root: &Path) -> Option<bool> {
+    let mut complete = true;
+    for entry in fs::read_dir(root).ok()? {
+        let Ok(entry) = entry else {
+            complete = false;
+            continue;
+        };
+        if !entry
+            .file_name()
+            .as_encoded_bytes()
+            .iter()
+            .all(u8::is_ascii_digit)
+        {
+            continue;
+        }
+        match fs::read_to_string(entry.path().join("comm")) {
+            Ok(name) if name.trim() == "omarchy-update" => return Some(true),
+            Ok(_) => {}
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => complete = false,
+        }
+    }
+    complete.then_some(false)
 }
 
 struct DriftLock {
@@ -644,6 +693,8 @@ fn preflight(roots: &Roots, request: &Request<'_>) -> Result<(), ApplyError> {
         if is_symlink(&dest)? && !payload.allow_symlink {
             return Err(refused(request.plan, "refusing to follow a symlink"));
         }
+        confirm_hash(&dest, planned, payload.allow_symlink)
+            .map_err(|message| refused(request.plan, message))?;
         if planned.action() != Action::KeepMine
             && collides_with_metadata(
                 request.plan.id(),
@@ -995,5 +1046,73 @@ impl Drop for TempFile {
     fn drop(&mut self) {
         self.file.take();
         let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod update_diagnostics_tests {
+    use super::*;
+    use drift_fixtures::RootBuilder;
+
+    #[test]
+    fn diagnostics_distinguish_a_persistent_file_from_a_held_flock_without_mutating_it() {
+        let root = RootBuilder::new()
+            .file("update.lock", b"persistent")
+            .unwrap()
+            .materialize()
+            .unwrap();
+        let path = root.path().join("update.lock");
+        assert!(update_lock_diagnostic(&path).unwrap().contains("unlocked"));
+        {
+            let file = open_update_lock(&path).unwrap().unwrap();
+            let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+            assert!(flags >= 0);
+            assert_ne!(flags & libc::O_NONBLOCK, 0);
+            assert_eq!(flags & libc::O_ACCMODE, libc::O_RDONLY);
+        }
+        let holder = File::open(&path).unwrap();
+        assert_eq!(
+            unsafe { libc::flock(holder.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let diagnostic = update_lock_diagnostic(&path).unwrap();
+        assert!(diagnostic.contains("actually held"));
+        assert!(!diagnostic.contains("stale/unlocked"));
+        drop(holder);
+        assert!(update_lock_diagnostic(&path).unwrap().contains("unlocked"));
+        assert_eq!(fs::read(&path).unwrap(), b"persistent");
+    }
+
+    #[test]
+    fn a_fifo_update_lock_is_refused_without_waiting_for_a_writer() {
+        let root = RootBuilder::new()
+            .file("keep", b"")
+            .unwrap()
+            .materialize()
+            .unwrap();
+        let path = root.path().join("update.lock");
+        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            send.send(update_lock_diagnostic(&path)).unwrap();
+        });
+        let result = receive
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("opening a FIFO lock must not block waiting for a writer");
+        assert!(result.unwrap().contains("not a regular file"));
+    }
+
+    #[test]
+    fn updater_detection_reads_process_names_and_reports_an_unavailable_proc_tree() {
+        let root = RootBuilder::new()
+            .file("123/comm", b"omarchy-update\n")
+            .unwrap()
+            .materialize()
+            .unwrap();
+        assert_eq!(updater_visible(root.path()), Some(true));
+        root.overwrite("123/comm", b"unrelated\n").unwrap();
+        assert_eq!(updater_visible(root.path()), Some(false));
+        assert_eq!(updater_visible(&root.path().join("missing")), None);
     }
 }

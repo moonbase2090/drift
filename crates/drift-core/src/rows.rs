@@ -229,7 +229,7 @@ impl DiffRows {
         let mut index = 0;
         for segment in merge.segments() {
             match segment {
-                Segment::Stable(text) => {
+                Segment::Stable(text) | Segment::Equivalent { ours: text, .. } => {
                     for line in split(text) {
                         let numbers = LineNumbers {
                             base: Some(count.base),
