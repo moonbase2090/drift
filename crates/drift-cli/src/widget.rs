@@ -126,7 +126,7 @@ pub fn run_now(args: &WidgetArgs) -> Result<u8, String> {
     let env = std::env::var_os("DRIFT_PLUGIN_DIR");
     let paths = WidgetPaths {
         source: source_dir(args.source.as_deref(), env.as_deref()),
-        plugins: roots.live.join("plugins"),
+        plugins: crate::environment::omarchy_config_from_env()?.join("plugins"),
         state: roots.state.clone(),
     };
     let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());

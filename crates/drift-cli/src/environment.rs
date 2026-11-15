@@ -31,6 +31,21 @@ pub fn run_integrate(
     Ok(())
 }
 
+pub fn omarchy_config_from_env() -> Result<PathBuf, String> {
+    omarchy_config_from(&|name| std::env::var_os(name))
+}
+
+fn omarchy_config_from(
+    lookup: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<PathBuf, String> {
+    let var = |name: &str| lookup(name).filter(|value| !value.is_empty());
+    match (var("XDG_CONFIG_HOME"), var("HOME")) {
+        (Some(dir), _) => Ok(PathBuf::from(dir).join("omarchy")),
+        (None, Some(home)) => Ok(PathBuf::from(home).join(".config/omarchy")),
+        (None, None) => Err("HOME is not set".to_string()),
+    }
+}
+
 pub fn roots_from_env() -> Result<Roots, String> {
     roots_from(&|name| std::env::var_os(name))
 }
@@ -38,10 +53,8 @@ pub fn roots_from_env() -> Result<Roots, String> {
 fn roots_from(lookup: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<Roots, String> {
     let var = |name: &str| lookup(name).filter(|value| !value.is_empty());
     let home = var("HOME").map(PathBuf::from);
-    let config = match (var("XDG_CONFIG_HOME"), &home) {
-        (Some(dir), _) => PathBuf::from(dir),
-        (None, Some(home)) => home.join(".config"),
-        (None, None) => return Err("HOME is not set".to_string()),
+    let Some(live) = home.clone() else {
+        return Err("HOME is not set".to_string());
     };
     let state = match (var("XDG_STATE_HOME"), &home) {
         (Some(dir), _) => PathBuf::from(dir),
@@ -52,7 +65,7 @@ fn roots_from(lookup: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<Roo
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/run"));
     Ok(Roots {
-        live: config.join("omarchy"),
+        live,
         state: state.join("drift"),
         omarchy_lock: runtime.join("omarchy-update.lock"),
         pacman_lock: drift_source::system_path("/var/lib/pacman/db.lck"),
@@ -176,7 +189,7 @@ mod tests {
             }
         };
         let roots = roots_from(&env(&[("HOME", "/h")])).unwrap();
-        assert_eq!(roots.live, PathBuf::from("/h/.config/omarchy"));
+        assert_eq!(roots.live, PathBuf::from("/h"));
         assert_eq!(roots.state, PathBuf::from("/h/.local/state/drift"));
         assert_eq!(
             roots.omarchy_lock,
@@ -190,13 +203,32 @@ mod tests {
             ("XDG_RUNTIME_DIR", "/r"),
         ]))
         .unwrap();
-        assert_eq!(roots.live, PathBuf::from("/c/omarchy"));
+        assert_eq!(roots.live, PathBuf::from("/h"));
         assert_eq!(roots.state, PathBuf::from("/s/drift"));
         assert_eq!(roots.omarchy_lock, PathBuf::from("/r/omarchy-update.lock"));
-        let roots =
-            roots_from(&env(&[("XDG_CONFIG_HOME", "/c"), ("XDG_STATE_HOME", "/s")])).unwrap();
-        assert_eq!(roots.live, PathBuf::from("/c/omarchy"));
+        assert!(roots_from(&env(&[("XDG_CONFIG_HOME", "/c"), ("XDG_STATE_HOME", "/s")])).is_err());
         assert!(roots_from(&env(&[])).is_err());
         assert!(roots_from(&env(&[("HOME", "")])).is_err());
+    }
+
+    #[test]
+    fn the_omarchy_config_directory_follows_xdg_config_home_with_a_home_fallback() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(value))
+            }
+        };
+        assert_eq!(
+            omarchy_config_from(&env(&[("HOME", "/h")])).unwrap(),
+            PathBuf::from("/h/.config/omarchy")
+        );
+        assert_eq!(
+            omarchy_config_from(&env(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/c")])).unwrap(),
+            PathBuf::from("/c/omarchy")
+        );
+        assert!(omarchy_config_from(&env(&[])).is_err());
     }
 }

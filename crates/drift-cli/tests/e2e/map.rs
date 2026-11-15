@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-const MODULES: [&str; 4] = ["tree", "filter", "diff", "plan"];
+const MODULES: [&str; 5] = ["tree", "filter", "diff", "plan", "integrate"];
 const ALLOW_PLANNED: bool = true;
 
 fn docs(name: &str) -> String {

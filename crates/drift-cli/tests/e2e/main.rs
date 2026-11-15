@@ -1,6 +1,7 @@
 mod diff;
 mod filter;
 mod harness;
+mod integrate;
 mod map;
 mod plan;
 mod system;

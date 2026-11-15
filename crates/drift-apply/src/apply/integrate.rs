@@ -17,6 +17,8 @@ pub enum IntegrateOutcome {
     Applied(ApplyReport),
 }
 
+const CONFIG_PREFIX: &str = ".config/omarchy";
+
 struct Change {
     path: &'static str,
     before: Option<String>,
@@ -54,8 +56,8 @@ pub fn integrate(
 }
 
 fn gather(roots: &Roots) -> Result<Vec<Change>, String> {
-    let menu = read_text(&roots.live.join(MENU_PATH))?;
-    let hook = read_text(&roots.live.join(HOOK_PATH))?;
+    let menu = read_text(&target(roots, MENU_PATH))?;
+    let hook = read_text(&target(roots, HOOK_PATH))?;
     let mut changes = Vec::new();
     if let Some(after) = add_menu_row(menu.as_deref()).map_err(|error| error.to_string())? {
         changes.push(Change {
@@ -66,7 +68,7 @@ fn gather(roots: &Roots) -> Result<Vec<Change>, String> {
             from_mode: None,
         });
     }
-    let hook_mode = existing_mode(&roots.live.join(HOOK_PATH));
+    let hook_mode = existing_mode(&target(roots, HOOK_PATH));
     let wanted = hook_content(hook.as_deref()).map_err(|error| error.to_string())?;
     let not_executable = hook_mode.is_some_and(|mode| mode & 0o100 == 0);
     if wanted.is_some() || not_executable {
@@ -79,6 +81,14 @@ fn gather(roots: &Roots) -> Result<Vec<Change>, String> {
         });
     }
     Ok(changes)
+}
+
+fn recorded(path: &str) -> String {
+    format!("{CONFIG_PREFIX}/{path}")
+}
+
+fn target(roots: &Roots, path: &str) -> PathBuf {
+    roots.live.join(recorded(path))
 }
 
 fn show(out: &mut dyn Write, changes: &[Change]) -> Result<(), String> {
@@ -136,7 +146,7 @@ fn commit(roots: &Roots, id: &str, time: &str, changes: &[Change]) -> Result<App
             .map(|text| sha256_hex(text.as_bytes()));
         files.push(
             PlannedFile::new(
-                change.path,
+                &recorded(change.path),
                 Action::TakeUpstream,
                 before.as_deref(),
                 Some(&sha256_hex(change.after.as_bytes())),
@@ -150,10 +160,12 @@ fn commit(roots: &Roots, id: &str, time: &str, changes: &[Change]) -> Result<App
     let prune_refs: Vec<&str> = prune.iter().map(String::as_str).collect();
     let plan = Plan::new(id, time, env!("CARGO_PKG_VERSION"), files, &prune_refs)
         .map_err(|error| error.to_string())?;
+    let recorded_paths: Vec<String> = changes.iter().map(|change| recorded(change.path)).collect();
     let payloads: Vec<Payload<'_>> = changes
         .iter()
-        .map(|change| Payload {
-            path: change.path,
+        .zip(&recorded_paths)
+        .map(|(change, path)| Payload {
+            path,
             bytes: change.after.as_bytes(),
             volatile: false,
             allow_volatile: false,
