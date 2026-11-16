@@ -33,6 +33,11 @@ impl Fixture {
         for dir in ["live", "state", "runtime", "pacman"] {
             fs::create_dir_all(root.join(dir)).unwrap();
         }
+        std::os::unix::fs::symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hyprctl"),
+            root.join("hyprctl"),
+        )
+        .unwrap();
         Self { root }
     }
 
@@ -144,19 +149,25 @@ fn fake_hyprctl(dir: &Path, stdout: &str, code: i32) -> PathBuf {
 fn fake_hyprctl_io(dir: &Path, stdout: &str, stderr: &str, code: i32) -> PathBuf {
     fs::write(dir.join("out"), stdout).unwrap();
     fs::write(dir.join("err"), stderr).unwrap();
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$(dirname \"$0\")/argv\"\nif [ \"$1\" != configerrors ]; then\n  exit 2\nfi\ncat \"$(dirname \"$0\")/out\"\ncat \"$(dirname \"$0\")/err\" >&2\nexit {code}\n"
-    );
-    let path = dir.join(format!("hyprctl-{code}-{}-{}", stdout.len(), stderr.len()));
-    fs::write(&path, script).unwrap();
-    let mut perms = fs::metadata(&path).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&path, perms).unwrap();
-    path
+    fs::write(dir.join("code"), code.to_string()).unwrap();
+    dir.join("hyprctl")
 }
 
 fn argv_of(program: &Path) -> String {
     fs::read_to_string(program.parent().unwrap().join("argv")).unwrap()
+}
+
+#[test]
+fn a_retained_writer_to_a_generated_script_cannot_block_the_fixture_executable() {
+    let fix = Fixture::new();
+    let writer = fs::File::create(fix.root.join("hyprctl-0-0-0")).unwrap();
+    let program = fake_hyprctl(&fix.root, "", 0);
+    assert_eq!(
+        Hyprctl::at(program.as_os_str()).config_errors(),
+        HyprlandStatus::Clean
+    );
+    assert_eq!(argv_of(&program).trim(), "configerrors");
+    drop(writer);
 }
 
 #[test]
