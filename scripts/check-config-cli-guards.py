@@ -36,7 +36,7 @@ def main():
         run("baseline")
         recipes = [
             ("config", "scan.rs", "let path = &paths.user_config;", 'let path = &paths.source.home.join(".config/drift/config.toml");', "snapshot_uses_xdg_config_instead_of_a_broken_home_config"),
-            ("range", "main.rs", "must be between 1 and 65535", "needs a number", "dimensions_report_numeric_overflow_as_a_range_error"),
+            ("range", "main.rs", "must be between 1 and 65535", "needs a number", "dimensions_report_out_of_range_numbers_as_range_errors"),
             ("integrate-lock", "environment.rs", "report_update_lock(roots, err)?;", "let _ = (roots, &mut *err);", "an_already_integrated_install_reports_the_held_lock_without_writing"),
             ("resolve-lock", "resolve.rs", "crate::environment::report_update_lock(env.roots, err)?;", "let _ = (env.roots, &mut *err);", "resolving_an_unchanged_file_reports_the_held_lock_without_writing"),
         ]

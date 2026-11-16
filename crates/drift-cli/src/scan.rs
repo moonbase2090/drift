@@ -39,16 +39,15 @@ pub fn paths_from_env() -> ScanPaths {
 }
 
 pub fn paths_from(source: SourcePaths, lookup: &dyn Fn(&str) -> Option<OsString>) -> ScanPaths {
-    let var = |name: &str| lookup(name).filter(|value| !value.is_empty());
-    let data_home = var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| source.home.join(".local/share"));
-    let state_home = var("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| source.home.join(".local/state"));
-    let config_home = var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| source.home.join(".config"));
+    let directory = |name: &str| {
+        lookup(name)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    let data_home = directory("XDG_DATA_HOME").unwrap_or_else(|| source.home.join(".local/share"));
+    let state_home =
+        directory("XDG_STATE_HOME").unwrap_or_else(|| source.home.join(".local/state"));
+    let config_home = directory("XDG_CONFIG_HOME").unwrap_or_else(|| source.home.join(".config"));
     ScanPaths {
         user_config: config_home.join("drift/config.toml"),
         resolve: ResolvePaths {
@@ -210,6 +209,19 @@ mod tests {
         });
         assert_eq!(custom.resolve.share, PathBuf::from("/d/drift"));
         assert_eq!(custom.resolve.state, PathBuf::from("/s/drift"));
+        let relative = paths_from(source(), &|_| Some("relative".into()));
+        assert_eq!(
+            relative.user_config,
+            PathBuf::from("/h/.config/drift/config.toml")
+        );
+        assert_eq!(
+            relative.resolve.share,
+            PathBuf::from("/h/.local/share/drift")
+        );
+        assert_eq!(
+            relative.resolve.state,
+            PathBuf::from("/h/.local/state/drift")
+        );
         let empty = paths_from(source(), &|_| Some(OsString::new()));
         assert_eq!(empty.resolve.share, PathBuf::from("/h/.local/share/drift"));
     }

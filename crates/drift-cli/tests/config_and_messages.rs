@@ -99,12 +99,16 @@ fn snapshot_uses_xdg_config_instead_of_a_broken_home_config() {
 }
 
 #[test]
-fn snapshot_falls_back_to_home_only_for_unset_or_empty_xdg_config() {
-    for empty in [false, true] {
-        let root = snapshot_fixture(&[("home/.config/drift/config.toml", USER_ROOT)]);
+fn snapshot_falls_back_to_home_for_unset_empty_or_relative_xdg_config() {
+    for value in [None, Some(""), Some("relative")] {
+        let root = snapshot_fixture(&[
+            ("home/.config/drift/config.toml", USER_ROOT),
+            ("relative/drift/config.toml", "invalid = ["),
+        ]);
         let mut cmd = command(root.path());
-        if empty {
-            cmd.env("XDG_CONFIG_HOME", "");
+        cmd.current_dir(root.path());
+        if let Some(value) = value {
+            cmd.env("XDG_CONFIG_HOME", value);
         }
         success(&cmd.args(["snapshot", "--pre"]).output().unwrap());
         assert_eq!(
@@ -160,9 +164,15 @@ fn malformed_xdg_config_names_the_selected_file_and_writes_nothing() {
 }
 
 #[test]
-fn dimensions_report_numeric_overflow_as_a_range_error() {
+fn dimensions_report_out_of_range_numbers_as_range_errors() {
     for flag in ["--width", "--height"] {
-        for value in ["65536", "999999999999999999999999999999999999"] {
+        for value in [
+            "65536",
+            "999999999999999999999999999999999999",
+            "-1",
+            "-65536",
+            "-999999999999999999999999999999999999",
+        ] {
             let output = Command::new(env!("CARGO_BIN_EXE_drift"))
                 .args([flag, value])
                 .output()

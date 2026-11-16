@@ -181,11 +181,15 @@ fn number(value: Option<&str>, flag: &str) -> Result<u16, String> {
     let Some(value) = value else {
         return Err(format!("drift: {flag} needs a number\n{USAGE}"));
     };
-    let parsed = value.parse::<u16>().map_err(|error| match error.kind() {
-        std::num::IntErrorKind::PosOverflow => {
+    let parsed = value.parse::<u16>().map_err(|error| {
+        let negative = value.strip_prefix('-').is_some_and(|digits| {
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        });
+        if *error.kind() == std::num::IntErrorKind::PosOverflow || negative {
             format!("drift: {flag} must be between 1 and 65535\n{USAGE}")
+        } else {
+            format!("drift: {flag} needs a number\n{USAGE}")
         }
-        _ => format!("drift: {flag} needs a number\n{USAGE}"),
     })?;
     if parsed == 0 {
         return Err(format!("drift: {flag} must be at least 1\n{USAGE}"));
