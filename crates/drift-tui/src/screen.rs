@@ -623,6 +623,13 @@ impl Screen {
     }
 
     fn undo_last(&mut self) {
+        if self.history.is_none() && matches!(self.phase, Phase::Scanning) {
+            self.show_outcome(
+                "NOT APPLIED: Scan in progress; try again when it finishes.".to_string(),
+                Tone::Error,
+            );
+            return;
+        }
         let Some(historian) = self.historian.as_mut() else {
             self.action = Some(Action::UndoLast);
             return;
@@ -2792,6 +2799,22 @@ mod tests {
             history_notice(&screen),
             "1 file(s) changed since; U restores them anyway"
         );
+    }
+
+    #[test]
+    fn undo_last_while_a_scan_runs_is_refused_with_a_message() {
+        let (fake, log) = historian(false, false, false, false);
+        let mut screen = with_history(fake);
+        let _ = shown(&mut screen);
+        screen.apply_note(Note::Scanning);
+        press(&mut screen, "u");
+        let text = shown(&mut screen);
+        assert!(text.contains("NOT APPLIED: Scan in progress"), "{text}");
+        assert!(screen.modal.is_none());
+        assert!(log.borrow().proposed.is_empty());
+        screen.apply_note(Note::Ready(empty_report()));
+        press(&mut screen, "u");
+        assert_eq!(log.borrow().proposed.len(), 1);
     }
 
     #[test]
