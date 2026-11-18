@@ -6,8 +6,8 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 
 | Id | Interaction | Tests |
 |---|---|---|
-| `global.help` | `?` opens the help for the current screen; `?`, `q` or Esc closes it | planned |
-| `global.palette` | `:` opens the command palette; typing narrows it, Enter runs the choice, Esc closes it, and a click on `[:] Palette` opens it | planned |
+| `global.help` | `?` opens the help for the current screen; `?`, `q` or Esc closes it | `overlay::question_mark_opens_the_help_with_every_section_and_escape_closes_it`, `overlay::clicking_the_help_hint_opens_the_help`, `overlay::the_help_scrolls_with_j_and_k_through_every_section`, `overlay::the_help_lists_every_action_of_the_key_map_document` |
+| `global.palette` | `:` opens the command palette; typing narrows it, Enter runs the choice, Esc closes it, and a click on `[:] Palette` opens it | `overlay::colon_opens_the_palette_listing_the_commands_and_escape_closes_it`, `overlay::clicking_the_palette_hint_opens_it`, `overlay::typing_narrows_the_palette_and_backspace_widens_it`, `overlay::enter_runs_the_first_match_and_closes_the_palette`, `overlay::down_chooses_the_next_match_before_enter`, `overlay::clicking_a_palette_row_runs_that_command`, `overlay::a_palette_search_with_no_match_runs_nothing_and_stays_open`, `overlay::a_command_with_no_key_of_its_own_is_reachable_from_the_palette` |
 | `global.undo-last` | `u` in the tree opens the undo plan for the newest transaction (covered from the tree only) | `plan::u_in_the_tree_opens_the_undo_plan_for_the_newest_transaction` |
 
 ## Tree
@@ -39,8 +39,8 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `tree.keep` | `o` opens the keep-mine plan for the marked files or the selected one | `plan::o_keeps_mine_writes_nothing_and_records_the_template_as_reviewed` |
 | `tree.take` | `t` opens the take-upstream plan | `plan::y_confirms_and_writes_the_file_a_backup_and_one_transaction`, `plan::a_plan_for_everything_writes_every_listed_file_and_creates_the_missing_one` |
 | `tree.merge` | `m` opens the merge plan for a file that merges cleanly | `plan::m_merges_a_clean_merge_and_writes_the_combined_text_with_a_backup` |
-| `tree.ignore` | `i` ignores marked files, or the selection when nothing is marked. For a directory, it targets descendants matching the current search and status filter | planned |
-| `tree.history` | `H` opens the history | planned |
+| `tree.ignore` | `i` ignores marked files, or the selection when nothing is marked. For a directory, it targets descendants matching the current search and status filter | `ignore::i_ignores_the_selected_file_and_records_it_in_the_state_folder`, `ignore::i_ignores_every_marked_file_and_not_the_selected_one`, `ignore::an_ignored_file_stays_out_of_the_list_in_the_next_session`, `ignore::the_palette_ignore_command_ignores_the_selected_file` |
+| `tree.history` | `H` opens the history | `history::h_opens_the_history_listing_every_transaction_newest_first` |
 
 ## File states
 
@@ -82,16 +82,16 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 
 | Id | Interaction | Tests |
 |---|---|---|
-| `history.back` | `q` or Esc returns to the tree | planned |
-| `history.refresh` | `r` reloads the list | planned |
+| `history.back` | `q` or Esc returns to the tree | `history::q_and_escape_return_to_the_tree` |
+| `history.refresh` | `r` reloads the list | `history::r_reloads_the_list_and_shows_what_appeared_on_disk` |
 | `history.undo` | Enter opens the undo plan for the selected transaction and confirm restores the files | `plan::enter_in_the_history_undoes_a_transaction_and_restores_the_saved_bytes` |
 | `history.undo-force` | `U` undoes and also restores files changed since | `plan::undo_refuses_a_file_changed_since_and_capital_u_restores_it_anyway` |
-| `history.down` | `j` and Down move down | planned |
-| `history.up` | `k` and Up move up | planned |
-| `history.top` | `g` and Home select the newest | planned |
-| `history.bottom` | `G` and End select the oldest | planned |
-| `history.page-down` | PageDown moves down by half the height of the history pane | planned |
-| `history.page-up` | PageUp moves up by half the height of the history pane | planned |
+| `history.down` | `j` and Down move down, and a click selects a row | `history::j_and_down_move_down_and_k_and_up_move_up`, `history::clicking_a_row_selects_it` |
+| `history.up` | `k` and Up move up | `history::j_and_down_move_down_and_k_and_up_move_up` |
+| `history.top` | `g` and Home select the newest | `history::g_and_home_select_the_newest_and_capital_g_and_end_the_oldest` |
+| `history.bottom` | `G` and End select the oldest | `history::g_and_home_select_the_newest_and_capital_g_and_end_the_oldest` |
+| `history.page-down` | PageDown moves down by half the height of the history pane | `history::page_down_and_page_up_move_by_half_the_history_pane` |
+| `history.page-up` | PageUp moves up by half the height of the history pane | `history::page_down_and_page_up_move_by_half_the_history_pane` |
 
 ## Diff
 
@@ -132,8 +132,8 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `window.resize` | resizing keeps the screen, the selection and an open dialog and repaints at the new size | planned |
 | `window.resize-diff` | resizing across a width boundary switches the diff layout and keeps the selected hunk | `diff::resizing_across_a_width_boundary_follows_the_width_and_keeps_the_hunk` |
 | `window.layouts` | the diff shows five columns (hunks, base, ours, theirs, result) from 200 columns, ours and theirs side by side with the result underneath from 100 columns, and one stacked column below that | `diff::from_200_columns_the_diff_opens_in_five_columns`, `diff::from_100_columns_the_diff_opens_with_ours_and_theirs_side_by_side_and_the_result_below`, `diff::below_100_columns_the_diff_stacks_in_one_column`, `diff::the_layout_edges_are_at_exactly_200_and_100_columns` |
-| `theme.dark` | the dark theme draws legible status colours | planned |
-| `theme.light` | the light theme drawn from the Omarchy colours file is legible | planned |
+| `theme.dark` | the dark theme draws legible status colours | `theme::dark_and_light_theme_switches_repaint_legible_statuses_without_resetting_selection`, `theme::the_diff_uses_omarchy_hues_and_repaints_its_cached_frame_when_mode_changes` |
+| `theme.light` | the light theme drawn from the Omarchy colours file is legible | `theme::dark_and_light_theme_switches_repaint_legible_statuses_without_resetting_selection`, `theme::the_diff_uses_omarchy_hues_and_repaints_its_cached_frame_when_mode_changes` |
 
 ## Command line
 
@@ -141,9 +141,9 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 |---|---|---|
 | `integrate.apply` | `drift integrate --yes` adds the Drift menu row and an executable post-update hook under `~/.config/omarchy` as one transaction, and says so when run again | `integrate::integrate_writes_the_menu_row_and_an_executable_hook` |
 | `integrate.undo` | `drift undo` and the history undo an integrate transaction by removing or restoring both files, and the undo plan names them | `integrate::undo_after_integrate_removes_what_integrate_added`, `integrate::the_history_lists_an_integrate_transaction_and_its_undo_plan_names_the_files` |
-| `widget.install` | `drift widget install` copies the plugin, enables it and places it on the bar | planned |
-| `widget.sync` | `drift widget sync` refreshes the copy and leaves local edits unless forced | planned |
-| `widget.remove` | `drift widget remove` disables the widget and deletes the copy | planned |
-| `notify.send` | `drift notify` sends one notice when files drifted | planned |
-| `notify.skip` | `drift notify` sends nothing when nothing drifted, when an update runs or when notices are off | planned |
-| `notify.switch` | `drift notify on` and `off` keep the choice | planned |
+| `widget.install` | `drift widget install` copies the plugin, enables it and places it on the bar | `widget::widget_install_copies_records_enables_and_places_the_plugin`, `widget::widget_dry_run_writes_nothing_and_no_place_skips_the_bar_command` |
+| `widget.sync` | `drift widget sync` refreshes the copy and leaves local edits unless forced | `widget::widget_sync_updates_shipped_files_and_yes_cannot_overwrite_local_edits_but_force_backs_them_up`, `widget::widget_sync_reads_the_pty_answer_before_replacing_an_edited_copy` |
+| `widget.remove` | `drift widget remove` disables the widget and deletes the copy | `widget::widget_remove_decline_keeps_the_copy_then_yes_removes_it_and_preserves_edits` |
+| `notify.send` | `drift notify` sends one notice when files drifted | `notify::notify_delivers_singular_and_plural_counts_with_the_click_command`, `notify::a_failed_notifier_is_reported_and_exits_two` |
+| `notify.skip` | `drift notify` sends nothing when nothing drifted, when an update runs or when notices are off | `notify::notify_skips_zero_drift_and_real_update_locks_but_allows_unlocked_leftovers`, `notify::notify_on_and_off_persist_across_processes_and_control_delivery` |
+| `notify.switch` | `drift notify on` and `off` keep the choice | `notify::notify_on_and_off_persist_across_processes_and_control_delivery` |

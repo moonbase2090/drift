@@ -20,6 +20,12 @@ Termwright (0.2.0) does the same job, and was tried first. It pulls in an async 
 - It is deterministic: no sleeps, no timing windows, no order between tests.
 - Every entry in the feature map is linked to a test or marked planned, and every test is linked from the map.
 
+## Replay the theme, widget and notify guards
+
+`python scripts/check-theme-widget-notify-guards.py --repeat 5` runs the PTY suite, repeats the theme/widget/notify cases with eight test threads, then checks nine controlled production mutants. Run it in an idle, clean worktree. It restores each source file in a `finally` block and requires the named test to fail behaviorally. Logs and the commit-stamped summary are written under `target/e2e-guard-proof/`. `--mutant <name>` selects one recipe for investigation. The final PTY run checks the restored source.
+
+Theme tests inspect foreground and background colors from completed terminal frames, including contrast and live dark/light changes. Widget tests inspect installed files, hashes, preserved edits, backups and the arguments passed to fixture Omarchy commands. Notify tests inspect actual notifier arguments, persisted preferences and suppression while real fixture locks are held. All commands run in fixture homes through the same PTY harness as the tree and diff tests.
+
 ## Config and CLI diagnostic guards
 
 `cargo test -p drift-cli --test config_and_messages` runs the real binary against isolated config, package and lock fixtures. It checks snapshot contents for XDG config precedence and fallback, error paths, dimension overflow, and lock diagnostics on commands that have nothing to change.

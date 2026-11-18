@@ -1,7 +1,19 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-const MODULES: [&str; 5] = ["tree", "filter", "diff", "plan", "integrate"];
+const MODULES: [&str; 11] = [
+    "tree",
+    "filter",
+    "diff",
+    "plan",
+    "theme",
+    "widget",
+    "notify",
+    "overlay",
+    "history",
+    "ignore",
+    "integrate",
+];
 const ALLOW_PLANNED: bool = true;
 
 fn docs(name: &str) -> String {

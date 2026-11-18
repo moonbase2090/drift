@@ -29,6 +29,7 @@ const SYNC_END: &[u8] = b"\x1b[?2026l";
 struct Terminal {
     parser: vt100::Parser,
     shown: Vec<String>,
+    painted: vt100::Screen,
     frames: Vec<Vec<String>>,
     pending: Vec<u8>,
     open: bool,
@@ -64,6 +65,7 @@ impl Terminal {
 
     fn publish(&mut self) {
         let rows = self.rows();
+        self.painted = self.parser.screen().clone();
         if self.frames.last() != Some(&rows) {
             if self.frames.len() == MAX_FRAMES {
                 self.frames.remove(0);
@@ -210,6 +212,7 @@ impl Session {
             terminal: Mutex::new(Terminal {
                 parser: vt100::Parser::new(rows, columns, 0),
                 shown: vec![String::new(); usize::from(rows)],
+                painted: vt100::Parser::new(rows, columns, 0).screen().clone(),
                 frames: Vec::new(),
                 pending: Vec::new(),
                 open: false,
@@ -271,6 +274,25 @@ impl Session {
             screen.text()
         );
         screen
+    }
+
+    pub fn wait_for_colors(
+        &self,
+        what: &str,
+        ready: impl Fn(&vt100::Screen) -> bool,
+    ) -> vt100::Screen {
+        let guard = self.shared.lock();
+        let (guard, outcome) = self
+            .shared
+            .changed
+            .wait_timeout_while(guard, PATIENCE, |terminal| !ready(&terminal.painted))
+            .unwrap_or_else(|err| err.into_inner());
+        assert!(
+            !outcome.timed_out(),
+            "gave up waiting for {what}; the screen is:\n{}",
+            guard.shown.join("\n")
+        );
+        guard.painted.clone()
     }
 
     pub fn wait_for_text(&self, needle: &str) -> Screen {
@@ -366,15 +388,16 @@ impl Session {
 
     pub fn wait_exit(&mut self) -> i32 {
         let guard = self.shared.lock();
-        let (_guard, outcome) = self
+        let (guard, outcome) = self
             .shared
             .changed
             .wait_timeout_while(guard, PATIENCE, |terminal| !terminal.closed)
             .unwrap_or_else(|err| err.into_inner());
+        let text = guard.shown.join("\n");
+        drop(guard);
         assert!(
             !outcome.timed_out(),
-            "the program did not exit; the screen is:\n{}",
-            self.screen().text()
+            "the program did not exit; the screen is:\n{text}"
         );
         let status = self.child.wait().unwrap();
         status.code().unwrap_or(-1)
