@@ -89,6 +89,7 @@ fn paths(setup: &Setup) -> ScanPaths {
     let home = setup.case.trees.home().to_path_buf();
     let root = setup.package.path().to_path_buf();
     ScanPaths {
+        user_config: home.join(".config/drift/config.toml"),
         source: SourcePaths::new(
             ReadPaths::new(&root, setup.case.trees.omarchy_path()),
             &home,
@@ -300,6 +301,7 @@ impl World {
     fn paths(&self) -> ScanPaths {
         let root = self.root.path().to_path_buf();
         ScanPaths {
+            user_config: root.join("home/.config/drift/config.toml"),
             source: SourcePaths::new(
                 ReadPaths::new(&root, root.join("usr/share/omarchy")),
                 root.join("home"),
@@ -555,6 +557,7 @@ fn a_missing_package_is_an_error_and_not_an_empty_report() {
     let root = builder.materialize().unwrap();
     let base = root.path().to_path_buf();
     let paths = ScanPaths {
+        user_config: base.join("home/.config/drift/config.toml"),
         source: SourcePaths::new(
             ReadPaths::new(&base, base.join("usr/share/omarchy")),
             base.join("home"),

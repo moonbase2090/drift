@@ -19,3 +19,9 @@ Termwright (0.2.0) does the same job, and was tried first. It pulls in an async 
 - It guards behaviour a user would notice, and fails when that behaviour breaks. A test that only restates the code is not accepted.
 - It is deterministic: no sleeps, no timing windows, no order between tests.
 - Every entry in the feature map is linked to a test or marked planned, and every test is linked from the map.
+
+## Config and CLI diagnostic guards
+
+`cargo test -p drift-cli --test config_and_messages` runs the real binary against isolated config, package and lock fixtures. It checks snapshot contents for XDG config precedence and fallback, error paths, dimension overflow, and lock diagnostics on commands that have nothing to change.
+
+From a clean, idle worktree, run `python scripts/check-config-cli-guards.py`. It temporarily breaks config selection, overflow reporting and each no-op lock diagnostic, requires each named regression test to fail, restores the source and reruns the suite. Logs and the head-stamped summary go under `target/config-cli-guard-proof/`. Compiler errors do not count as caught regressions.

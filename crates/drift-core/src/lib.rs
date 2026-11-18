@@ -18,7 +18,7 @@ mod status;
 mod tree_view;
 
 pub use classify::{classify, Base, Classification, MergeOutcome, Versions};
-pub use config::{parse_user_roots, registry_from_user_config, USER_CONFIG_PATH};
+pub use config::{parse_user_roots, registry_from_user_config};
 pub use error::{Error, Location};
 pub use file::{LiveFile, LiveState, LiveTreatment, Template, Verification};
 pub use file_diff::{DiffContent, FileDiff};

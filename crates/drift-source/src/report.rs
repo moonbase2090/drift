@@ -15,6 +15,7 @@ use crate::installed::{read_package, sha256_hex};
 use crate::resolve::{resolve_bases, BaseQuery, ResolvePaths};
 
 pub struct ScanPaths {
+    pub user_config: PathBuf,
     pub source: SourcePaths,
     pub resolve: ResolvePaths,
 }

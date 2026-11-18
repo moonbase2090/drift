@@ -7,8 +7,6 @@ use crate::error::{Error, Location};
 use crate::path::RelPath;
 use crate::registry::{Origin, Registry, Root};
 
-pub const USER_CONFIG_PATH: &str = ".config/drift/config.toml";
-
 type Value<'i> = Spanned<DeValue<'i>>;
 
 fn fail(text: &str, span: Range<usize>, message: impl Into<String>) -> Error {
@@ -264,10 +262,5 @@ live = ".local/state/omarchy/toggles/hypr"
             registry_from_user_config(duplicate),
             Err(Error::DuplicateRoot("config".to_string()))
         );
-    }
-
-    #[test]
-    fn the_config_location_is_under_dot_config() {
-        assert_eq!(USER_CONFIG_PATH, ".config/drift/config.toml");
     }
 }

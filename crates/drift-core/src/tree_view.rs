@@ -218,9 +218,9 @@ impl TreeView {
         let target = if self.selected < self.rows.len() {
             self.selected.saturating_add_signed(delta)
         } else if delta > 0 {
-            0
+            delta.unsigned_abs() - 1
         } else {
-            self.rows.len().saturating_sub(1)
+            self.rows.len().saturating_sub(delta.unsigned_abs() - 1 + 1)
         };
         self.select(target);
     }
@@ -820,6 +820,18 @@ mod tests {
         view.selected = view.rows().len();
         view.move_by(0);
         assert!(view.selected_row().is_none());
+        let last = view.rows().len() - 1;
+        view.move_by(2);
+        assert_eq!(view.selected(), 1);
+        view.selected = view.rows().len();
+        view.move_by(-2);
+        assert_eq!(view.selected(), last - 1);
+        view.selected = view.rows().len();
+        view.move_by(10_000);
+        assert_eq!(view.selected(), last);
+        view.selected = view.rows().len();
+        view.move_by(-10_000);
+        assert_eq!(view.selected(), 0);
         let mut empty = TreeView::new(vec![]);
         for delta in [-1, 1] {
             empty.move_by(delta);

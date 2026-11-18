@@ -23,6 +23,9 @@ pub fn run_integrate(
         input.read_line(&mut line).is_ok() && matches!(line.trim(), "y" | "Y" | "yes")
     };
     let outcome = drift_apply::integrate(roots, &id, &time, mode, out, &mut ask)?;
+    if outcome == IntegrateOutcome::AlreadyDone {
+        report_update_lock(roots, err)?;
+    }
     if outcome == IntegrateOutcome::Declined && !interactive {
         let note = "drift: not a terminal, so nothing was written; pass --yes to apply\n";
         err.write_all(note.as_bytes())
@@ -44,6 +47,13 @@ fn omarchy_config_from(
         (None, Some(home)) => Ok(PathBuf::from(home).join(".config/omarchy")),
         (None, None) => Err("HOME is not set".to_string()),
     }
+}
+
+pub(crate) fn report_update_lock(roots: &Roots, err: &mut dyn Write) -> Result<(), String> {
+    if let Some(note) = drift_apply::update_lock_diagnostic(&roots.omarchy_lock) {
+        writeln!(err, "drift: {note}").map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn roots_from_env() -> Result<Roots, String> {

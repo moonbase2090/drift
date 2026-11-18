@@ -39,7 +39,7 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `tree.keep` | `o` opens the keep-mine plan for the marked files or the selected one | `plan::o_keeps_mine_writes_nothing_and_records_the_template_as_reviewed` |
 | `tree.take` | `t` opens the take-upstream plan | `plan::y_confirms_and_writes_the_file_a_backup_and_one_transaction`, `plan::a_plan_for_everything_writes_every_listed_file_and_creates_the_missing_one` |
 | `tree.merge` | `m` opens the merge plan for a file that merges cleanly | `plan::m_merges_a_clean_merge_and_writes_the_combined_text_with_a_backup` |
-| `tree.ignore` | `i` ignores the selected file or the marked files | planned |
+| `tree.ignore` | `i` ignores marked files, or the selection when nothing is marked. For a directory, it targets descendants matching the current search and status filter | planned |
 | `tree.history` | `H` opens the history | planned |
 
 ## File states
