@@ -534,7 +534,9 @@ fn enter_in_the_history_undoes_a_transaction_and_restores_the_saved_bytes() {
 #[test]
 fn u_in_the_tree_opens_the_undo_plan_for_the_newest_transaction() {
     let system = System::world();
-    let mut session = after_a_take(&system);
+    drop(after_a_take(&system));
+    let mut session = opened(&system);
+    session.wait_for_text("8 of 8 files");
     session.press("u");
     let plan = session.wait_for("the undo plan", |screen| {
         screen.contains("Apply plan undo-")

@@ -58,3 +58,20 @@ pub fn column_of(screen: &Screen, row_needle: &str, needle: &str) -> Option<u16>
     let byte = row.find(needle)?;
     Some(row[..byte].chars().count() as u16)
 }
+
+pub fn palette_count(screen: &Screen) -> Option<usize> {
+    screen.contains("Command palette").then_some(())?;
+    screen.rows().iter().find_map(|row| {
+        let at = row.find(" commands")?;
+        row[..at].split_whitespace().last()?.parse().ok()
+    })
+}
+
+pub fn palette_first(screen: &Screen) -> Option<String> {
+    let rows = screen.rows();
+    let at = rows.iter().position(|row| row.contains("│›"))?;
+    let row = rows.get(at + 1)?;
+    let start = row.find('│')? + '│'.len_utf8();
+    let end = row.rfind('│')?;
+    Some(row[start..end].trim().to_string())
+}

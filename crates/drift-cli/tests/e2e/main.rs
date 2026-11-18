@@ -1,7 +1,10 @@
 mod diff;
 mod filter;
 mod harness;
+mod history;
+mod ignore;
 mod map;
+mod overlay;
 mod plan;
 mod system;
 mod tree;
