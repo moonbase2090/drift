@@ -123,6 +123,7 @@ impl World {
     fn paths(&self) -> ScanPaths {
         let root = self.root.path().to_path_buf();
         ScanPaths {
+            user_config: root.join("home/.config/drift/config.toml"),
             source: SourcePaths::new(
                 ReadPaths::new(&root, root.join("usr/share/omarchy")),
                 root.join("home"),
