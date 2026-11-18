@@ -210,6 +210,14 @@ impl System {
         self.root.overwrite(rel, bytes).unwrap();
     }
 
+    pub fn put(&self, rel: &str, bytes: impl AsRef<[u8]>) {
+        self.root.put(rel, bytes.as_ref()).unwrap();
+    }
+
+    pub fn discard_file(&self, rel: &str) {
+        self.root.discard_file(rel).unwrap();
+    }
+
     pub fn root(&self) -> &Path {
         self.root.path()
     }

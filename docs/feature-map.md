@@ -132,16 +132,16 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 | `window.resize` | resizing keeps the screen, the selection and an open dialog and repaints at the new size | planned |
 | `window.resize-diff` | resizing across a width boundary switches the diff layout and keeps the selected hunk | `diff::resizing_across_a_width_boundary_follows_the_width_and_keeps_the_hunk` |
 | `window.layouts` | the diff shows five columns (hunks, base, ours, theirs, result) from 200 columns, ours and theirs side by side with the result underneath from 100 columns, and one stacked column below that | `diff::from_200_columns_the_diff_opens_in_five_columns`, `diff::from_100_columns_the_diff_opens_with_ours_and_theirs_side_by_side_and_the_result_below`, `diff::below_100_columns_the_diff_stacks_in_one_column`, `diff::the_layout_edges_are_at_exactly_200_and_100_columns` |
-| `theme.dark` | the dark theme draws legible status colours | planned |
-| `theme.light` | the light theme drawn from the Omarchy colours file is legible | planned |
+| `theme.dark` | the dark theme draws legible status colours | `theme::dark_and_light_theme_switches_repaint_legible_statuses_without_resetting_selection`, `theme::the_diff_uses_omarchy_hues_and_repaints_its_cached_frame_when_mode_changes` |
+| `theme.light` | the light theme drawn from the Omarchy colours file is legible | `theme::dark_and_light_theme_switches_repaint_legible_statuses_without_resetting_selection`, `theme::the_diff_uses_omarchy_hues_and_repaints_its_cached_frame_when_mode_changes` |
 
 ## Command line
 
 | Id | Interaction | Tests |
 |---|---|---|
-| `widget.install` | `drift widget install` copies the plugin, enables it and places it on the bar | planned |
-| `widget.sync` | `drift widget sync` refreshes the copy and leaves local edits unless forced | planned |
-| `widget.remove` | `drift widget remove` disables the widget and deletes the copy | planned |
-| `notify.send` | `drift notify` sends one notice when files drifted | planned |
-| `notify.skip` | `drift notify` sends nothing when nothing drifted, when an update runs or when notices are off | planned |
-| `notify.switch` | `drift notify on` and `off` keep the choice | planned |
+| `widget.install` | `drift widget install` copies the plugin, enables it and places it on the bar | `widget::widget_install_copies_records_enables_and_places_the_plugin`, `widget::widget_dry_run_writes_nothing_and_no_place_skips_the_bar_command` |
+| `widget.sync` | `drift widget sync` refreshes the copy and leaves local edits unless forced | `widget::widget_sync_updates_shipped_files_and_yes_cannot_overwrite_local_edits_but_force_backs_them_up`, `widget::widget_sync_reads_the_pty_answer_before_replacing_an_edited_copy` |
+| `widget.remove` | `drift widget remove` disables the widget and deletes the copy | `widget::widget_remove_decline_keeps_the_copy_then_yes_removes_it_and_preserves_edits` |
+| `notify.send` | `drift notify` sends one notice when files drifted | `notify::notify_delivers_singular_and_plural_counts_with_the_click_command`, `notify::a_failed_notifier_is_reported_and_exits_two` |
+| `notify.skip` | `drift notify` sends nothing when nothing drifted, when an update runs or when notices are off | `notify::notify_skips_zero_drift_and_real_update_locks_but_allows_unlocked_leftovers`, `notify::notify_on_and_off_persist_across_processes_and_control_delivery` |
+| `notify.switch` | `drift notify on` and `off` keep the choice | `notify::notify_on_and_off_persist_across_processes_and_control_delivery` |

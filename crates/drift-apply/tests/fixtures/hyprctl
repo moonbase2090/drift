@@ -1,0 +1,9 @@
+#!/bin/sh
+fixture=$(dirname "$0")
+printf '%s\n' "$1" > "$fixture/argv"
+if [ "$1" != configerrors ]; then
+  exit 2
+fi
+cat "$fixture/out"
+cat "$fixture/err" >&2
+exit "$(cat "$fixture/code")"
