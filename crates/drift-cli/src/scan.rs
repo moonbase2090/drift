@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-use drift_core::{registry_from_user_config, Registry, ScanReport, USER_CONFIG_PATH};
+use drift_core::{registry_from_user_config, Registry, ScanReport};
 use drift_source::{
     build_report, drift_share, drift_state, read_ignored, ResolvePaths, ScanPaths, SourcePaths,
 };
@@ -39,14 +39,17 @@ pub fn paths_from_env() -> ScanPaths {
 }
 
 pub fn paths_from(source: SourcePaths, lookup: &dyn Fn(&str) -> Option<OsString>) -> ScanPaths {
-    let var = |name: &str| lookup(name).filter(|value| !value.is_empty());
-    let data_home = var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| source.home.join(".local/share"));
-    let state_home = var("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| source.home.join(".local/state"));
+    let directory = |name: &str| {
+        lookup(name)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    let data_home = directory("XDG_DATA_HOME").unwrap_or_else(|| source.home.join(".local/share"));
+    let state_home =
+        directory("XDG_STATE_HOME").unwrap_or_else(|| source.home.join(".local/state"));
+    let config_home = directory("XDG_CONFIG_HOME").unwrap_or_else(|| source.home.join(".config"));
     ScanPaths {
+        user_config: config_home.join("drift/config.toml"),
         resolve: ResolvePaths {
             share: drift_share(&data_home),
             state: drift_state(&state_home),
@@ -68,8 +71,8 @@ pub(crate) fn scan_report(paths: &ScanPaths, registry: &Registry) -> Result<Scan
 }
 
 pub(crate) fn registry(paths: &ScanPaths) -> Result<Registry, String> {
-    let path = paths.source.home.join(USER_CONFIG_PATH);
-    match fs::read_to_string(&path) {
+    let path = &paths.user_config;
+    match fs::read_to_string(path) {
         Ok(text) => {
             registry_from_user_config(&text).map_err(|error| format!("{}: {error}", path.display()))
         }
@@ -206,6 +209,19 @@ mod tests {
         });
         assert_eq!(custom.resolve.share, PathBuf::from("/d/drift"));
         assert_eq!(custom.resolve.state, PathBuf::from("/s/drift"));
+        let relative = paths_from(source(), &|_| Some("relative".into()));
+        assert_eq!(
+            relative.user_config,
+            PathBuf::from("/h/.config/drift/config.toml")
+        );
+        assert_eq!(
+            relative.resolve.share,
+            PathBuf::from("/h/.local/share/drift")
+        );
+        assert_eq!(
+            relative.resolve.state,
+            PathBuf::from("/h/.local/state/drift")
+        );
         let empty = paths_from(source(), &|_| Some(OsString::new()));
         assert_eq!(empty.resolve.share, PathBuf::from("/h/.local/share/drift"));
     }
