@@ -2,6 +2,16 @@
 
 The tests in `crates/drift-cli/tests/e2e/` drive the real `drift` binary the way a person does. Each test builds a fixture system in a temporary directory (a home, the Omarchy templates, the pacman database and a state directory, all under `DRIFT_ROOT`), starts `drift` on a pseudo-terminal, sends keys or mouse clicks, and reads what the program drew. [The feature map](feature-map.md) lists every interaction and the test that covers it.
 
+## What the test suite needs
+
+`cargo test --workspace` runs on Linux. The terminal crate uses Linux system calls and does not build on macOS. CI uses Ubuntu, and a fresh Ubuntu 24.04 machine runs the whole suite with these packages added to the Rust toolchain:
+
+- a C toolchain and `pkg-config` (`build-essential pkg-config`)
+- `libalpm-dev`. The notify tests load `libalpm` at run time to hold a real package-manager lock, and `a_libalpm_transaction_suppresses_until_the_lock_is_removed` fails with "libalpm is not available" without it.
+- `nodejs`. `the_bar_widget_model_passes_its_node_tests` runs the widget model tests with `node --test` and fails when `node` is missing. Set `DRIFT_SKIP_JS_TESTS=1` to skip it on a machine without node.
+
+A missing prerequisite fails those tests on purpose, so a machine that lacks one cannot report a clean run.
+
 ## How the harness works
 
 - The program runs on a pseudo-terminal of a chosen size. A reader thread feeds everything it prints to a terminal emulator (`vt100`).
