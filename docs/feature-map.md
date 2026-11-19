@@ -139,6 +139,8 @@ The harness is described in [testing.md](testing.md). An entry marked `planned` 
 
 | Id | Interaction | Tests |
 |---|---|---|
+| `integrate.apply` | `drift integrate --yes` adds the Drift menu row and an executable post-update hook under `~/.config/omarchy` as one transaction, and says so when run again | `integrate::integrate_writes_the_menu_row_and_an_executable_hook` |
+| `integrate.undo` | `drift undo` and the history undo an integrate transaction by removing or restoring both files, and the undo plan names them | `integrate::undo_after_integrate_removes_what_integrate_added`, `integrate::the_history_lists_an_integrate_transaction_and_its_undo_plan_names_the_files` |
 | `widget.install` | `drift widget install` copies the plugin, enables it and places it on the bar | `widget::widget_install_copies_records_enables_and_places_the_plugin`, `widget::widget_dry_run_writes_nothing_and_no_place_skips_the_bar_command` |
 | `widget.sync` | `drift widget sync` refreshes the copy and leaves local edits unless forced | `widget::widget_sync_updates_shipped_files_and_yes_cannot_overwrite_local_edits_but_force_backs_them_up`, `widget::widget_sync_reads_the_pty_answer_before_replacing_an_edited_copy` |
 | `widget.remove` | `drift widget remove` disables the widget and deletes the copy | `widget::widget_remove_decline_keeps_the_copy_then_yes_removes_it_and_preserves_edits` |

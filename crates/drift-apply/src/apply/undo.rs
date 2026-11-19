@@ -275,7 +275,53 @@ fn load_manifest(state: &Path, id: &str) -> Result<Plan, ApplyError> {
     if plan.id() != id {
         return Err(bare(format!("manifest does not belong to {id}")));
     }
-    Ok(plan)
+    upgrade_legacy_integrate(plan)
+}
+
+const LEGACY_INTEGRATE_PATHS: [&str; 2] =
+    ["extensions/omarchy-menu.jsonc", "hooks/post-update.d/drift"];
+
+fn upgrade_legacy_integrate(plan: Plan) -> Result<Plan, ApplyError> {
+    let legacy = |path: &str| LEGACY_INTEGRATE_PATHS.contains(&path);
+    if !plan.files().iter().any(|file| legacy(file.path().as_str())) {
+        return Ok(plan);
+    }
+    let mut files = Vec::with_capacity(plan.files().len());
+    for file in plan.files() {
+        let old = file.path().as_str();
+        let (path, backup) = if legacy(old) {
+            let backup = match file.backup() {
+                Some(backup) => backup.as_str().to_string(),
+                None => format!("backups/{}/{old}", plan.id()),
+            };
+            (format!(".config/omarchy/{old}"), Some(backup))
+        } else {
+            (
+                old.to_string(),
+                file.backup().map(|b| b.as_str().to_string()),
+            )
+        };
+        files.push(
+            PlannedFile::new(
+                &path,
+                file.action(),
+                file.sha256_before(),
+                file.sha256_after(),
+                file.mode(),
+                backup.as_deref(),
+            )
+            .map_err(|error| bare(error.to_string()))?,
+        );
+    }
+    let prune: Vec<&str> = plan.prune().iter().map(String::as_str).collect();
+    Plan::new(
+        plan.id(),
+        plan.time(),
+        plan.package_version(),
+        files,
+        &prune,
+    )
+    .map_err(|error| bare(error.to_string()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

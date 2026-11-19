@@ -29,14 +29,14 @@ impl Fixture {
                 .as_nanos()
         ));
         for dir in [
-            "live/extensions",
-            "live/hooks/post-update.d",
+            "live/.config/omarchy/extensions",
+            "live/.config/omarchy/hooks/post-update.d",
             "state",
             "runtime",
         ] {
             fs::create_dir_all(root.join(dir)).unwrap();
         }
-        fs::write(root.join("live").join(MENU_PATH), STOCK).unwrap();
+        fs::write(root.join("live/.config/omarchy").join(MENU_PATH), STOCK).unwrap();
         Self { root }
     }
 
@@ -50,7 +50,7 @@ impl Fixture {
     }
 
     fn live(&self, path: &str) -> PathBuf {
-        self.root.join("live").join(path)
+        self.root.join("live/.config/omarchy").join(path)
     }
 
     fn transactions(&self) -> usize {
@@ -98,7 +98,13 @@ fn integrating_adds_the_row_and_the_hook_and_records_a_transaction() {
     let IntegrateOutcome::Applied(report) = result.unwrap() else {
         panic!("expected an apply");
     };
-    assert_eq!(report.applied, [MENU_PATH, HOOK_PATH]);
+    assert_eq!(
+        report.applied,
+        [
+            format!(".config/omarchy/{MENU_PATH}"),
+            format!(".config/omarchy/{HOOK_PATH}")
+        ]
+    );
     let menu = fs::read_to_string(fix.live(MENU_PATH)).unwrap();
     assert!(menu.starts_with("{\n  // Extend the menu.\n"), "{menu}");
     assert!(menu.contains("\"update.drift\""), "{menu}");
@@ -127,7 +133,7 @@ fn integrating_adds_the_row_and_the_hook_and_records_a_transaction() {
         .is_file());
     assert!(fix
         .root
-        .join("state/backups/integrate-1/extensions/omarchy-menu.jsonc")
+        .join("state/backups/integrate-1/.config/omarchy/extensions/omarchy-menu.jsonc")
         .is_file());
 }
 
@@ -284,7 +290,7 @@ fn a_non_executable_hook_with_the_right_content_is_fixed_not_skipped() {
     let IntegrateOutcome::Applied(report) = result.unwrap() else {
         panic!("expected a fix");
     };
-    assert_eq!(report.applied, [HOOK_PATH]);
+    assert_eq!(report.applied, [format!(".config/omarchy/{HOOK_PATH}")]);
     assert_eq!(mode_of(&hook), 0o755);
     assert_eq!(
         fs::read_to_string(&hook).unwrap(),
@@ -357,6 +363,6 @@ fn a_menu_file_with_an_escaped_id_is_left_alone() {
     let IntegrateOutcome::Applied(report) = result.unwrap() else {
         panic!("the hook is still new");
     };
-    assert_eq!(report.applied, [HOOK_PATH]);
+    assert_eq!(report.applied, [format!(".config/omarchy/{HOOK_PATH}")]);
     assert_eq!(fs::read_to_string(fix.live(MENU_PATH)).unwrap(), text);
 }

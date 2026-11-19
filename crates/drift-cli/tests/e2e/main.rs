@@ -3,6 +3,7 @@ mod filter;
 mod harness;
 mod history;
 mod ignore;
+mod integrate;
 mod map;
 mod notify;
 mod overlay;

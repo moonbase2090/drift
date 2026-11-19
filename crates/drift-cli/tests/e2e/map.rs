@@ -1,8 +1,18 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-const MODULES: [&str; 10] = [
-    "tree", "filter", "diff", "plan", "theme", "widget", "notify", "overlay", "history", "ignore",
+const MODULES: [&str; 11] = [
+    "tree",
+    "filter",
+    "diff",
+    "plan",
+    "theme",
+    "widget",
+    "notify",
+    "overlay",
+    "history",
+    "ignore",
+    "integrate",
 ];
 const ALLOW_PLANNED: bool = true;
 

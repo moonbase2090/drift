@@ -1068,3 +1068,45 @@ fn a_missing_state_directory_is_created_on_the_first_write() {
     restored(do_undo(&fix, "txn-1", "undo-1"));
     assert_eq!(fs::read(fix.live(A)).unwrap(), b"mine\n");
 }
+
+const MENU: &str = ".config/omarchy/extensions/omarchy-menu.jsonc";
+const HOOK: &str = ".config/omarchy/hooks/post-update.d/drift";
+
+fn as_written_by_the_first_release(fix: &Fixture, id: &str) {
+    let dir = fix.state(&format!("backups/{id}"));
+    let manifest = dir.join("manifest.json");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(&manifest, text.replace(".config/omarchy/", "")).unwrap();
+    let backup = dir.join(MENU);
+    let legacy = dir.join("extensions/omarchy-menu.jsonc");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    fs::rename(&backup, &legacy).unwrap();
+    fs::remove_dir_all(dir.join(".config")).unwrap();
+}
+
+#[test]
+fn an_integrate_transaction_from_the_first_release_still_undoes_under_the_home_tree() {
+    let fix = Fixture::new();
+    write_live(&fix.live(MENU), b"menu before\n", 0o644);
+    do_apply(
+        &fix,
+        "txn-1",
+        1,
+        &[
+            edit(MENU, b"menu after\n", None),
+            edit(HOOK, b"#!/bin/sh\n", Some(0o755)),
+        ],
+    )
+    .unwrap();
+    as_written_by_the_first_release(&fix, "txn-1");
+    assert!(fs::read_to_string(fix.state("backups/txn-1/manifest.json"))
+        .unwrap()
+        .contains("\"extensions/omarchy-menu.jsonc\""));
+
+    let applied = restored(do_undo(&fix, "txn-1", "undo-1"));
+    assert_eq!(applied, [MENU, HOOK]);
+    assert_eq!(fs::read(fix.live(MENU)).unwrap(), b"menu before\n");
+    assert!(!fix.live(HOOK).exists());
+    assert!(!fix.live("extensions").exists());
+    assert!(!fix.live("hooks").exists());
+}

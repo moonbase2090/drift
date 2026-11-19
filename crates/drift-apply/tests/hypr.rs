@@ -2,7 +2,6 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use drift_apply::{
     apply_checked, touches_hypr_config, undo, ApplyError, CheckedApply, FailAt, Hyprctl,
@@ -19,17 +18,16 @@ fn sha(bytes: &[u8]) -> String {
         .collect()
 }
 
+static FIXTURES: AtomicUsize = AtomicUsize::new(0);
+
 struct Fixture {
     root: PathBuf,
 }
 
 impl Fixture {
     fn new() -> Self {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("drift-hypr-{nanos}"));
+        let n = FIXTURES.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("drift-hypr-{}-{n}", std::process::id()));
         for dir in ["live", "state", "runtime", "pacman"] {
             fs::create_dir_all(root.join(dir)).unwrap();
         }
